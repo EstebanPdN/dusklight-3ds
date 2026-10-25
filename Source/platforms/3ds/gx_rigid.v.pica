@@ -1,0 +1,208 @@
+; Original rigid GX pipeline. u layout is defined by gx_rigid_vertex.hpp.
+; v4.xy = position / normal matrix uniform rows (normal = position + 3 unless
+; the compact palette shares proportional rows).
+.fvec u[94]
+.ivec lightLoop
+.constf k(0.0,1.0,0.5,9.0)
+.constf epsilon(0.0000000001,0.000001,0.99609375,0.001953125)
+.out outpos position
+.out outcolor color
+.out outtex texcoord0.st
+.out - texcoord0w outtex.p
+.out outtex1 texcoord1
+.out outtex2 texcoord2
+.proc main
+    mov r15, k.xxxx
+    mov r14, v0
+    mov r14.w, k.y
+    mova a0.xy, v4.xy
+    dp4 r0.x, u[a0.x+0], r14
+    dp4 r0.y, u[a0.x+1], r14
+    dp4 r0.z, u[a0.x+2], r14
+    mov r0.w, k.y
+    dp4 r2.x, u[6], r0
+    dp4 r2.y, u[7], r0
+    dp4 r2.z, u[8], r0
+    dp4 r2.w, u[9], r0
+    mov outpos, r2
+    cmp u[12].w, gt, gt, r15.x
+    ifc cmp.x
+        mul r14.xyz, u[11].w, v1
+    .else
+        mov r14.xy, v3
+        mov r14.z, v0.w
+    .end
+    dp3 r1.x, u[a0.y+0], r14
+    dp3 r1.y, u[a0.y+1], r14
+    dp3 r1.z, u[a0.y+2], r14
+    dp3 r4.x, r1, r1
+    cmp epsilon.x, lt, lt, r4.x
+    ifc cmp.x
+        rsq r4.x, r4.x
+        mul r1.xyz, r1, r4.x
+    .end
+    mov r3, u[10]
+    cmp u[17].w, gt, gt, r15.x
+    ifc cmp.x
+        cmp u[12].w, gt, gt, r15.x
+        ifc cmp.x
+            mul r3.xyz, u[16].w, v3
+        .else
+            mov r3.xyz, v1
+        .end
+    .end
+    for lightLoop
+        add r4.xyz, u[aL+19], -r0
+        dp3 r5.x, r4, r4
+        cmp k.x, lt, lt, r5.x
+        ifc cmp.x
+            rsq r5.y, r5.x
+            mul r5.z, r5.x, r5.y
+            mul r4.xyz, r4, r5.y
+            dp3 r6.y, u[aL+21], r4
+            max r6.y, k.x, r6.y
+            mov r6.x, k.y
+            mul r6.z, r6.y, r6.y
+            mov r11.x, u[aL+19].w
+            mov r11.y, u[aL+21].w
+            mov r11.z, u[aL+22].w
+            dp3 r8.x, r11, r6
+            mov r7.x, k.y
+            mov r7.y, r5.z
+            mov r7.z, r5.x
+            dp3 r8.y, u[aL+22], r7
+            rcp r8.y, r8.y
+            mul r8.x, r8.x, r8.y
+            max r8.x, k.x, r8.x
+            dp3 r8.y, r4, r1
+            max r8.y, k.x, r8.y
+            mul r8.x, r8.x, r8.y
+            mul r8.xyz, u[aL+20], r8.x
+            add r3.xyz, r3, r8
+        .end
+    .end
+    max r3.xyz, k.x, r3
+    min r3.xyz, k.y, r3
+    mov r10, v1
+    cmp u[12].w, gt, gt, r15.x
+    ifc cmp.x
+        mov r10, u[93]
+        cmp u[14].w, gt, gt, r15.x
+        ifc cmp.x
+            mul r10.xyz, u[16].w, v3
+        .end
+        cmp u[15].w, ge, ge, r15.x
+        ifc cmp.x
+            mul r10.w, u[16].w, v3.w
+            mul r10.w, u[15].w, r10.w
+        .end
+    .else
+        cmp u[17].w, gt, gt, r15.x
+        ifc cmp.x
+            cmp u[14].w, eq, eq, r15.x
+            ifc cmp.x
+                mov r10.xyz, u[93]
+            .end
+        .end
+    .end
+    mul r10.xyz, r10, r3
+    mov outcolor, r10
+    cmp u[12].w, gt, gt, r15.x
+    ifc cmp.x
+        mul r13.x, u[13].z, v2.x
+        mul r13.y, u[13].w, v2.y
+        add r13.y, k.y, -r13.y
+    .else
+        mov r13.xy, v2
+    .end
+    mov outtex.xy, r13
+    mov outtex.z, k.y
+    mov outtex1, k.xxxx
+    mov outtex2, k.xxxx
+    cmp u[18].w, gt, gt, r15.x
+    ifc cmp.x
+        mov outtex1.xy, r13
+        mova a0.x, u[18].w
+        mov r14.xyz, v0
+        mov r14.w, k.y
+        dp4 r13.x, u[a0.x+0], r14
+        dp4 r13.y, u[a0.x+1], r14
+        dp4 r13.z, u[a0.x+2], r14
+        mul outtex.x, u[a0.x+3].x, r13.x
+        mul r13.y, u[a0.x+3].y, r13.y
+        add outtex.y, r13.z, -r13.y
+        mov outtex.z, r13.z
+    .end
+    ; Fog depth and range factor; camera-crossing vertices use near fog.
+    mov r9, k.xxxx
+    cmp u[12].x, gt, gt, r15.x
+    ifc cmp.x
+        cmp k.x, lt, lt, r2.w
+        ifc cmp.x
+            rcp r9.w, r2.w
+            mul r9.x, r2.z, r9.w
+            add r9.x, k.y, r9.x
+            max r9.x, k.x, r9.x
+            min r9.x, k.y, r9.x
+        .end
+        add r9.y, u[11].y, -r9.x
+        rcp r9.y, r9.y
+        mul r9.y, u[11].x, r9.y
+        cmp u[12].y, gt, gt, r15.x
+        ifc cmp.x
+            cmp k.x, lt, lt, r2.w
+            ifc cmp.x
+                mul r10.x, r2.y, r9.w
+                mul r10.x, u[13].x, r10.x
+                add r10.x, u[13].y, r10.x
+                max r10.y, r10.x, -r10.x
+                mul r10.y, k.w, r10.y
+                add r10.y, k.w, -r10.y
+                max r10.y, k.x, r10.y
+                min r10.y, k.w, r10.y
+                flr r10.z, r10.y
+                mul r12.x, k.z, r10.z
+                flr r12.x, r12.x
+                mova a0.x, r12.x
+                add r12.y, r12.x, r12.x
+                add r12.y, r10.z, -r12.y
+                add r10.w, r10.y, -r10.z
+                mov r11, u[a0.x+14]
+                cmp r12.y, gt, gt, r15.x
+                ifc cmp.x
+                    mov r11.xy, r11.yz
+                .end
+                add r11.y, r11.y, -r11.x
+                mul r11.y, r11.y, r10.w
+                add r11.x, r11.x, r11.y
+                max r11.x, epsilon.y, r11.x
+                rcp r11.x, r11.x
+                mul r10.x, r10.x, r11.x
+                mul r10.x, r10.x, r10.x
+                add r10.x, k.y, r10.x
+                rsq r10.x, r10.x
+                rcp r10.x, r10.x
+                mul r9.y, r9.y, r10.x
+            .end
+        .end
+        add r9.y, -u[11].z, r9.y
+        max r9.y, k.x, r9.y
+        min r9.y, k.y, r9.y
+        cmp u[12].z, gt, gt, r15.x
+        ifc cmp.x
+            mov outcolor.w, r9.y
+        .else
+            mul r9.y, epsilon.z, r9.y
+            add r9.y, epsilon.w, r9.y
+            cmp u[18].w, gt, gt, r15.x
+            ifc cmp.x
+                mov outtex2.x, r9.y
+                mov outtex2.y, k.z
+            .else
+                mov outtex1.x, r9.y
+                mov outtex1.y, k.z
+            .end
+        .end
+    .end
+    end
+.end

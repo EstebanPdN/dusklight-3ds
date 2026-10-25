@@ -1,0 +1,216 @@
+; Native PICA engine: rigid GX pipeline with up to three GX texture coordinate
+; generators evaluated on the GPU. Compact 32-byte vertices only:
+;   v0 position.xyz (float), v1 normal.xyz (short), v2 TEX0.st (short),
+;   v3 color (ubyte), v4 position/normal matrix uniform rows (byte x2),
+;   v5 TEX1.st (short).
+; Uniform layout matches gx_rigid.v.pica for 0..79 (matrix palette, projection,
+; ambient, fog, flags, lights) plus:
+;   u[80]      per-unit role (x,y,z): 0 none, 1 texture coordinate, 0.5 fog ramp;
+;              w = 1 clamps clip z into [-w,0] (GX clip-disabled draws)
+;   u[81+4n..] unit n rows: S0 (TEX0 input), S1 (TEX1 input), T0, T1.
+;              s' = S0.(s0,t0,1,1) + S1.(s1,t1,0,0); t' likewise. Texture
+;              scale, fixed-point fraction and the vertical flip are folded in.
+;   u[93]      material color.
+.fvec u[94]
+.ivec lightLoop
+.constf k(0.0,1.0,0.5,9.0)
+.constf epsilon(0.0000000001,0.000001,0.99609375,0.001953125)
+.out outpos position
+.out outcolor color
+.out outtex texcoord0.st
+.out - texcoord0w outtex.p
+.out outtex1 texcoord1
+.out outtex2 texcoord2
+.proc main
+    mov r15, k.xxxx
+    mov r14, v0
+    mov r14.w, k.y
+    mova a0.xy, v4.xy
+    dp4 r0.x, u[a0.x+0], r14
+    dp4 r0.y, u[a0.x+1], r14
+    dp4 r0.z, u[a0.x+2], r14
+    mov r0.w, k.y
+    dp4 r2.x, u[6], r0
+    dp4 r2.y, u[7], r0
+    dp4 r2.z, u[8], r0
+    dp4 r2.w, u[9], r0
+    ; GX clip-disabled draws (sky, backdrops): keep z inside [-w, 0] so the
+    ; PICA's mandatory near/far clipping never removes them (u[80].w = 1).
+    cmp u[80].w, gt, gt, r15.x
+    ifc cmp.x
+        min r2.z, r15.x, r2.z
+        mul r8.x, -epsilon.z, r2.w
+        max r2.z, r8.x, r2.z
+    .end
+    mov outpos, r2
+    mul r14.xyz, u[11].w, v1
+    dp3 r1.x, u[a0.y+0], r14
+    dp3 r1.y, u[a0.y+1], r14
+    dp3 r1.z, u[a0.y+2], r14
+    dp3 r4.x, r1, r1
+    cmp epsilon.x, lt, lt, r4.x
+    ifc cmp.x
+        rsq r4.x, r4.x
+        mul r1.xyz, r1, r4.x
+    .end
+    mov r3, u[10]
+    cmp u[17].w, gt, gt, r15.x
+    ifc cmp.x
+        mul r3.xyz, u[16].w, v3
+    .end
+    for lightLoop
+        add r4.xyz, u[aL+19], -r0
+        dp3 r5.x, r4, r4
+        cmp k.x, lt, lt, r5.x
+        ifc cmp.x
+            rsq r5.y, r5.x
+            mul r5.z, r5.x, r5.y
+            mul r4.xyz, r4, r5.y
+            dp3 r6.y, u[aL+21], r4
+            max r6.y, k.x, r6.y
+            mov r6.x, k.y
+            mul r6.z, r6.y, r6.y
+            mov r11.x, u[aL+19].w
+            mov r11.y, u[aL+21].w
+            mov r11.z, u[aL+22].w
+            dp3 r8.x, r11, r6
+            mov r7.x, k.y
+            mov r7.y, r5.z
+            mov r7.z, r5.x
+            dp3 r8.y, u[aL+22], r7
+            rcp r8.y, r8.y
+            mul r8.x, r8.x, r8.y
+            max r8.x, k.x, r8.x
+            dp3 r8.y, r4, r1
+            max r8.y, k.x, r8.y
+            mul r8.x, r8.x, r8.y
+            mul r8.xyz, u[aL+20], r8.x
+            add r3.xyz, r3, r8
+        .end
+    .end
+    max r3.xyz, k.x, r3
+    min r3.xyz, k.y, r3
+    mov r10, u[93]
+    cmp u[14].w, gt, gt, r15.x
+    ifc cmp.x
+        mul r10.xyz, u[16].w, v3
+    .end
+    cmp u[15].w, ge, ge, r15.x
+    ifc cmp.x
+        mul r10.w, u[16].w, v3.w
+        mul r10.w, u[15].w, r10.w
+    .end
+    mul r10.xyz, r10, r3
+    mov outcolor, r10
+    ; Texture coordinate generators: in0=(TEX0,1,1), in1=(TEX1,0,0).
+    mov r12.xy, v2.xy
+    mov r12.zw, k.yy
+    mov r13.xy, v5.xy
+    mov r13.zw, k.xx
+    mov r5, k.xxxx
+    mov r6, k.xxxx
+    mov r7, k.xxxx
+    dp4 r4.x, u[81], r12
+    dp4 r4.y, u[82], r13
+    add r5.x, r4.x, r4.y
+    dp4 r4.x, u[83], r12
+    dp4 r4.y, u[84], r13
+    add r5.y, r4.x, r4.y
+    dp4 r4.x, u[85], r12
+    dp4 r4.y, u[86], r13
+    add r6.x, r4.x, r4.y
+    dp4 r4.x, u[87], r12
+    dp4 r4.y, u[88], r13
+    add r6.y, r4.x, r4.y
+    dp4 r4.x, u[89], r12
+    dp4 r4.y, u[90], r13
+    add r7.x, r4.x, r4.y
+    dp4 r4.x, u[91], r12
+    dp4 r4.y, u[92], r13
+    add r7.y, r4.x, r4.y
+    mov r5.z, k.y
+    ; Fog depth and range factor; camera-crossing vertices use near fog.
+    mov r9, k.xxxx
+    cmp u[12].x, gt, gt, r15.x
+    ifc cmp.x
+        cmp k.x, lt, lt, r2.w
+        ifc cmp.x
+            rcp r9.w, r2.w
+            mul r9.x, r2.z, r9.w
+            add r9.x, k.y, r9.x
+            max r9.x, k.x, r9.x
+            min r9.x, k.y, r9.x
+        .end
+        add r9.y, u[11].y, -r9.x
+        rcp r9.y, r9.y
+        mul r9.y, u[11].x, r9.y
+        cmp u[12].y, gt, gt, r15.x
+        ifc cmp.x
+            cmp k.x, lt, lt, r2.w
+            ifc cmp.x
+                mul r10.x, r2.y, r9.w
+                mul r10.x, u[13].x, r10.x
+                add r10.x, u[13].y, r10.x
+                max r10.y, r10.x, -r10.x
+                mul r10.y, k.w, r10.y
+                add r10.y, k.w, -r10.y
+                max r10.y, k.x, r10.y
+                min r10.y, k.w, r10.y
+                flr r10.z, r10.y
+                mul r12.x, k.z, r10.z
+                flr r12.x, r12.x
+                mova a0.x, r12.x
+                add r12.y, r12.x, r12.x
+                add r12.y, r10.z, -r12.y
+                add r10.w, r10.y, -r10.z
+                mov r11, u[a0.x+14]
+                cmp r12.y, gt, gt, r15.x
+                ifc cmp.x
+                    mov r11.xy, r11.yz
+                .end
+                add r11.y, r11.y, -r11.x
+                mul r11.y, r11.y, r10.w
+                add r11.x, r11.x, r11.y
+                max r11.x, epsilon.y, r11.x
+                rcp r11.x, r11.x
+                mul r10.x, r10.x, r11.x
+                mul r10.x, r10.x, r10.x
+                add r10.x, k.y, r10.x
+                rsq r10.x, r10.x
+                rcp r10.x, r10.x
+                mul r9.y, r9.y, r10.x
+            .end
+        .end
+        add r9.y, -u[11].z, r9.y
+        max r9.y, k.x, r9.y
+        min r9.y, k.y, r9.y
+        cmp u[12].z, gt, gt, r15.x
+        ifc cmp.x
+            mov outcolor.w, r9.y
+        .end
+        mul r9.y, epsilon.z, r9.y
+        add r9.y, epsilon.w, r9.y
+        mov r9.z, k.z
+        ; Route the fog ramp coordinate to the unit whose role is 0.5.
+        mov r8, k.zzzz
+        cmp u[80].x, eq, eq, r8.x
+        ifc cmp.x
+            mov r5.x, r9.y
+            mov r5.y, r9.z
+        .end
+        cmp u[80].y, eq, eq, r8.x
+        ifc cmp.x
+            mov r6.x, r9.y
+            mov r6.y, r9.z
+        .end
+        cmp u[80].z, eq, eq, r8.x
+        ifc cmp.x
+            mov r7.x, r9.y
+            mov r7.y, r9.z
+        .end
+    .end
+    mov outtex, r5
+    mov outtex1, r6
+    mov outtex2, r7
+    end
+.end

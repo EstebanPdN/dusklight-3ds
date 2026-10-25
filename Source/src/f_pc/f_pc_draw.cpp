@@ -1,0 +1,64 @@
+/**
+ * f_pc_draw.cpp
+ * Framework - Process Draw
+ */
+
+#include "f_pc/f_pc_draw.h"
+#include "SSystem/SComponent/c_API_graphic.h"
+#include "f_pc/f_pc_leaf.h"
+#include "f_pc/f_pc_node.h"
+#include "f_pc/f_pc_pause.h"
+
+#if TARGET_PC
+#if !defined(DUSK_TARGET_3DS)
+#include "dusk/logging.h"
+#endif
+#endif
+
+int fpcDw_Execute(base_process_class* i_proc) {
+    if (!fpcPause_IsEnable(i_proc, 2)) {
+        layer_class* save_layer;
+        int ret;
+        process_method_func draw_func;
+    
+        save_layer = fpcLy_CurrentLayer();
+        if (fpcBs_Is_JustOfType(g_fpcLf_type, i_proc->subtype)) {
+            draw_func = ((leafdraw_method_class*)i_proc->methods)->draw_method;
+        } else {
+            draw_func = ((nodedraw_method_class*)i_proc->methods)->draw_method;
+        }
+    
+        fpcLy_SetCurrentLayer(i_proc->layer_tag.layer);
+        ret = draw_func(i_proc);
+        fpcLy_SetCurrentLayer(save_layer);
+        return ret;
+    }
+
+    return 0;
+}
+
+int fpcDw_Handler(fpcDw_HandlerFuncFunc i_iterHandler, fpcDw_HandlerFunc i_func) {
+#if !defined(DUSK_TARGET_3DS)
+    static int sDwLogCount = 0;
+#endif
+    int ret;
+#if !defined(DUSK_TARGET_3DS)
+    if (sDwLogCount < 5) { DuskLog.debug("fpcDw_Handler: before BeforeOfDraw"); }
+#endif
+    cAPIGph_BeforeOfDraw();
+#if !defined(DUSK_TARGET_3DS)
+    if (sDwLogCount < 5) { DuskLog.debug("fpcDw_Handler: before draw iteration"); }
+#endif
+    ret = i_iterHandler(i_func);
+#if !defined(DUSK_TARGET_3DS)
+    if (sDwLogCount < 5) { DuskLog.debug("fpcDw_Handler: before AfterOfDraw"); }
+#endif
+    cAPIGph_AfterOfDraw();
+#if !defined(DUSK_TARGET_3DS)
+    if (sDwLogCount < 5) { DuskLog.debug("fpcDw_Handler: done"); }
+#endif
+#if !defined(DUSK_TARGET_3DS)
+    sDwLogCount++;
+#endif
+    return ret;
+}

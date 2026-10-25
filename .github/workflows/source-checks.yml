@@ -1,0 +1,21 @@
+name: Source checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  public-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check publication content and documentation
+        run: python3 Tools/3ds/check_publication.py
+      - name: Run synthetic host checks
+        run: python3 Tools/3ds/test_public_host.py
