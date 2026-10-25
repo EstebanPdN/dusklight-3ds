@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "scope": "compile-only bootstrap candidates, not complete link closure",
+  "sources": [
+    {
+      "path": "src/helpers/string.cpp",
+      "purpose": "Bounded strings used by heap naming and diagnostics"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_phase.cpp",
+      "purpose": "Loading-phase state machine"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_node.cpp",
+      "purpose": "Process list nodes"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_list.cpp",
+      "purpose": "Process list operations"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_tree.cpp",
+      "purpose": "Process tree operations"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_tag.cpp",
+      "purpose": "Process tags"
+    },
+    {
+      "path": "src/f_pc/f_pc_method.cpp",
+      "purpose": "Process method dispatch"
+    },
+    {
+      "path": "src/helpers/offset_ptr.cpp",
+      "purpose": "Resource pointer relocation"
+    },
+    {
+      "path": "libs/JSystem/src/JSupport/JSUList.cpp",
+      "purpose": "JSystem intrusive lists"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRDisposer.cpp",
+      "purpose": "Heap object lifetime"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRHeap.cpp",
+      "purpose": "Heap initialization and allocation"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRExpHeap.cpp",
+      "purpose": "Expandable game heap"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRSolidHeap.cpp",
+      "purpose": "Bounded arena heap"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRThread.cpp",
+      "purpose": "Thread and mutex portability boundary"
+    },
+    {
+      "path": "src/f_pc/f_pc_manager.cpp",
+      "purpose": "Framework initialization integration boundary"
+    }
+  ]
+}

@@ -1,0 +1,534 @@
+{
+  "schema": 1,
+  "scope": "Original game environment and owning state dependencies; compile and link-frontier evidence, not a runnable scene",
+  "sources": [
+    {
+      "path": "src/d/d_kankyo.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_stage.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_com_inf_game.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2EnvSeMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_lib.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_math.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_xyz.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_counter.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_cps.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_cc_s.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_cc_d.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_kankyo_data.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_kankyo_rain.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/m_Do/m_Do_mtx.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_save.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_bg_s.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_bg_s_chk.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_cc_s.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_attention.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_drawlist.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_event.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_event_manager.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_resorce.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2SeMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2Calc.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2AudioMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2SceneMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/m_Do/m_Do_audio.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/actor/d_a_player.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAISoundHandles.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_aab.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/m_Do/m_Do_ext.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_cc_d.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_event_data.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_jnt_col.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_particle.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAISound.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2Audience.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2SoundMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2FxLineMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2StatusMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2SpeechMgr2.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2SoundObjMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2SoundStarter.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2SeqMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2SoundInfo.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2Param.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASWaveArcLoader.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASAudioReseter.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAISoundInfo.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAISoundStarter.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAIStreamDataMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASBasicWaveBank.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAUSoundTable.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAISeqDataMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAISeMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAISeqMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_cyl.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_lin.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_pla.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_sph.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_cc_mass_s.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAIAudience.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASSoundParams.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAISoundParams.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASHeapCtrl.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASReport.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JMath/random.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPAMath.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPAEmitter.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPAEmitterManager.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPAResourceManager.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPAParticle.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAISe.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAISeq.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAIStreamMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAIAudible.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASTrack.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASTaskThread.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASDvdThread.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAUSectionHeap.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASSeqCtrl.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASTrackPort.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASRegisterParam.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAISoundChild.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASChannel.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAUSeqDataBlockMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAIStream.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASDSPInterface.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASDriverIF.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASAiCtrl.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JGadget/linklist.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASSeqReader.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASAramStream.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASDSPChannel.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASOscillator.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASResArcLoader.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASSeqParser.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRDvdAramRipper.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_kankyo_wether.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_meter2_info.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/f_op/f_op_actor_mng.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2LinkMgr.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/dusk/version.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_s_chk.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_s_poly_info.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_bg_s_gnd_chk.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_bg_s_wtr_chk.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_bg_s_roof_chk.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_bg_s_lin_chk.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_bg_s_spl_grp_chk.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_bg_s_poly_pass_chk.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASCallback.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASLfo.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASCalc.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JSupport/JSUFileStream.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_s_gnd_chk.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_s_lin_chk.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "src/d/d_bg_s_grp_pass_chk.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JSupport/JSUInputStream.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRAramHeap.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRAramBlock.cpp",
+      "group": "environment-context"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASBank.cpp",
+      "group": "native-execution-owners"
+    },
+    {
+      "path": "src/dusk/game_clock.cpp",
+      "group": "native-execution-owners"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRAram.cpp",
+      "group": "native-execution-owners"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRAramPiece.cpp",
+      "group": "native-execution-owners"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRAramStream.cpp",
+      "group": "native-execution-owners"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRThread.cpp",
+      "group": "native-execution-owners"
+    },
+    {
+      "path": "src/helpers/offset_ptr.cpp",
+      "group": "native-execution-owners"
+    },
+    {
+      "path": "src/d/d_save_HIO.cpp",
+      "group": "native-scene-state"
+    },
+    {
+      "path": "src/d/d_com_static.cpp",
+      "group": "native-scene-state"
+    }
+  ]
+}

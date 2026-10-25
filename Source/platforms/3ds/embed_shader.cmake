@@ -1,0 +1,6 @@
+file(READ "${INPUT}" shader_hex HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," shader_bytes "${shader_hex}")
+if(NOT DEFINED SYMBOL)
+    set(SYMBOL preview_shader)
+endif()
+file(WRITE "${OUTPUT}" "alignas(4) extern const unsigned char ${SYMBOL}[] = {${shader_bytes}};\nextern const unsigned int ${SYMBOL}_size = sizeof(${SYMBOL});\n")

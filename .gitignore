@@ -1,0 +1,64 @@
+# Public root allowlist. Private local workspace material stays untracked.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/AI_DEVELOPMENT.md
+!/LICENSE.md
+!/CONTRIBUTING.md
+!/CHANGELOG.md
+!/.github/
+!/Source/
+!/Tools/
+!/docs/
+!/assets/
+
+# Local repository metadata and generated files
+.git
+.DS_Store
+__pycache__/
+*.py[cod]
+*.o
+*.a
+*.elf
+*.map
+*.smdh
+*.shbin
+*.cia
+*.cxi
+*.3dsx
+compile_commands.json
+CMakeCache.txt
+CMakeFiles/
+
+# Never-public game inputs, saves and captures
+*.iso
+*.gcm
+*.rvz
+*.wia
+*.twilight
+*.sav
+*.gci
+*.raw
+*.dmp
+*.log
+*.wav
+*.pending
+.env
+.env.*
+*.pem
+*.key
+
+# Approved local artwork only
+/assets/*
+!/assets/images/
+!/assets/3ds/
+/assets/images/*
+!/assets/images/logo.png
+!/assets/images/icon.png
+/assets/3ds/*
+!/assets/3ds/icon-48.png
+!/assets/3ds/banner.png
+
+# Private engineering archive in this local workspace (case-insensitive macOS).
+/[Dd]ocs/3ds/

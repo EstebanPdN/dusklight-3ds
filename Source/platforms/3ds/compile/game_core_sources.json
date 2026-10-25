@@ -1,0 +1,974 @@
+{
+  "schema": 1,
+  "scope": "Compile-only J2D/J3D, archive/kernel, utility, process, SComponent, machine and startup/title candidates. Explicitly not a final game link closure.",
+  "sources": [
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DAnimation.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DAnmLoader.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DGrafContext.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DManage.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DMatBlock.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DMaterial.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DMaterialFactory.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DOrthoGraph.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DPane.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DPicture.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DPictureEx.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DPrint.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DScreen.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DTevs.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DTextBox.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DTextBoxEx.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DWindow.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DWindowEx.cpp",
+      "group": "J2D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphBase/J3DDrawBuffer.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphBase/J3DGD.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphBase/J3DMatBlock.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphBase/J3DMaterial.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphBase/J3DPacket.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphBase/J3DShape.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphBase/J3DShapeDraw.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphBase/J3DShapeMtx.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphBase/J3DStruct.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphBase/J3DSys.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphBase/J3DTevs.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphBase/J3DTexture.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphBase/J3DTransform.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphBase/J3DVertex.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphAnimator/J3DAnimation.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphAnimator/J3DCluster.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphAnimator/J3DJoint.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphAnimator/J3DJointTree.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphAnimator/J3DMaterialAnm.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphAnimator/J3DMaterialAttach.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphAnimator/J3DModel.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphAnimator/J3DModelData.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphAnimator/J3DMtxBuffer.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphAnimator/J3DShapeTable.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphAnimator/J3DSkinDeform.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphLoader/J3DAnmLoader.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphLoader/J3DClusterLoader.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphLoader/J3DJointFactory.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphLoader/J3DMaterialFactory.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphLoader/J3DMaterialFactory_v21.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphLoader/J3DModelLoader.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphLoader/J3DModelLoaderCalcSize.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DGraphLoader/J3DShapeFactory.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DU/J3DUClipper.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DU/J3DUDL.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DU/J3DUFur.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DU/J3DUMotion.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/J3DU/J3DUShadow.cpp",
+      "group": "J3D"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRAram.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRAramArchive.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRAramBlock.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRAramHeap.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRAramPiece.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRAramStream.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRArchivePri.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRArchivePub.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRAssertHeap.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRCompArchive.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRDecomp.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRDisposer.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRDvdAramRipper.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRDvdArchive.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRDvdFile.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRDvdRipper.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRExpHeap.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRFile.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRFileCache.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRFileFinder.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRFileLoader.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRHeap.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRMemArchive.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRSolidHeap.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRThread.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JSupport/JSUFileStream.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JSupport/JSUInputStream.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JSupport/JSUList.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JSupport/JSUMemoryStream.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JSupport/JSUOutputStream.cpp",
+      "group": "archive_kernel"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTAssert.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTCacheFont.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTConsole.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTDbPrint.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTDirectFile.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTDirectPrint.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTException.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTFader.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTFont.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTFontData_Ascfont_fix12.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTGamePad.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTGraphFifo.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTNameTab.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTPalette.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTProcBar.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTResFont.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTResource.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTTexture.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTVideo.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTXfb.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JMath/JMATrigonometric.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JMath/JMath.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "libs/JSystem/src/JMath/random.cpp",
+      "group": "utility"
+    },
+    {
+      "path": "src/f_pc/f_pc_base.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_create_iter.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_create_req.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_create_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_creator.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_debug_sv.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_delete_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_deletor.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_draw.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_draw_priority.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_executor.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_fstcreate_req.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_layer.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_layer_iter.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_layer_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_leaf.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_line.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_line_iter.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_line_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_load.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_manager.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_method.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_method_iter.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_method_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_node.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_node_req.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_pause.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_priority.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_profile.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_profile_lst.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_searcher.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_stdcreate_req.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_actor.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_actor_iter.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_actor_map.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_actor_mng.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_actor_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_camera.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_camera_mng.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_draw_iter.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_draw_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_kankyo.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_kankyo_mng.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_msg.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_msg_mng.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_overlap.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_overlap_mng.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_overlap_req.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_scene.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_scene_iter.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_scene_mng.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_scene_pause.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_scene_req.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_scene_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_view.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_ap/f_ap_game.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_API.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_API_controller_pad.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_API_graphic.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_angle.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_s_chk.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_s_gnd_chk.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_s_lin_chk.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_s_poly_info.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_s_shdw_draw.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_w.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_cc_d.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_cc_s.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_counter.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_lib.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_list.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_list_iter.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m2d.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_aab.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_cir.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_cps.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_cyl.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_lin.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_pla.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_sph.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_tri.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_vtx.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_malloc.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_math.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_node.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_node_iter.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_phase.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_request.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_sxyz.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_tag.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_tag_iter.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_tree.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_tree_iter.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_xyz.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/m_Do/m_Do_DVDError.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_MemCard.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_MemCardRWmng.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_Reset.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_audio.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_controller_pad.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_dvd_thread.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_ext.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_ext2.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_graphic.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_hostIO.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_lib.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_machine.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_machine_exception.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_main.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_mtx.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/m_Do/m_Do_printf.cpp",
+      "group": "machine"
+    },
+    {
+      "path": "src/helpers/offset_ptr.cpp",
+      "group": "startup_title"
+    },
+    {
+      "path": "src/d/d_s_logo.cpp",
+      "group": "startup_title"
+    },
+    {
+      "path": "src/d/d_s_title.cpp",
+      "group": "startup_title"
+    },
+    {
+      "path": "src/d/actor/d_a_title.cpp",
+      "group": "startup_title"
+    },
+    {
+      "path": "src/d/d_resorce.cpp",
+      "group": "startup_title"
+    },
+    {
+      "path": "src/d/d_pane_class.cpp",
+      "group": "startup_title"
+    },
+    {
+      "path": "src/d/d_pane_class_alpha.cpp",
+      "group": "startup_title"
+    },
+    {
+      "path": "src/d/d_com_inf_game.cpp",
+      "group": "startup_title"
+    },
+    {
+      "path": "src/d/d_s_play.cpp",
+      "group": "startup_title"
+    },
+    {
+      "path": "src/d/d_menu_collect.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_menu_dmap.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_menu_fmap.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_menu_letter.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_menu_option.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_menu_ring.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_menu_save.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_meter2_draw.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_meter_map.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_msg_class.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_msg_scrn_base.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_shop_system.cpp",
+      "group": "original-ui-gameplay"
+    }
+  ]
+}

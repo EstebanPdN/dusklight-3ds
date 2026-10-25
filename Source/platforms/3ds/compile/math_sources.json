@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "scope": "Portable C math implementation from the pinned Aurora dependency",
+  "sources": [
+    {"path": "extern/aurora/lib/dolphin/mtx/mtx.c", "purpose": "Affine matrices and camera transforms"},
+    {"path": "extern/aurora/lib/dolphin/mtx/mtx44.c", "purpose": "4x4 matrices and projection"},
+    {"path": "extern/aurora/lib/dolphin/mtx/mtxstack.c", "purpose": "Matrix stack operations"},
+    {"path": "extern/aurora/lib/dolphin/mtx/mtxvec.c", "purpose": "Matrix-vector transforms"},
+    {"path": "extern/aurora/lib/dolphin/mtx/quat.c", "purpose": "Quaternion operations"},
+    {"path": "extern/aurora/lib/dolphin/mtx/vec.c", "purpose": "Vector operations and portable PPC-estimate semantics"}
+  ]
+}

@@ -1,0 +1,4458 @@
+{
+  "schema": 1,
+  "scope": "Actual original process/player/camera/play roots, original profile population and player services for real ARM executable link gate; no gameplay acceptance",
+  "sources": [
+    {
+      "path": "src/f_pc/f_pc_base.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_create_iter.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_create_req.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_create_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_creator.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_debug_sv.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_delete_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_deletor.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_draw.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_draw_priority.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_executor.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_fstcreate_req.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_layer.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_layer_iter.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_layer_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_leaf.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_line.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_line_iter.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_line_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_load.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_manager.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_method.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_method_iter.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_method_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_node.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_node_req.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_pause.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_priority.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_profile.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_profile_lst.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_searcher.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_pc/f_pc_stdcreate_req.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_actor.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_actor_iter.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_actor_map.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_actor_mng.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_actor_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_camera.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_camera_mng.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_draw_iter.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_draw_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_kankyo.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_kankyo_mng.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_msg.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_msg_mng.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_overlap.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_overlap_mng.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_overlap_req.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_scene.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_scene_iter.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_scene_mng.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_scene_pause.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_scene_req.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_scene_tag.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_op/f_op_view.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/f_ap/f_ap_game.cpp",
+      "group": "process_core"
+    },
+    {
+      "path": "src/d/actor/d_a_alink.cpp",
+      "group": "player"
+    },
+    {
+      "path": "src/d/actor/d_a_midna.cpp",
+      "group": "player"
+    },
+    {
+      "path": "src/d/d_camera.cpp",
+      "group": "camera"
+    },
+    {
+      "path": "src/d/d_s_play.cpp",
+      "group": "scene_owner"
+    },
+    {
+      "path": "src/d/d_s_room.cpp",
+      "group": "scene_owner"
+    },
+    {
+      "path": "src/m_Do/m_Do_controller_pad.cpp",
+      "group": "controller"
+    },
+    {
+      "path": "src/c/c_dylink.cpp",
+      "group": "module_owner"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_API.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_API_controller_pad.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_API_graphic.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_angle.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_s_chk.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_s_gnd_chk.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_s_lin_chk.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_s_poly_info.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_s_shdw_draw.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_bg_w.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_cc_d.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_cc_s.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_counter.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_lib.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_list.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_list_iter.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m2d.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_aab.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_cir.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_cps.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_cyl.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_lin.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_pla.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_sph.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_tri.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_m3d_g_vtx.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_malloc.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_math.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_node.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_node_iter.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_phase.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_request.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_sxyz.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_tag.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_tag_iter.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_tree.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_tree_iter.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SComponent/c_xyz.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/SSystem/SStandard/s_basic.cpp",
+      "group": "SComponent"
+    },
+    {
+      "path": "src/d/d_bg_s_acch.cpp",
+      "group": "player_collision_input"
+    },
+    {
+      "path": "src/d/d_bg_s_gnd_chk.cpp",
+      "group": "player_collision_input"
+    },
+    {
+      "path": "src/d/d_bg_s_lin_chk.cpp",
+      "group": "player_collision_input"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTGamePad.cpp",
+      "group": "player_collision_input"
+    },
+    {
+      "path": "src/d/d_event_lib.cpp",
+      "group": "player_event"
+    },
+    {
+      "path": "src/d/actor/d_a_L7demo_dr.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_L7low_dr.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_L7op_demo_dr.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_alldie.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_andsw.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_andsw2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_arrow.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_bh.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_bq.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_dr.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_dre.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_ds.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_gg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_gm.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_gnd.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_go.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_gos.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_mgn.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_ob.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_oh.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_oh2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_tn.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_yo.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_yo_ice.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_zant.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_zant_magic.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_zant_mobile.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_b_zant_sima.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_balloon_2D.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_bd.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_bg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_bg_obj.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_boomerang.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_bullet.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_canoe.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_coach_2D.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_coach_fire.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_cow.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_crod.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_cstaF.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_cstatue.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_demo00.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_demo_item.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_disappear.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_dmidna.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_do.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_door_boss.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_door_bossL1.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_door_bossL5.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_door_dbdoor00.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_door_knob00.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_door_mbossL1.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_door_push.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_door_shutter.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_door_spiral.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_dshutter.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_ai.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_arrow.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_ba.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_bee.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_bg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_bi.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_bi_leaf.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_bs.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_bu.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_bug.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_cr.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_cr_egg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_db.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_db_leaf.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_dd.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_df.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_dk.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_dn.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_dt.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_fb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_fk.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_fm.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_fs.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_fz.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_ga.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_gb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_ge.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_gi.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_gm.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_gob.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_gs.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_hb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_hb_leaf.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_hm.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_hp.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_hz.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_hzelda.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_is.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_kg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_kk.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_kr.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_mb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_md.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_mf.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_mk.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_mk_bo.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_mm.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_mm_mt.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_ms.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_nest.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_nz.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_oc.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_oct_bg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_ot.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_ph.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_pm.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_po.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_pz.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_rb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_rd.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_rdb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_rdy.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_s1.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_sb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_sf.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_sg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_sh.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_sm.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_sm2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_st.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_st_line.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_sw.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_th.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_th_ball.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_tk.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_tk2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_tk_ball.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_tt.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_vt.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_warpappear.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_wb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_ws.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_ww.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_yc.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_yd.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_yd_leaf.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_yg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_yh.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_yk.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_ym.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_ym_tag.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_ymb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_yr.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_zh.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_zm.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_e_zs.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_econt.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_ep.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_formation_mng.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_fr.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_grass.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_guard_mng.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_hitobj.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_horse.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_hozelda.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_izumi_gate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kago.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag00.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag01.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag02.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag03.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag04.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag05.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag06.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag07.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag08.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag09.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag10.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag11.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag12.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag13.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag14.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag15.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag16.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_kytag17.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_mant.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_mg_fish.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_mg_fshop.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_mg_rod.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_mirror.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_movie_player.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_myna.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_nbomb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_ni.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_no_chg_room.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_aru.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_ash.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_ashB.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_bans.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_besu.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_blue_ns.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_bou.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_bouS.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_cdn3.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_chat.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_chin.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_clerka.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_clerkb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_clerkt.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_coach.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_df.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_doc.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_doorboy.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_drainSol.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_du.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_fairy.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_fairy_seirei.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_fguard.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_fish.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_gnd.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_gra.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_grc.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_grd.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_grm.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_grmc.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_gro.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_grr.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_grs.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_grz.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_guard.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_gwolf.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_hanjo.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_henna.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_henna0.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_hoz.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_impal.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_inko.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_ins.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_jagar.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_kakashi.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_kasi_hana.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_kasi_kyu.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_kasi_mich.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_kdk.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_kkri.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_kn.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_knj.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_kolin.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_kolinb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_ks.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_kyury.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_len.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_lf.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_lud.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_maro.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_midp.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_mk.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_moi.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_moir.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_myna2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_ne.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_p2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_pachi_besu.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_pachi_maro.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_pachi_taro.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_passer.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_passer2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_post.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_pouya.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_prayer.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_raca.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_rafrel.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_saru.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_seib.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_seic.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_seid.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_seira.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_seira2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_seirei.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_shad.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_shaman.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_shoe.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_shop0.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_shop_maro.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_sola.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_soldierA.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_soldierB.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_sq.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_taro.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_the.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_theB.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_tk.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_tkc.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_tkj.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_tkj2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_tks.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_toby.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_tr.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_uri.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_worm.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_wrestler.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_yamid.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_yamis.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_yamit.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_yelia.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_ykm.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_ykw.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_zanb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_zant.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_zelR.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_zelRo.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_zelda.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_zra.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_zrc.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_zrz.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_Lv5Key.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_Turara.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_TvCdlst.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_Y_taihou.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_amiShutter.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ari.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_automata.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_avalanche.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_balloon.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_barDesk.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_batta.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_bbox.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_bed.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_bemos.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_bhashi.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_bhbridge.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_bk_leaf.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_bkdoor.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_bky_rock.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_bmWindow.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_bmshutter.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_bombf.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_bosswarp.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_boumato.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_brakeeff.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_brg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_bsGate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_bubblePilar.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_burnbox.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_carry.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_catdoor.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_cb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_cblock.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_cboard.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_cdoor.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_chandelier.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_chest.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_cho.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_cowdoor.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_crope.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_crvfence.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_crvgate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_crvhahen.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_crvlh_down.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_crvlh_up.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_crvsteel.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_crystal.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_cwall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_damCps.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_dan.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_digholl.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_digplace.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_digsnow.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_dmelevator.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_drop.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_dust.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_eff.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_enemy_create.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_fallobj.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_fan.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_fchain.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_fireWood.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_fireWood2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_firepillar.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_firepillar2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_flag.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_flag2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_flag3.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_fmobj.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_food.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_fw.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_gadget.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ganonwall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ganonwall2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_gb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_geyser.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_glowSphere.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_gm.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_goGate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_gomikabe.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_gpTaru.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_gra2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_graWall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_gra_rock.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_grave_stone.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_groundwater.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_grz_rock.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_h_saku.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_hakai_brl.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_hakai_ftr.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_hasu2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_hata.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_hb.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_hbombkoya.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_heavySw.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_hfuta.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_hhashi.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_hsTarget.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ice_l.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ice_s.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_iceblock.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_iceleaf.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ihasi.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ikada.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_inobone.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ita.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_itamato.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_item.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ito.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kabuto.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kag.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kage.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kago.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kaisou.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kamakiri.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kanban2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kantera.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_katatsumuri.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kazeneko.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kbacket.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kbox.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_key.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_keyhole.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kgate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ki.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kiPot.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kita.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kjgjs.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kkanban.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_klift00.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_knBullet.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kshutter.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ktOnFire.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kuwagata.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kwheel00.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kwheel01.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_kznkarm.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ladder.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_laundry.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_laundry_rope.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lbox.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_life_container.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lp.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv1Candle00.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv1Candle01.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv2Candle.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv3Candle.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv3Water.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv3Water2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv3WaterB.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv3saka00.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv3waterEff.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4CandleDemoTag.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4CandleTag.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4EdShutter.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4Gate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4HsTarget.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4PoGate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4RailWall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4SlideWall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4bridge.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4chandelier.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4digsand.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4floor.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4gear.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4prelvtr.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4prwall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv4sand.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv5FloorBoard.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv5IceWall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv5SwIce.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv5ychndlr.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv5yiblltray.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv6ChangeGate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv6FurikoTrap.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv6Lblock.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv6SwGate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv6SzGate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv6Tenbin.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv6TogeRoll.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv6TogeTrap.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv6bemos.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv6bemos2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv6egate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv6elevta.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv6swturn.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv7BsGate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv7PropellerY.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv7bridge.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv8KekkaiTrap.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv8Lift.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv8OptiLift.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv8UdFloor.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_lv9SwShutter.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_magLift.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_magLiftRot.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_magne_arm.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_maki.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_master_sword.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_mato.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_metalbox.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_mgate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_mhole.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_mie.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_mirror_6pole.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_mirror_chain.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_mirror_sand.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_mirror_screw.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_mirror_table.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_movebox.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_msima.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_mvstair.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_myogan.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_nagaisu.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_nameplate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_nan.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ndoor.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_nougu.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_octhashi.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_oiltubo.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_onsen.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_onsenFire.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_onsenTaru.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ornament_cloth.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_pdoor.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_pdtile.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_pdwall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_picture.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_pillar.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_pleaf.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_poCandle.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_poFire.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_poTbox.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_prop.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_pumpkin.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_rcircle.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_rfHole.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_rgate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_riverrock.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_rock.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_rope_bridge.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_rotBridge.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_rotTrap.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_roten.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_rstair.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_rw.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_sWallShutter.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_saidan.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_sakuita.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_sakuita_rope.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_scannon.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_scannon_crs.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_scannon_ten.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_sekidoor.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_sekizo.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_sekizoa.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_shield.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_sm_door.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_smallkey.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_smgdoor.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_smoke.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_smtile.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_smw_stone.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_snowEffTag.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_snow_soup.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_so.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_spinLift.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ss_drink.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ss_item.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_stairBlock.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_stick.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_stone.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_stoneMark.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_stopper.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_stopper2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_suisya.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_sw.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_swBallA.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_swBallB.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_swBallC.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_swLight.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_swchain.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_swhang.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_sword.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_swpropeller.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_swpush.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_swpush2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_swpush5.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_swspinner.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_swturn.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_syRock.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_szbridge.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_taFence.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_table.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_takaraDai.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_tatigi.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ten.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_testcube.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_tgake.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_thashi.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_thdoor.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_timeFire.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_timer.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_tks.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_tmoon.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_toaru_maki.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_toby.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_tobyhouse.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_togeTrap.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_tombo.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_tornado.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_tornado2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_tp.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_treesh.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_twGate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_udoor.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_usaku.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_vground.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_volcball.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_volcbom.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_warp_kbrg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_warp_obrg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_waterGate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_waterPillar.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_waterfall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_wchain.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_wdStick.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_web0.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_web1.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_well_cover.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_wflag.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_wind_stone.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_window.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_wood_pendulum.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_wood_statue.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_wsword.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_yel_bag.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_yobikusa.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_yousei.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ystone.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_zcloth.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_zdoor.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_zrTurara.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_zrTuraraRock.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_zraMark.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_zra_freeze.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_zra_rock.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_passer_mng.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_path_line.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_peru.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_ppolamp.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_scene_exit.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_scene_exit2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_set_bgobj.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_shop_item.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_skip_2D.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_spinner.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_sq.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_startAndGoal.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_suspend.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_swBall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_swLBall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_swTime.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_swc00.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_swhit0.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_CstaSw.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_Lv6Gate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_Lv7Gate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_Lv8Gate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_TWgate.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_ajnot.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_allmato.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_arena.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_assistance.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_attack_item.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_attention.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_bottle_item.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_camera.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_chgrestart.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_chkpoint.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_csw.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_escape.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_event.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_evt.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_evtarea.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_evtmsg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_firewall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_gra.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_gstart.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_guard.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_hinit.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_hjump.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_howl.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_hstop.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_instruction.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_kago_fall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_kmsg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_lantern.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_lightball.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_lv2prchk.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_lv5soup.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_lv6CstaSw.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_magne.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_mhint.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_mist.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_mmsg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_msg.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_mstop.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_mwait.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_myna2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_myna_light.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_pachi.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_poFire.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_push.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_qs.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_ret_room.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_river_back.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_rmbit_sw.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_schedule.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_setBall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_setrestart.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_shop_camera.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_shop_item.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_smk_emt.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_spinner.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_sppath.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_spring.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_ss_drink.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_statue_evt.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_stream.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_telop.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_theB_hint.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_wara_howl.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_watchge.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_waterfall.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_wljump.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tag_yami.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_talk.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tbox.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tbox2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_tboxSw.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_title.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_vrbox.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_vrbox2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_warp_bug.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/actor/d_a_ykgr.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_envse.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_gameover.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_k_wmark.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_k_wpillar.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_ky_thunder.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_kyeff.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_kyeff2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_menu_window.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_meter2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_msg_object.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_ovlp_fade.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_ovlp_fade2.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_ovlp_fade3.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_s_logo.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_s_menu.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_s_name.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_s_title.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_timer.cpp",
+      "group": "original_profiles"
+    },
+    {
+      "path": "src/d/d_cam_param.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/d/d_vibration.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/d/d_bg_s_sph_chk.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/d/d_bg_s_capt_poly.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/d/d_path.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/d/d_lib.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/d/d_eye_hl.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/d/d_model.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/d/d_msg_flow.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/d/d_tresure.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/d/actor/d_a_itembase.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/d/actor/d_a_npc.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/d/actor/d_a_npc2.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2Creature.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2WolfHowlMgr.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2SoundHandles.cpp",
+      "group": "player_services"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DAnimation.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DAnmLoader.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DMatBlock.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DMaterial.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DMaterialFactory.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DPictureEx.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DPrint.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DTevs.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DTextBox.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DTextBoxEx.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DWindow.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/J2DGraph/J2DWindowEx.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPABaseShape.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPAChildShape.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPADynamicsBlock.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPAExTexShape.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPAExtraShape.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPAFieldBlock.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPAKeyBlock.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPAResource.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPAResourceLoader.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JParticle/JPATexture.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTAssert.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTCacheFont.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTConsole.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTDbPrint.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTDirectFile.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTDirectPrint.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTException.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTFader.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTFont.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTFontData_Ascfont_fix12.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTGraphFifo.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTProcBar.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTResFont.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTResource.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTVideo.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JUtility/JUTXfb.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "src/c/c_damagereaction.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "src/d/d_bg_w.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "src/d/d_com_inf_actor.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "src/d/d_menu_window_HIO.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "src/d/d_meter_HIO.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "src/d/d_pane_class.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "src/m_Do/m_Do_lib.cpp",
+      "group": "actual_link_support"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRAramArchive.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRAssertHeap.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRCompArchive.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRDvdArchive.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRDvdRipper.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRFile.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRFileCache.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "libs/JSystem/src/JSupport/JSUMemoryStream.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "libs/JSystem/src/JSupport/JSUOutputStream.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "src/m_Do/m_Do_DVDError.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "src/m_Do/m_Do_MemCardRWmng.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "src/m_Do/m_Do_dvd_thread.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "src/m_Do/m_Do_ext2.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "src/m_Do/m_Do_hostIO.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "src/m_Do/m_Do_machine_exception.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "src/m_Do/m_Do_printf.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "src/d/d_pane_class_alpha.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "src/m_Do/m_Do_MemCard.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "src/m_Do/m_Do_Reset.cpp",
+      "group": "original-core-support"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JASAudioThread.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/Z2AudioLib/Z2SoundObject.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_a_horse_static.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_a_item_static.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_a_itembase_static.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_att_dist.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_bg_s_movebg_actor.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_bg_w_base.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_bg_w_kcol.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_debug_viewer.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_error_msg.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_ev_camera.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_insect.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_item_data.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_map_path_dmap.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_menu_fishing.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_menu_insect.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_menu_skill.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_meter_button.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_meter_haihai.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_meter_hakusha.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_meter_string.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_msg_scrn_howl.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_msg_string.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_particle_copoly.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_particle_name.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_save_init.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_scope.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_shop_camera.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_shop_item_ctrl.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_simple_model.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_spline_path.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_vib_pattern.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/m_Do/m_Do_main.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_item.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_cc_uty.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/d/d_demo.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "libs/JSystem/src/JFramework/JFWDisplay.cpp",
+      "group": "actual-first-room-service"
+    },
+    {
+      "path": "src/m_Do/m_Do_graphic.cpp",
+      "group": "original-graphics-video"
+    },
+    {
+      "path": "libs/JSystem/src/JFramework/JFWSystem.cpp",
+      "group": "original-graphics-video"
+    },
+    {
+      "path": "libs/JSystem/src/JKernel/JKRThread.cpp",
+      "group": "original-graphics-video"
+    },
+    {
+      "path": "src/d/d_menu_collect.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_menu_dmap.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_menu_fmap.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_menu_letter.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_menu_option.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_menu_ring.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_menu_save.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_meter2_draw.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_meter_map.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_msg_class.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_msg_scrn_base.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "src/d/d_shop_system.cpp",
+      "group": "original-ui-gameplay"
+    },
+    {
+      "path": "libs/JSystem/src/JStage/JSGActor.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStage/JSGAmbientLight.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStage/JSGCamera.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStage/JSGFog.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStage/JSGLight.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStage/JSGObject.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStage/JSGSystem.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JMessage/data.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JMessage/locale.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JMessage/resource.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio/ctb-data.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio/ctb.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio/functionvalue.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio/fvb-data-parse.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio/fvb-data.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio/fvb.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio/jstudio-control.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio/jstudio-data.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio/jstudio-math.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio/object-id.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio/stb-data-parse.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio/stb-data.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio/stb.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio_JAudio2/control.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio_JAudio2/object-sound.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio_JParticle/control.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio_JParticle/object-particle.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio_JStage/control.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio_JStage/object-actor.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio_JStage/object-ambientlight.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio_JStage/object-camera.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio_JStage/object-fog.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio_JStage/object-light.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio_JStage/object.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JAudio2/JAUSoundAnimator.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_a_obj.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_a_shop_item_static.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_bg_parts.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_bg_pc.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_bg_plc.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_bg_s_func.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_bg_w_deform.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_bg_w_hf.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_bomb.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_door_param2.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_file_sel_info.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_file_sel_warning.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_kantera_icon_meter.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_map_path_fmap.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_menu_calibration.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_menu_fmap_map.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_menu_item_explain.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_menu_quit.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_out_font.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_scrn_explain.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_scrn_item.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_scrn_jimaku.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_scrn_light.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_scrn_staff.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_string_base.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_unit.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_npc_lib.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_pane_class_ex.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_select_cursor.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_select_icon.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JMessage/control.cpp",
+      "group": "adapted-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JMessage/processor.cpp",
+      "group": "adapted-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JStudio/JStudio/jstudio-object.cpp",
+      "group": "adapted-room-service-32"
+    },
+    {
+      "path": "src/d/d_map.cpp",
+      "group": "adapted-room-service-32"
+    },
+    {
+      "path": "src/d/d_menu_dmap_map.cpp",
+      "group": "adapted-room-service-32"
+    },
+    {
+      "path": "src/d/d_menu_map_common.cpp",
+      "group": "adapted-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_scrn_arrow.cpp",
+      "group": "adapted-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_scrn_boss.cpp",
+      "group": "adapted-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_scrn_kanban.cpp",
+      "group": "adapted-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_scrn_place.cpp",
+      "group": "adapted-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_scrn_talk.cpp",
+      "group": "adapted-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_scrn_tree.cpp",
+      "group": "adapted-room-service-32"
+    },
+    {
+      "path": "src/d/d_name.cpp",
+      "group": "adapted-room-service-32"
+    },
+    {
+      "path": "src/d/d_map_path.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_msg_scrn_3select.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_bright_check.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_menu_fmap2D.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/m_Do/m_Do_machine.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "src/d/d_file_select.cpp",
+      "group": "original-room-service-32"
+    },
+    {
+      "path": "libs/JSystem/src/JGadget/std-vector.cpp",
+      "group": "original-support-32"
+    },
+    {
+      "path": "libs/JSystem/src/JGadget/binary.cpp",
+      "group": "original-support-32"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_cd.cpp",
+      "group": "original-support-32"
+    },
+    {
+      "path": "src/d/actor/d_a_npc_cd2.cpp",
+      "group": "original-support-32"
+    },
+    {
+      "path": "src/d/actor/d_a_obj_ss_base.cpp",
+      "group": "original-support-32"
+    },
+    {
+      "path": "src/d/d_bg_w_sv.cpp",
+      "group": "original-support-32"
+    },
+    {
+      "path": "src/helpers/batch.cpp",
+      "group": "original-support-32"
+    },
+    {
+      "path": "libs/dolphin/src/gf/GFLight.cpp",
+      "group": "original-support-32"
+    },
+    {
+      "path": "libs/dolphin/src/gf/GFTev.cpp",
+      "group": "original-support-32"
+    },
+    {
+      "path": "libs/dolphin/src/gf/GFGeometry.cpp",
+      "group": "original-support-32"
+    },
+    {
+      "path": "libs/dolphin/src/gf/GFPixel.cpp",
+      "group": "original-support-32"
+    },
+    {
+      "path": "src/dusk/dvd_asset.cpp",
+      "group": "original-support-32"
+    },
+    {
+      "path": "src/DynamicLink.cpp",
+      "group": "original_resource_support"
+    }
+  ]
+}

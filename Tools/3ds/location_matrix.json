@@ -1,0 +1,24 @@
+{
+ "comment": "Multi-location Azahar matrix. Boot stage = STAGE,ROOM,POINT,LAYER from list_stage_spawns.py; null = normal title boot.",
+ "locations": [
+  {"name": "title", "boot_stage": null},
+  {"name": "links-house", "boot_stage": "R_SP01,4,0,-1"},
+  {"name": "ordon-village", "boot_stage": "F_SP103,1,0,-1"},
+  {"name": "ordon-ranch", "boot_stage": "F_SP00,0,0,-1"},
+  {"name": "ordon-spring", "boot_stage": "F_SP104,1,0,-1"},
+  {"name": "faron-woods", "boot_stage": "F_SP108,0,0,-1"},
+  {"name": "kakariko", "boot_stage": "F_SP109,0,0,-1"},
+  {"name": "kakariko-interior", "boot_stage": "R_SP109,0,0,-1"},
+  {"name": "death-mountain", "boot_stage": "F_SP110,0,0,-1"},
+  {"name": "zoras-domain", "boot_stage": "F_SP113,1,0,-1"},
+  {"name": "lake-hylia", "boot_stage": "F_SP115,0,0,-1"},
+  {"name": "castle-town", "boot_stage": "F_SP116,0,0,-1"},
+  {"name": "hyrule-field", "boot_stage": "F_SP121,0,0,-1"},
+  {"name": "gerudo-desert", "boot_stage": "F_SP124,0,0,-1"},
+  {"name": "forest-temple", "boot_stage": "D_MN05,0,0,-1"},
+  {"name": "goron-mines", "boot_stage": "D_MN04,1,0,-1"},
+  {"name": "lakebed-temple", "boot_stage": "D_MN01,0,0,-1"},
+  {"name": "temple-of-time", "boot_stage": "D_MN06,0,0,-1"},
+  {"name": "hyrule-castle", "boot_stage": "D_MN09,1,0,-1"}
+ ]
+}

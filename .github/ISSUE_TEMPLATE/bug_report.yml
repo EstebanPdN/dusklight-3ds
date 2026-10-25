@@ -1,0 +1,30 @@
+name: Source or native runtime problem
+description: Report a reproducible build or development problem.
+title: "[Bug] "
+body:
+  - type: input
+    id: commit
+    attributes:
+      label: Commit and build profile
+      description: Include game or diagnostic profile and configuration overrides.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Host OS, SDK/compiler and console model or emulator version.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction, expected behavior and actual result
+      description: Include the first relevant sanitized error. Do not attach game data, saves or memory captures.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Checks performed
+      description: Distinguish host checks, native build, emulator and physical hardware.

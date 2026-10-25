@@ -1,0 +1,23 @@
+; Shared indexed GX path. Identity uniform accepts pretransformed J3D clip
+; coordinates; legacy J2D uses its viewport/tilt/depth matrix. Preserve input w.
+.fvec transform[4]
+.constf constants(0.0, 1.0, 0.0, 0.0)
+.out outpos position
+.out outcolor color
+.out outtex texcoord0.st
+.out - texcoord0w outtex.p
+.out outtex1 texcoord1
+.out outtex2 texcoord2
+.proc main
+    mov r0, v0
+    dp4 outpos.x, transform[0], r0
+    dp4 outpos.y, transform[1], r0
+    dp4 outpos.z, transform[2], r0
+    dp4 outpos.w, transform[3], r0
+    mov outcolor, v1
+    mov outtex, v2
+    mov outtex.z, v5.x
+    mov outtex1, v3
+    mov outtex2, v4
+    end
+.end
