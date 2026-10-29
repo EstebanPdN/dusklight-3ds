@@ -1,0 +1,74 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+early_access: false
+tone_instructions: >-
+  Give concise, evidence-based technical feedback. Prioritize correctness,
+  ownership, bounded memory and real regressions. Distinguish source inspection,
+  host tests, ARM compilation, emulator behavior and physical 3DS evidence.
+reviews:
+  profile: chill
+  auto_approvals:
+    enabled: false
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  auto_apply_labels: false
+  auto_assign_reviewers: false
+  path_filters:
+    - "!Source/extern/borealis/**"
+    - "!Source/mods/cosmetics/**"
+    - "!Source/mods/randomizer/**"
+    - "!Source/platforms/3ds/vendor/**"
+    - "!assets/**"
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    simplify:
+      enabled: false
+    autofix:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+  post_merge_actions: []
+  path_instructions:
+    - path: "Source/platforms/3ds/**"
+      instructions: >-
+        Target ARMv6K with hard-float VFP and the existing devkitARM/libctru/
+        Citro3D toolchain. Check AAPCS, alignment, arithmetic bounds, cache
+        publication, owner-thread access and GPU completion before resource
+        reuse/free. Do not recommend NEON, desktop GPU APIs or blanket success
+        skips. The new native/ module must not gain GX decoding, runtime source
+        material translation or CPU mesh-vertex transforms. Unmigrated callers
+        still use compatibility code; do not delete it without caller evidence.
+        Read docs/NATIVE_RENDERER.md and the owning format/lifetime contracts.
+    - path: "Source/libs/JSystem/**"
+      instructions: >-
+        Preserve original game semantics and non-3DS builds. Check platform
+        guards, ABI/layout consistency across build groups, pointer lifetimes,
+        palette/matrix indexing, partial allocation failure and draw ordering.
+        Native model hooks must fail explicitly on missing inputs/resources.
+    - path: "Source/extern/aurora/**"
+      instructions: >-
+        This vendored dependency contains local port modifications. Review
+        changed compatibility paths and shared callers; preserve provenance,
+        command order and resource lifetimes. Avoid broad upstream rewrites.
+    - path: "Tools/3ds/**"
+      instructions: >-
+        Check input bounds, deterministic conversion, explicit unsupported cases,
+        private output paths and preservation of original ISOs/saves. Require
+        synthetic public fixtures and meaningful negative controls. Do not
+        request game payloads, credentials or private dumps in GitHub comments.
+    - path: "docs/**"
+      instructions: >-
+        Verify commands, relative links, defaults and evidence scope against
+        source. Compilation or SDK substitutes do not establish PICA precision,
+        physical FPS or playability. Native renderer migration is incomplete;
+        historical compatibility-route results are not native acceptance.

@@ -9,7 +9,7 @@ from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 ALLOWED = {'README.md', 'AI_DEVELOPMENT.md', 'LICENSE.md', 'CONTRIBUTING.md',
-           'CHANGELOG.md', '.gitignore', '.gitattributes', '.github', 'Source', 'Tools', 'docs', 'assets'}
+           'CHANGELOG.md', '.gitignore', '.gitattributes', '.coderabbit.yaml', '.github', 'Source', 'Tools', 'docs', 'assets'}
 FORBIDDEN = {'.iso', '.gcm', '.rvz', '.wia', '.twilight', '.sav', '.gci', '.raw',
              '.dna', '.dnp', '.dnt', '.dnm', '.dnl', '.dps', '.bmd', '.bdl',
              '.dmp', '.log', '.wav', '.cia', '.cxi', '.3dsx', '.elf', '.o', '.pyc', '.pem', '.key'}
