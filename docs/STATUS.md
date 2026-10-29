@@ -1,5 +1,32 @@
 # Source publication verification
 
+## Current native-renderer checkpoint — 2026-10-29
+
+The new renderer, actual model/resource/frame/camera hooks, offline converters,
+format contracts and synthetic tests are included in this source update.
+Its [implementation and ten-step roadmap](NATIVE_RENDERER.md) describe the
+remaining work. This is not a playable native-renderer release.
+
+| Check | Current result and scope |
+| --- | --- |
+| Existing public host suite | Eight enumerated groups pass under host ASan/UBSan; no disc or emulator. |
+| Native engine mutation controls | All 27 enumerated mutations are detected; each control compiles before its expected failing execution. |
+| Native conversion/format checks | Nine individual geometry/material/texture/mesh/pose suites pass with synthetic inputs. Optional external-codec compression was not rerun. |
+| Native engine host suite | Passes with Citro3D substitutes, including actual packet/archive/palette/camera helper bodies and 243 camera point-mapping cases. |
+| Native dependency/ARM audit | Passes for 21 optimized translation units (15 C++ units and six embedded shader units); shader bytes match fresh Picasso assembly. |
+| Shader checks | Weighted/rigid, affine-UV and projective algebra/ABI suites pass; not physical PICA precision. |
+| Model-plan suite | Passes hierarchy/producer admission and all 65,536 modeled source bias values; filtering on hardware remains unverified. |
+| Private fixture boundary | Six tests pass for ignored root-repository data, tracked-file rejection, nested repositories, symlinks and Git-check failure. |
+| New native game rendering | Not executed. No original scene, full opening, gameplay or physical acceptance is claimed. |
+| Historical full game link | The October 25 result below predates the new model renderer and is not current native migration acceptance. |
+
+Detailed compiler commands and generated receipts remain local. The published
+commands in [Testing](TESTING.md) and [Building](BUILDING.md) reproduce source
+checks without those private records. Current GitHub Actions results must be
+read for the exact pushed commit; this document does not assume they passed.
+
+## Historical first publication — 2026-10-25
+
 Date: 2026-10-25. Scope: the first public current-source snapshot.
 No release, prerelease, tag, installation QR or downloadable binary is published.
 

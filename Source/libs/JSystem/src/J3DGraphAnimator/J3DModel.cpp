@@ -18,6 +18,35 @@
 #define J3D_ASSERTMSG(LINE, COND, MSG) JUT_ASSERT_MSG(LINE, (COND) != 0, MSG)
 #define J3D_WARN1(LINE, MSG, ARG1) JUT_WARN(LINE, MSG, ARG1)
 
+#if defined(DUSK_PICA_GAME_DRAW)
+bool J3DModel::copyNativePalette(const dusk::pica::UniformBinding& binding, dusk::pica::Palette& out) {
+    out = {}; out.count = 0;
+    if (!mModelData || !mMtxBuffer || mMtxBuffer->mCurrentViewNo >= mMtxBuffer->mMtxNum ||
+        !mMtxBuffer->mpDrawMtxArr[1] || !mMtxBuffer->mpNrmMtxArr[1] ||
+        mModelData->checkBBoardFlag() || mModelData->checkFlag(0x110) ||
+        (getMtxCalcMode() != 0 && getMtxCalcMode() != J3DMdlFlag_UseDefaultJ3D) ||
+        !getDrawMtxPtr() || !getNrmMtxPtr() ||
+        mDeformData || mSkinDeform || mVtxColorCalc || mUnkCalc1 || mUnkCalc2 ||
+        checkFlag(J3DMdlFlag_SkinPosCpu | J3DMdlFlag_SkinNrmCpu)) return false;
+    return dusk::pica::copyGamePalette(binding, mModelData->getDrawMtxNum(),
+                                     getDrawMtxPtr(), getNrmMtxPtr(), out);
+}
+namespace {
+bool nativeGameParameters(const void* instance, const dusk::pica::UniformBinding& binding,
+                          dusk::pica::DrawUniforms& out, void*) noexcept {
+    auto* model = const_cast<J3DModel*>(static_cast<const J3DModel*>(instance));
+    if (!model || !model->copyNativePalette(binding, out.palette)) return false;
+    return dusk::pica::game::applyCamera(out);
+}
+}
+bool J3DModel::drawNativeShape(unsigned shape) {
+    const dusk::pica::SourceIdentity empty;
+    return dusk::pica::game::drawSourceShape(this, shape,
+        mModelData ? mModelData->getNativeSource() : empty,
+        nativeGameParameters, nullptr, dusk::pica::poseInput | dusk::pica::orderingInput);
+}
+#endif
+
 void J3DModel::initialize() {
     mModelData = NULL;
     mFlags = 0;

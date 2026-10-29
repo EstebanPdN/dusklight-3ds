@@ -45,7 +45,7 @@ CARD_PRIVATE_DIRS = ('Diagnostics', 'Saves', 'Build')
 
 @contextmanager
 def card_private_parent(path, *, create=False):
-    """Pin project-private ancestors; never follow a symlink or enter a repo."""
+    """Pin private ancestors; allow ignored root-repo data, never nested repos."""
     root = ROOT.resolve()
     path = Path(os.path.abspath(path))
     try:
@@ -53,17 +53,29 @@ def card_private_parent(path, *, create=False):
     except ValueError:
         raise ValueError('Native card paths must remain project-private') from None
     if len(relative.parts) < 2 or relative.parts[0] not in CARD_PRIVATE_DIRS or '.git' in relative.parts:
-        raise ValueError('Native card paths require Diagnostics, Saves or Build outside Git')
+        raise ValueError('Native card paths require private Diagnostics, Saves or Build')
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     fd = os.open(root, flags)
     try:
-        for part in relative.parts[:-1]:
+        for depth, part in enumerate(relative.parts[:-1]):
             try:
                 os.stat('.git', dir_fd=fd, follow_symlinks=False)
             except FileNotFoundError:
                 pass
             else:
-                raise ValueError('Native card paths must not enter a Git repository')
+                if depth != 0:
+                    raise ValueError('Native card paths must not enter a nested Git repository')
+                # Source publication moved .git to ROOT. Keep assets/saves
+                # private: check-ignore excludes tracked files even if an
+                # ignore rule also matches them. Check before creating dirs.
+                try:
+                    ignored = subprocess.run(
+                        ['git', '-C', str(root), 'check-ignore', '--quiet', '--', relative.as_posix()],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    raise ValueError('Cannot verify native data is ignored by Git') from None
+                if ignored.returncode != 0:
+                    raise ValueError('Native card/data paths must be untracked and ignored by Git')
             if create:
                 try:
                     os.mkdir(part, mode=0o700, dir_fd=fd)

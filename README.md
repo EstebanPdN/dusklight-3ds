@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <a href="https://estebanpdn.github.io/"><img src="docs/images/website.svg" alt="Visit Esteban’s Forge" width="142" height="46"></a>
+  <a href="https://estebanpdn.github.io/dusklight.html"><img src="docs/images/website.svg" alt="Visit Esteban’s Forge" width="142" height="46"></a>
   <a href="https://discord.gg/BjbzfRYpV"><img src="docs/images/discord-official.svg" alt="Join our Discord community" width="166" height="46"></a>
 </p>
 
@@ -39,13 +39,16 @@ This project was developed with the help of [OpenAI Codex](https://openai.com/co
 **Experimental source publication in active development. No release or playable
 binary is published.** The goal is a complete native port; full-game progression,
 reliable save/reload and physical New3DS performance remain under development.
+The new renderer and its game integration are work in progress; the current
+native model route is not a playable build. See the
+[native renderer roadmap](docs/NATIVE_RENDERER.md).
 
 ## Features
 
 <table>
   <tr>
     <td width="50%" valign="top"><strong>Native ARM game integration</strong><br>Original game and JSystem code linked through a dedicated 3DS platform target.</td>
-    <td width="50%" valign="top"><strong>GX on PICA200</strong><br>Native geometry, material, texture and framebuffer translation using Citro3D.</td>
+    <td width="50%" valign="top"><strong>Native PICA200 renderer in development</strong><br>Prepared geometry, shaders, materials and textures submitted directly through Citro3D; whole-game migration remains incomplete.</td>
   </tr>
   <tr>
     <td width="50%" valign="top"><strong>3DS platform services</strong><br>Circle Pad and C-Stick mapping, NDSP audio, SD data access and application diagnostics.</td>
@@ -77,6 +80,7 @@ memory capture is included. See [Game data](docs/GAME_DATA.md).
 | [Documentation index](docs/README.md) | Start with the guide for your task. |
 | [Repository map](docs/REPOSITORY.md) | Source ownership, directory layout and maintenance rules. |
 | [Building](docs/BUILDING.md) | Toolchain, clean checkout, diagnostic and full integration builds. |
+| [Native renderer](docs/NATIVE_RENDERER.md) | Current implementation, ten-step roadmap, build/test commands and open gates. |
 | [Architecture](docs/ARCHITECTURE.md) | Engine boundary, rendering, audio, storage and lifecycle. |
 | [Compatibility](docs/COMPATIBILITY.md) | Target systems, implemented paths and remaining acceptance gates. |
 | [Game data and controls](docs/GAME_DATA.md) | Local data preparation, SD paths, save format and input mapping. |

@@ -46,10 +46,19 @@ The helper passes both SDK locations explicitly to the existing CMake target.
 It enables the original scene, environment, complete actor link and game startup
 paths. It does not enable optional scene experiments.
 
+The current game profile defaults `DUSK_PICA_GAME_DRAW=ON`, selecting the
+**unfinished native model renderer**. It is not the earlier compatibility
+renderer build and is not playable yet: missing native assets/parameters refuse
+at draw time. To compile only the new renderer, use
+[the native library instructions](NATIVE_RENDERER.md#build-and-test).
+
 Outputs are `Build/public-game/dusklight-native.elf`, `.3dsx`, `.smdh` and `.map`.
 The generated SMDH still uses the historical diagnostic description; it does not
 identify a supported consumer build. ELF and map files are for local debugging.
 A successful link does not establish full-game or physical hardware behavior.
+The October 25 full-link result in the historical status predates the new
+renderer. See [current verification](STATUS.md) before attributing that result
+to this checkpoint.
 
 ## Synthetic diagnostic profile
 

@@ -9,6 +9,44 @@ set(DEVKITPRO "/opt/devkitpro" CACHE PATH "Existing devkitPro installation")
 find_program(THREEDSXTOOL 3dsxtool HINTS "${DEVKITPRO}/tools/bin" REQUIRED)
 find_program(SMDHTOOL smdhtool HINTS "${DEVKITPRO}/tools/bin" REQUIRED)
 find_program(PICASSO picasso HINTS "${DEVKITPRO}/tools/bin" REQUIRED)
+
+# Independent native renderer. The game-model integration option below links
+# this library and redirects real packet entrypoints; asset/input migration is
+# incomplete. Building this target alone never creates a game executable.
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin"
+    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin" "${CMAKE_CURRENT_SOURCE_DIR}/native/scene.v.pica"
+    DEPENDS native/scene.v.pica VERBATIM)
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_shader.cpp"
+    COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin"
+        "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_shader.cpp" -DSYMBOL=native_scene_shader -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
+    DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin" embed_shader.cmake VERBATIM)
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin"
+    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin" "${CMAKE_CURRENT_SOURCE_DIR}/native/scene_rigid.v.pica"
+    DEPENDS native/scene_rigid.v.pica VERBATIM)
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid_shader.cpp"
+    COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin"
+        "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid_shader.cpp" -DSYMBOL=native_scene_rigid_shader -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
+    DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin" embed_shader.cmake VERBATIM)
+foreach(native_variant IN ITEMS uv rigid_uv projective rigid_projective)
+    add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin"
+        COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin"
+            "${CMAKE_CURRENT_SOURCE_DIR}/native/scene_${native_variant}.v.pica"
+        DEPENDS "native/scene_${native_variant}.v.pica" VERBATIM)
+    add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}_shader.cpp"
+        COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin"
+            "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}_shader.cpp"
+            "-DSYMBOL=native_scene_${native_variant}_shader" -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
+        DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin" embed_shader.cmake VERBATIM)
+endforeach()
+add_library(dusk_pica_engine STATIC EXCLUDE_FROM_ALL
+    native/contracts.cpp native/renderer.cpp native/quad_batch.cpp native/pack.cpp native/texture_pack.cpp native/material_pack.cpp native/model.cpp native/model_plan.cpp native/scene.cpp native/pose.cpp native/game_draw.cpp native/game_source.cpp native/asset_pack.cpp native/game_assets.cpp native/camera.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/native_scene_shader.cpp" "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid_shader.cpp"
+    "${CMAKE_CURRENT_BINARY_DIR}/native_scene_uv_shader.cpp" "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid_uv_shader.cpp"
+    "${CMAKE_CURRENT_BINARY_DIR}/native_scene_projective_shader.cpp" "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid_projective_shader.cpp")
+target_include_directories(dusk_pica_engine PRIVATE "${DEVKITPRO}/libctru/include")
+target_compile_options(dusk_pica_engine PRIVATE -O2 -ffunction-sections -fdata-sections
+    -Wall -Wextra -Werror -fno-exceptions -fno-rtti -fstack-usage)
+
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/preview.shbin"
     COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/preview.shbin" "${CMAKE_CURRENT_SOURCE_DIR}/preview.v.pica"
     DEPENDS preview.v.pica VERBATIM)
@@ -447,4 +485,17 @@ if(DUSK_SCENE_MATERIAL_INSPECTION)
         message(FATAL_ERROR "Partial material inspection requires the explicitly marked fog inspection")
     endif()
     target_compile_definitions(dusk_native_kernel PRIVATE DUSK_SCENE_MATERIAL_INSPECTION=1)
+endif()
+
+# Current native 3D integration: real game model packets dispatch prepared native
+# resources. UI/effects migration is still unfinished; missing model bindings fail.
+option(DUSK_PICA_GAME_DRAW "Use native PICA draws for original game model packets" ON)
+if(DUSK_GAME_STARTUP AND DUSK_PICA_GAME_DRAW)
+    foreach(native_game_target IN ITEMS dusklight-native dusk_native_kernel dusk_native_math
+            dusk_native_display_list dusk_original_gameplay dusk_original_environment)
+        if(TARGET ${native_game_target})
+            target_compile_definitions(${native_game_target} PRIVATE DUSK_PICA_GAME_DRAW=1)
+        endif()
+    endforeach()
+    target_link_libraries(dusklight-native PRIVATE dusk_pica_engine citro3d ctru m)
 endif()

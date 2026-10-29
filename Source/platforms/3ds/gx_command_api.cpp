@@ -2,6 +2,9 @@
 #include "runtime/gx_state.hpp"
 #include <dolphin/gx.h>
 #include <dolphin/os.h>
+#if defined(DUSK_PICA_GAME_DRAW)
+#include "native/game_draw_api.hpp"
+#endif
 
 namespace {
 thread_local dusk::native::gx::CommandStream* current=nullptr;
@@ -40,6 +43,9 @@ void GXNativeLoadIndx(u8 cmd,u16 indx,u16 addr){
     if(!current||!current->loadIndexed(cmd,indx,addr))fail("GXNativeLoadIndx");
 }
 void GXCallDisplayList(const void* data,u32 size){
+#if defined(DUSK_PICA_GAME_DRAW)
+    dusk::pica::game::invalidateCamera(); // An unconverted list cannot inherit a native camera proof.
+#endif
     if(!current||(!data&&size)||!current->flushAutomaticSu()||!current->call({static_cast<const u8*>(data),size}))fail("GXCallDisplayList");
 }
 }

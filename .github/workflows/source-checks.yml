@@ -19,3 +19,10 @@ jobs:
         run: python3 Tools/3ds/check_publication.py
       - name: Run synthetic host checks
         run: python3 Tools/3ds/test_public_host.py
+      - name: Check native offline conversion and bank formats
+        run: |
+          python3 Tools/3ds/test_j3d_native_geometry.py --output Build/ci-native-geometry
+          python3 Tools/3ds/test_j3d_native_materials.py --output Build/ci-native-materials
+          python3 Tools/3ds/test_native_pack.py --output Build/ci-native-mesh
+          python3 Tools/3ds/test_native_texture_pack.py --output Build/ci-native-textures
+          python3 Tools/3ds/test_native_material_pack.py --output Build/ci-native-fragments

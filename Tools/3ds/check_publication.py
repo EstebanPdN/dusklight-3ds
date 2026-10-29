@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ALLOWED = {'README.md', 'AI_DEVELOPMENT.md', 'LICENSE.md', 'CONTRIBUTING.md',
            'CHANGELOG.md', '.gitignore', '.gitattributes', '.github', 'Source', 'Tools', 'docs', 'assets'}
 FORBIDDEN = {'.iso', '.gcm', '.rvz', '.wia', '.twilight', '.sav', '.gci', '.raw',
+             '.dna', '.dnp', '.dnt', '.dnm', '.dnl', '.dps', '.bmd', '.bdl',
              '.dmp', '.log', '.wav', '.cia', '.cxi', '.3dsx', '.elf', '.o', '.pyc', '.pem', '.key'}
 # Kenney's CC0 sample is upstream demo content, not captured game audio.
 PUBLIC_AUDIO = {'Source/mods/audio_mod/res/go.wav':

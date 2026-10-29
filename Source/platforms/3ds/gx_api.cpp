@@ -7,11 +7,19 @@
 #include "runtime/gx_vertex_commands.hpp"
 #include "runtime/gx_transform_commands.hpp"
 #include <dolphin/gx.h>
+#if defined(DUSK_PICA_GAME_DRAW)
+#include "native/game_draw_api.hpp"
+#endif
 
 // Match the pinned game ABI through its actual declarations. This translation
 // unit deliberately includes no libctru/Citro3D headers or hardware FIFO writes.
 namespace bridge = dusk::native::gx;
 namespace {
+void invalidateNativeCamera(){
+#if defined(DUSK_PICA_GAME_DRAW)
+    dusk::pica::game::invalidateCamera(); // Guard only; never derive native parameters here.
+#endif
+}
 void scalar(float value){GXCmd1u32(std::bit_cast<u32>(value));}
 [[noreturn]] void streamFailure(const char* call){OSPanic(__FILE__,__LINE__,"Native typed GX vertex failure: %s",call);}
 void packed8(const char* call,u8 x){
@@ -24,9 +32,9 @@ void packed16(const char* call,u16 x){
 }
 }
 extern "C" {
-void GXSetViewport(f32 x,f32 y,f32 w,f32 h,f32 n,f32 f) { if (bridge::commandViewport(x,y,w,h,n,f)) return; bridge::setViewport(x,y,w,h,n,f); }
-void GXSetScissor(u32 x,u32 y,u32 w,u32 h) { if (bridge::commandScissor(x,y,w,h)) return; bridge::setScissor(x,y,w,h); }
-void GXSetProjection(const void* matrix,GXProjectionType type) { if (bridge::commandProjection(static_cast<const float*>(matrix),type)) return; bridge::setProjection(static_cast<const float*>(matrix),type); }
+void GXSetViewport(f32 x,f32 y,f32 w,f32 h,f32 n,f32 f) { invalidateNativeCamera(); if (bridge::commandViewport(x,y,w,h,n,f)) return; bridge::setViewport(x,y,w,h,n,f); }
+void GXSetScissor(u32 x,u32 y,u32 w,u32 h) { invalidateNativeCamera(); if (bridge::commandScissor(x,y,w,h)) return; bridge::setScissor(x,y,w,h); }
+void GXSetProjection(const void* matrix,GXProjectionType type) { invalidateNativeCamera(); if (bridge::commandProjection(static_cast<const float*>(matrix),type)) return; bridge::setProjection(static_cast<const float*>(matrix),type); }
 void GXLoadPosMtxImm(const void* matrix,u32 id) { if (bridge::commandPositionMatrix(static_cast<const float*>(matrix),id)) return; bridge::loadPositionMatrix(static_cast<const float*>(matrix),id); }
 void GXLoadTexMtxImm(const void* matrix,u32 id,GXTexMtxType type) { if (bridge::commandTextureMatrix(static_cast<const float*>(matrix),id,type)) return; bridge::loadTextureMatrix(static_cast<const float*>(matrix),id,type); }
 void GXLoadNrmMtxImm(const void* matrix,u32 id) {

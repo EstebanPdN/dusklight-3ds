@@ -51,3 +51,16 @@ a supported end-user settings interface.
 
 The full startup gate refuses a partial original-profile selection. This prevents
 a diagnostic link configuration from masquerading as complete engine linkage.
+
+## Native renderer migration
+
+`DUSK_PICA_GAME_DRAW` defaults ON; it takes effect only with
+`DUSK_GAME_STARTUP=ON`. It links `dusk_pica_engine` and selects the actual native
+model-packet entrypoints across the original game build groups. Missing native
+resources or producer inputs fail explicitly. UI/effects migration is incomplete.
+
+Setting it OFF selects the retained compatibility route for development and is
+not progress toward native-renderer acceptance. The public build helper does not
+set it OFF. This option is a CMake build choice, not an SD runtime switch.
+See [Native renderer](NATIVE_RENDERER.md) for the temporary data contract and
+remaining work.

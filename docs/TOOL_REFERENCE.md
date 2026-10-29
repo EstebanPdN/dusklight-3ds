@@ -144,3 +144,53 @@ arguments and prerequisites before running historical workflows.
 | [verify_application_dump.py](../Tools/3ds/verify_application_dump.py) | Read-only verification of a private DUSKLIGHT_APPLICATION_DUMP_1 directory. |
 | [verify_diagnostic_package.py](../Tools/3ds/verify_diagnostic_package.py) | Validate this diagnostic CIA's structure and hashes, not signatures or hardware. |
 | [verify_gpu_queue_gate.py](../Tools/3ds/verify_gpu_queue_gate.py) | Verify the actual linked ARM queue/callback gate; never infer interception from flags. |
+
+## Native renderer development tools
+
+Start with [Native renderer](NATIVE_RENDERER.md) for data dependencies and
+[Testing](TESTING.md) for executable host commands. These tools do not establish
+PICA output or full-game acceptance. Generated outputs remain local.
+
+| Tool | Responsibility |
+| --- | --- |
+| [audit_native_engine.py](../Tools/3ds/audit_native_engine.py) | Seal the standalone ARM native engine and check its dependency boundary. |
+| [compile_native_texture.cpp](../Tools/3ds/compile_native_texture.cpp) | Native bank/compiler development helper; see the native renderer guide and source contract. |
+| [inspect_native_asset_pack.cpp](../Tools/3ds/inspect_native_asset_pack.cpp) | Native bank/compiler development helper; see the native renderer guide and source contract. |
+| [inspect_native_material_pack.cpp](../Tools/3ds/inspect_native_material_pack.cpp) | Native bank/compiler development helper; see the native renderer guide and source contract. |
+| [inspect_native_mesh_pack.cpp](../Tools/3ds/inspect_native_mesh_pack.cpp) | Native bank/compiler development helper; see the native renderer guide and source contract. |
+| [inspect_native_model_plan.cpp](../Tools/3ds/inspect_native_model_plan.cpp) | Native bank/compiler development helper; see the native renderer guide and source contract. |
+| [inspect_native_pose.cpp](../Tools/3ds/inspect_native_pose.cpp) | Native bank/compiler development helper; see the native renderer guide and source contract. |
+| [inspect_native_texture_pack.cpp](../Tools/3ds/inspect_native_texture_pack.cpp) | Native bank/compiler development helper; see the native renderer guide and source contract. |
+| [j3d_material_source.py](../Tools/3ds/j3d_material_source.py) | Bounded Mac-only MAT3 declaration reader, independent of runtime GX state. |
+| [j3d_native_geometry.py](../Tools/3ds/j3d_native_geometry.py) | Offline J3D geometry -> native meshes. Never used by the 3DS renderer. |
+| [j3d_native_materials.py](../Tools/3ds/j3d_native_materials.py) | Mac-only MAT3 fragment compiler. No source interpreter on 3DS. |
+| [j3d_native_model.py](../Tools/3ds/j3d_native_model.py) | Mac-only original model association -> native model-plan assembly. |
+| [j3d_native_pose.py](../Tools/3ds/j3d_native_pose.py) | Mac-only rest hierarchy/envelope compiler -> native affine graph. |
+| [j3d_native_samplers.py](../Tools/3ds/j3d_native_samplers.py) | Mac-only source sampler controls -> native PICA descriptor constants. |
+| [j3d_native_textures.py](../Tools/3ds/j3d_native_textures.py) | Mac-only TEX1 image preparation. Samplers/materials/texgen remain separate. |
+| [native_asset_pack.py](../Tools/3ds/native_asset_pack.py) | Mac-only assembly of source-identified native resource banks; no GX output. |
+| [native_camera_fixture.py](../Tools/3ds/native_camera_fixture.py) | Local source math oracles and real game publication helper for host checks. |
+| [native_game_packet_fixture.py](../Tools/3ds/native_game_packet_fixture.py) | Host fixture for the actual source packet entry bodies; never a game run. |
+| [native_game_source_fixture.py](../Tools/3ds/native_game_source_fixture.py) | Extract actual game source identity/pose bodies for host SDK substitutes. |
+| [native_material_pack.py](../Tools/3ds/native_material_pack.py) | Mac-only native fragment-state writer. Never emits source command packets. |
+| [native_mesh_pack.py](../Tools/3ds/native_mesh_pack.py) | Prepare version1 native mesh packs on the Mac; no source-command payloads. |
+| [native_model_plan.py](../Tools/3ds/native_model_plan.py) | Mac native model-plan writer; no original hierarchy/source enums in output. |
+| [native_pose_pack.py](../Tools/3ds/native_pose_pack.py) | Native affine pose graph writer. No source file or renderer commands. |
+| [native_texture_compression.py](../Tools/3ds/native_texture_compression.py) | DEFAULT-OFF Mac asset experiment: native ETC with explicit byte-quality gates. |
+| [native_texture_pack.py](../Tools/3ds/native_texture_pack.py) | Offline native image pack writer. No source-console formats in the output. |
+| [test_j3d_native_geometry.py](../Tools/3ds/test_j3d_native_geometry.py) | Independent binary fixtures for the Mac-only J3D native geometry compiler. |
+| [test_j3d_native_materials.py](../Tools/3ds/test_j3d_native_materials.py) | Independent source fixtures and normalized fragment-equation checks. |
+| [test_j3d_native_textures.py](../Tools/3ds/test_j3d_native_textures.py) | Mac compiler checks against independent constant/coordinate image fixtures. |
+| [test_native_engine.py](../Tools/3ds/test_native_engine.py) | Compile/run native contracts and backend with SDK substitutes; never Azahar. |
+| [test_native_material_pack.py](../Tools/3ds/test_native_material_pack.py) | Native material binary contracts with actual parser under sanitizers. |
+| [test_native_material_parameters.py](../Tools/3ds/test_native_material_parameters.py) | Native parameter wiring, versioned pack and offline source specialization. |
+| [test_native_material_temporaries.py](../Tools/3ds/test_native_material_temporaries.py) | Offline native buffer allocation, normalized equations and refusal controls. |
+| [test_native_model_plan.py](../Tools/3ds/test_native_model_plan.py) | Source hierarchy/sampler model and native metadata contracts; no graphics. |
+| [test_native_pack.py](../Tools/3ds/test_native_pack.py) | Cross-language native pack verification; synthetic assets only, no emulator. |
+| [test_native_pose.py](../Tools/3ds/test_native_pose.py) | Native pose contracts and offline matrices, never emulator/GPU execution. |
+| [test_native_projective_shader.py](../Tools/3ds/test_native_projective_shader.py) | Native position->STQ source algebra and binary ABI. Never GPU execution. |
+| [test_native_shader.py](../Tools/3ds/test_native_shader.py) | Native shader algebra and assembled ABI checks. No GPU/emulator execution. |
+| [test_native_texture_compression.py](../Tools/3ds/test_native_texture_compression.py) | Offline native ETC admission and exact-alpha regression checks. |
+| [test_native_texture_pack.py](../Tools/3ds/test_native_texture_pack.py) | Native image contract checks. No emulator or GPU execution. |
+| [test_native_uv_shader.py](../Tools/3ds/test_native_uv_shader.py) | Native affine UV shader algebra/ABI. No GPU or emulator execution. |
+| [test_private_fixture_git.py](../Tools/3ds/test_private_fixture_git.py) | Private fixture protection after the public repository moved to ROOT. |

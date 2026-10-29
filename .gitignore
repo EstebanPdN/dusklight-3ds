@@ -37,6 +37,16 @@ CMakeFiles/
 *.rvz
 *.wia
 *.twilight
+# Prepared native game banks and extracted source assets
+*.dna
+*.dnp
+*.dnt
+*.dnm
+*.dnl
+*.dps
+*.bmd
+*.bdl
+*.bti
 *.sav
 *.gci
 *.raw

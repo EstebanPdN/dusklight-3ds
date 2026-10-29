@@ -17,6 +17,25 @@
 #define NATIVE_J3D_PROFILE(name)
 #endif
 
+#if defined(DUSK_PICA_GAME_DRAW)
+#include "../../../../platforms/3ds/native/game_draw_api.hpp"
+#include "../../../../platforms/3ds/runtime/gx_framebuffer.hpp"
+#include "../../../../platforms/3ds/gx_pica.hpp"
+namespace {
+void drawNativeGameShape(const J3DShapePacket& packet){
+    if(packet.checkFlag(J3DShpFlag_Hidden)||!packet.getShape())return;
+    if(!dusk::native::alphaIntervalCopySafe())OSPanic(__FILE__,__LINE__,"Unsafe native game draw boundary");
+    j3dSys.setModel(packet.getModel()); // Preserve game-side current-model identity.
+    const bool target=dusk::pica::game::target(dusk::native::activeFramebuffer());
+    const bool drawn=target&&packet.getModel()&&packet.getModel()->drawNativeShape(packet.getShape()->getIndex());
+    // Transitional UI/effects still share the SDK context. Their cached PICA
+    // state must not survive a native draw (or a failed native state change).
+    dusk::native::invalidatePicaCommandState();
+    if(!drawn)OSPanic(__FILE__,__LINE__,"%s (submitted parts=%u)",dusk::pica::game::failure(),dusk::pica::game::submittedParts());
+}
+}
+#endif
+
 #if TARGET_PC
 #if !defined(DUSK_TARGET_3DS)
 #include <tracy/Tracy.hpp>
@@ -77,7 +96,12 @@ void J3DDisplayListObj::swapBuffer() {
 }
 
 void J3DDisplayListObj::callDL() const {
+#if defined(DUSK_PICA_GAME_DRAW)
+    OSPanic(__FILE__,__LINE__,"J3D display-list execution is forbidden in the native model renderer");
+#else
     GXCallDisplayList(mpDisplayList[0], mSize);
+
+#endif
 }
 
 #if defined(DUSK_TARGET_3DS)
@@ -193,7 +217,12 @@ J3DError J3DDrawPacket::newSingleDisplayList(u32 size) {
 }
 
 void J3DDrawPacket::draw() {
+#if defined(DUSK_PICA_GAME_DRAW)
+    OSPanic(__FILE__,__LINE__,"Native custom J3D draw packet is not implemented");
+#else
     callDL();
+
+#endif
 }
 
 J3DMatPacket::J3DMatPacket() {
@@ -230,6 +259,14 @@ bool J3DMatPacket::isSame(J3DMatPacket* pOther) const {
 }
 
 void J3DMatPacket::draw() {
+#if defined(DUSK_PICA_GAME_DRAW)
+    j3dSys.setTexture(mpTexture); // High-level game identity only, no GPU load.
+    unsigned packets=0;
+    for(auto* packet=getShapePacket();packet;packet=static_cast<J3DShapePacket*>(packet->getNextPacket())){
+        if(++packets>1024)OSPanic(__FILE__,__LINE__,"Native model packet chain exceeds its bound");
+        drawNativeGameShape(*packet);
+    }
+#else
 #if !defined(DUSK_TARGET_3DS)
     ZoneScoped;
 #endif
@@ -279,6 +316,8 @@ void J3DMatPacket::draw() {
     if (mpMaterial->mMaterialName != nullptr) {
         GXPopDebugGroup();
     }
+#endif
+
 #endif
 }
 
@@ -410,6 +449,9 @@ void J3DShapePacket::prepareDraw() const {
 }
 
 void J3DShapePacket::draw() {
+#if defined(DUSK_PICA_GAME_DRAW)
+    drawNativeGameShape(*this);
+#else
     if (!checkFlag(J3DShpFlag_Hidden) && mpShape != NULL) {
         prepareDraw();
 
@@ -426,9 +468,14 @@ void J3DShapePacket::draw() {
 
         mpShape->draw();
     }
+
+#endif
 }
 
 void J3DShapePacket::drawFast() {
+#if defined(DUSK_PICA_GAME_DRAW)
+    drawNativeGameShape(*this);
+#else
 #if !defined(DUSK_TARGET_3DS)
     ZoneScoped;
 #endif
@@ -444,6 +491,8 @@ void J3DShapePacket::drawFast() {
 
         mpShape->drawFast();
     }
+
+#endif
 }
 
 void J3DPacket::draw() {}

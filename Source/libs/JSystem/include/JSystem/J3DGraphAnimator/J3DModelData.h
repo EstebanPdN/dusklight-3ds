@@ -5,6 +5,9 @@
 #include "JSystem/J3DGraphAnimator/J3DMaterialAttach.h"
 #include "JSystem/J3DGraphAnimator/J3DShapeTable.h"
 #include "JSystem/J3DGraphBase/J3DVertex.h"
+#if defined(DUSK_PICA_GAME_DRAW)
+#include "../../../../../platforms/3ds/native/game_source.hpp"
+#endif
 
 class JUTNameTab;
 
@@ -72,6 +75,10 @@ public:
     bool checkFlag(u32 flag) const { return (mFlags & flag) ? true : false; }
     u32 getFlag() const { return mFlags; }
     void const* getRawData() const { return mpRawData; }
+#if defined(DUSK_PICA_GAME_DRAW)
+    const dusk::pica::SourceIdentity& getNativeSource() const { return mNativeSource; }
+    void setNativeSource(const dusk::pica::SourceIdentity& source) { mNativeSource = source; }
+#endif
     bool checkBumpFlag() const { return mbHasBumpArray == 1; }
     void setBumpFlag(u32 flag) { mbHasBumpArray = flag; }
     bool checkBBoardFlag() const { return mbHasBillboard == 1; }
@@ -121,6 +128,9 @@ private:
     /* 0x58 */ J3DMaterialTable mMaterialTable;
     /* 0x78 */ J3DShapeTable mShapeTable;
     /* 0x88 */ J3DVertexData mVertexData;
+#if defined(DUSK_PICA_GAME_DRAW)
+    dusk::pica::SourceIdentity mNativeSource{}; // Captured original bytes; no GPU ownership.
+#endif
 };  // Size: 0xE4
 
 #endif /* J3DMODELDATA_H */

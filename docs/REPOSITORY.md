@@ -21,7 +21,8 @@ Source/
   platforms/3ds/
     CMakeLists.txt           native 3DS executable and link gates
     compile/                 devkitARM toolchain and explicit source inventories
-    runtime/                 GX, OS, data, audio, save and thread adapters
+    native/                  new direct Citro3D renderer, shaders, formats and contracts
+    runtime/                 transitional GX, OS, data, audio, save and thread adapters
     tests/                   host fixtures, assertions and platform substitutes
     vendor/opendsp/          open-source firmware, notices and exact hash
     *.v.pica                 PICA vertex programs
@@ -36,6 +37,7 @@ docs/                        maintained public New3DS documentation
   badges/                    local factual README badges
   images/                    community buttons and artwork attribution
   legal/                     component notices
+  decisions/                 consequential architecture decisions
 Build/                       generated locally; ignored
 Diagnostics/                 generated local evidence; ignored
 ```
@@ -68,3 +70,24 @@ The original upstream history is linked in [Upstream](UPSTREAM.md).
 The root ignore rules deliberately allow only public source, tools, docs and
 approved artwork. [The publication checker](../Tools/3ds/check_publication.py)
 checks tracked content, public navigation and firmware provenance before a push.
+
+## Organization and documentation policy
+
+This update applies the relevant structure, C++/3DS and documentation chapters
+of [Code Atlas](https://code-atlas.estebanpdn.chatgpt.site/#a05-title). Existing
+CMake and upstream source paths remain authoritative; folders are added for
+actual responsibilities rather than a new universal layout.
+
+Use the README for project state and navigation, this guide for ownership,
+[Architecture](ARCHITECTURE.md) for runtime boundaries,
+[Native renderer](NATIVE_RENDERER.md) for migration work, and
+[Status](STATUS.md) for dated results. Formats and API lifetime/failure contracts
+live beside their owning implementation. Keep consequential choices in
+[architecture decisions](decisions/0001-native-renderer.md).
+
+When changing an interface, update its contract, caller guidance and relevant
+checks in the same change. State ownership, bounds, thread requirements and
+failure behavior. Explain why a constraint exists instead of narrating each
+line. Keep historical evidence distinct from current acceptance; generated
+reports and private inputs stay outside public Git. Verify links, examples and
+source closure from a clean checkout before publishing.

@@ -351,6 +351,24 @@ int dRes_info_c::loadResource() {
                 const char* tmp = mArchive->mStringTable + (mArchive->findIdxResource(fileIndex)->type_flags_and_name_offset & 0xFFFFFF);
 #endif
                 void* res = mArchive->getIdxResource(fileIndex);
+#if defined(DUSK_PICA_GAME_DRAW)
+                // The archive supplies the actual decompressed extent. Capture
+                // identity before J3D's constructors byte-swap/mutate any bytes.
+                dusk::pica::SourceIdentity nativeSource;
+                const bool nativeModelResource = nodeType == 'BMDP' || nodeType == 'BMDR' ||
+                    nodeType == 'BMDV' || nodeType == 'BMDE' || nodeType == 'BMWR' ||
+                    nodeType == 'BMWE' || nodeType == 'BMDG' || nodeType == 'BMDA'
+#if DEBUG
+                    || nodeType == 'BMDL'
+#endif
+                    ;
+                if (res && nativeModelResource && !dusk::pica::identifySource(
+                        {static_cast<const std::byte*>(res), mArchive->getExpandedResSize(res)}, nativeSource)) {
+                    OSReport_Error("Native model source extent/header rejected: %s/%lu\n", mArchiveName,
+                                   static_cast<unsigned long>(fileIndex));
+                    return -1;
+                }
+#endif
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
                 u32 size = mArchive->getFileSize(mArchive->findIdxResource(fileIndex));
                 std::string fileName = mArchive->mStringTable +
@@ -537,6 +555,11 @@ int dRes_info_c::loadResource() {
                 }
 
                 JUT_ASSERT(1092, fileIndex < countFile);
+#if defined(DUSK_PICA_GAME_DRAW)
+                if (nativeSource.bytes && res) {
+                    static_cast<J3DModelData*>(res)->setNativeSource(nativeSource);
+                }
+#endif
                 mRes[fileIndex] = res;
             }
             fileIndex++;

@@ -20,7 +20,8 @@ This is an experimental adaptation. No supported binary release is available.
 | System | Source contains | Remaining acceptance |
 | --- | --- | --- |
 | Original engine | Complete gameplay link gate and original startup integration | Beginning-to-end natural progression |
-| Graphics | GX state/commands, geometry, TEV planning, textures and EFB copies | Full material coverage, effects and physical fidelity |
+| New native graphics | Independent Citro3D library, prepared resource formats, shaders and partial actual model/camera hooks | No original scene or physical acceptance; complete live inputs, UI/effects and full-game migration remain pending |
+| Retained compatibility graphics | GX state/commands, geometry, TEV planning, textures and EFB copies | Historical route evidence belongs to this path, not the new native renderer |
 | Input | Buttons, Circle Pad, C-Stick and digital shoulders | Broad physical gameplay calibration |
 | Audio | Original software DSP, NDSP PCM and embedded OpenDSP | Whole-game audio behavior and physical audible output |
 | Save provider | Native SD card container and staged writes | Reliable story-state save/reload across the full game |
@@ -29,7 +30,8 @@ This is an experimental adaptation. No supported binary release is available.
 Earlier local development exercised title/menu paths and a sequence of scoped
 scene-entry routes in Azahar. Direct-stage routes initialize fresh game state;
 they are not a completed playthrough or proof that quest progression is loaded.
-Those historical observations are not rerun or promoted to hardware acceptance
+Those historical observations are not results from the new native renderer
+([migration status](NATIVE_RENDERER.md)) and are not promoted to hardware acceptance
 by publishing the source.
 
 ## Known limitations

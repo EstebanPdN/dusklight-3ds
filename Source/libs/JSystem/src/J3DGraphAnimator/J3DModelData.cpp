@@ -11,6 +11,9 @@
 #include "JSystem/J3DGraphBase/J3DMaterial.h"
 
 void J3DModelData::clear() {
+#if defined(DUSK_PICA_GAME_DRAW)
+    mNativeSource = {};
+#endif
     mpRawData = 0;
     mFlags = 0;
     mbHasBumpArray = 0;

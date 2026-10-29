@@ -11,6 +11,9 @@
 #endif
 #include "cache_maintenance_profile.hpp"
 #include "game_startup.hpp"
+#if defined(DUSK_PICA_GAME_DRAW)
+#include "../native/game_draw_api.hpp"
+#endif
 #include "application_dump_ctru.hpp"
 #include "bootstrap.hpp"
 #include "clock.hpp"
@@ -513,6 +516,12 @@ int runOriginalGame(){
             if(!collectTextureResources())fatal(textureResourceFailure());
             if(!beginGxGeometryFrame())fatal(gxGeometryFailure());
             if(!beginFramebufferFrame())fatal("Original game framebuffer begin failed");
+#if defined(DUSK_PICA_GAME_DRAW)
+            // platformBeginGpuFrame has completed prior shared GPU work before
+            // either renderer may recycle its resident/retired allocations.
+            if(!dusk::pica::game::beginFrame())fatal(dusk::pica::game::failure());
+            invalidatePicaCommandState();
+#endif
             if(developerDepthAuditRequested(frame+1))captureDeveloperDepthBoundary(false);
             mDoGph_gInf_c::updateRenderSize();
             dusk::game_clock::begin_sim_tick();mDoCPd_c::read();
@@ -560,7 +569,12 @@ int runOriginalGame(){
             // One final PICA split plus the SDK's three possible LCD transfers.
             if(platformReserveGpuEntries(4,500000000)!=GpuCompletion::complete)
                 fatal("Original game GPU presentation queue unavailable");
+#if defined(DUSK_PICA_GAME_DRAW)
+            if(!dusk::pica::game::endFrame())fatal(dusk::pica::game::failure());
+            if(!platformEndGpuFrame(GX_CMDLIST_FLUSH))fatal("Native GPU frame completion unavailable");
+#else
             if(!platformEndGpuFrame(0))fatal("Native GPU frame completion unavailable");
+#endif
             observeDeveloperRetainedDepth(RetainedDepthStage::afterFrameEnd);
             ++frame;
             // Main owner, completed GPU frame, before bottom progress UI.
@@ -721,6 +735,17 @@ int runOriginalGame(){
             }
         }
     }catch(const ResetSignal& signal){OSReport("Original reset requested mode=%d code=%lu\n",signal.mode,static_cast<unsigned long>(signal.code));}
+#if defined(DUSK_PICA_GAME_DRAW)
+    // A reset can leave fapGm_Execute before the ordinary shared FrameEnd.
+    // Close both owners before normal GPU/worker/service shutdown; incomplete
+    // command/target state remains a fatal failure, never a successful reset.
+    if(dusk::pica::game::frameActive()){
+        if(!stream.finish()||!endGxGeometryFrame()||!endFramebufferFrame())
+            fatal("Native reset left incomplete shared render state");
+        if(!dusk::pica::game::endFrame())fatal(dusk::pica::game::failure());
+        if(!platformEndGpuFrame(GX_CMDLIST_FLUSH))fatal("Native reset GPU completion unavailable");
+    }
+#endif
 #if DUSK_SCENE_CREATE_PROBE
     sceneProbeClose();
 #endif

@@ -2,6 +2,9 @@
 #include "gx_geometry_pica.hpp"
 #include "gx_command_probe.hpp"
 #include "scene_bootstrap.hpp"
+#if defined(DUSK_PICA_GAME_DRAW)
+#include "native/game_draw_api.hpp"
+#endif
 #include <3ds.h>
 #include <citro3d.h>
 #include "diagnostics.hpp"
@@ -230,7 +233,12 @@ int main() {
     if (R_FAILED(APT_CheckNew3DS(&new3ds)) || !new3ds) fatal("New Nintendo 3DS is required");
     osSetSpeedupEnable(true); // libctru requests New3DS speed/L2; not a measured clock claim.
     logText("Native entry: Citro3D initialization\n");
-    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) fatal("Citro3D initialization failed");
+#if defined(DUSK_PICA_GAME_DRAW)
+    constexpr unsigned commandBytes=512*1024; // Native renderer admission contract.
+#else
+    constexpr unsigned commandBytes=C3D_DEFAULT_CMDBUF_SIZE;
+#endif
+    if (!C3D_Init(commandBytes)) fatal("Citro3D initialization failed");
     logText("Native entry: Citro3D ready; waiting for real VI IRQ\n");
     const auto retraceBefore = platformVideoRetraceCount();
     waitVideoRetrace();
@@ -247,7 +255,11 @@ int main() {
         GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) |
         GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO);
     C3D_RenderTargetSetOutput(target, GFX_TOP, GFX_LEFT, transfer);
-    if (!initializeGxPica()) fatal(gxPicaFailure());
+    if (!initializeGxPica()) fatal(gxPicaFailure()); // Transitional immediate UI/effects only.
+#if defined(DUSK_PICA_GAME_DRAW)
+    if(!dusk::pica::game::initialize(target))fatal(dusk::pica::game::failure());
+    logText("Renderer: native model dispatch selected; prepared asset bindings required; legacy model packet fallback disabled\n");
+#endif
     copyprobe::initialize(); // One fixed private SD opt-in; no render-loop I/O.
 #ifdef DUSK_GAME_STARTUP
     const int gameResult=runOriginalGame();
@@ -260,7 +272,11 @@ int main() {
     }
     logText("Native shutdown phase=graphics stop\n");
     releaseCopyImages();
-    C3D_Fini(); releaseFramebufferReadback(); releaseFramebufferRecords();
+    C3D_Fini();
+#if defined(DUSK_PICA_GAME_DRAW)
+    if(!dusk::pica::game::releaseAfterContextDestroyed())svcExitProcess();
+#endif
+    releaseFramebufferReadback(); releaseFramebufferRecords();
     destroyPreview(); destroyGxPica(); destroyJ2dPictureProbe(); destroyCommandProbe();
     copyprobe::writeReport(true); // After all copy/cache destruction; outside game timing.
     gfxExit(); graphicsReady=false;

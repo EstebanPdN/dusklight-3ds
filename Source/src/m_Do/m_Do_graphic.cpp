@@ -37,6 +37,23 @@
 #include "m_Do/m_Do_machine.h"
 #include "m_Do/m_Do_main.h"
 
+#if defined(DUSK_PICA_GAME_DRAW)
+#include "../../platforms/3ds/native/game_draw_api.hpp"
+#include "../../platforms/3ds/runtime/gx_framebuffer.hpp"
+static void publishNativeSceneCamera(const Mtx44 projection, const view_port_class* viewport) {
+    if (!projection || !viewport) { dusk::pica::game::invalidateCamera(); return; }
+    dusk::pica::Matrix clip;
+    for (unsigned row = 0; row < 4; ++row)
+        for (unsigned column = 0; column < 4; ++column) clip[row][column] = projection[row][column];
+    const dusk::pica::CameraRegion region{float(FB_WIDTH), float(FB_HEIGHT),
+        viewport->x_orig, viewport->y_orig, viewport->width, viewport->height,
+        viewport->near_z, viewport->far_z};
+    // Read the game camera/window directly. Failure leaves the native camera
+    // unbound; a later model draw reports it. No source graphics state is read.
+    dusk::pica::game::publishCamera(dusk::native::activeFramebuffer(), clip, region);
+}
+#endif
+
 #if PLATFORM_WII || PLATFORM_SHIELD
 #include <revolution/sc.h>
 #endif
@@ -1332,6 +1349,9 @@ static void drawDepth2(view_class* param_0, view_port_class* param_1, int param_
             GXSetTevSwapModeTable(GX_TEV_SWAP3, GX_CH_BLUE, GX_CH_BLUE, GX_CH_BLUE, GX_CH_ALPHA);
             GXSetTevSwapMode(GX_TEVSTAGE0, GX_TEV_SWAP0, GX_TEV_SWAP0);
             GXSetProjection(param_0->projMtx, GX_PERSPECTIVE);
+#if defined(DUSK_PICA_GAME_DRAW)
+            publishNativeSceneCamera(param_0->projMtx, param_1);
+#endif
         }
     }
 }
@@ -2383,6 +2403,9 @@ int mDoGph_Painter() {
             dComIfGp_setCurrentView(&camera_p->view);
             dComIfGp_setCurrentViewport(view_port);
             GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
+#if defined(DUSK_PICA_GAME_DRAW)
+            publishNativeSceneCamera(camera_p->view.projMtx, view_port);
+#endif
 
             #if DEBUG
             captureScreenSetProjection(camera_p->view.projMtx);
@@ -2667,6 +2690,10 @@ int mDoGph_Painter() {
                 #endif
 
                 GXSetProjection(m, GX_PERSPECTIVE);
+#if defined(DUSK_PICA_GAME_DRAW)
+                const view_port_class nativeScreenViewport{0, 0, float(FB_WIDTH), float(FB_HEIGHT), 0, 1, {}};
+                publishNativeSceneCamera(m, &nativeScreenViewport);
+#endif
                 cXyz sp38c(0.0f, 0.0f, AREG_F(7) + -2.0f);
                 cXyz sp398(0.0f, 1.0f, 0.0f);
 
@@ -2676,6 +2703,9 @@ int mDoGph_Painter() {
 
                 j3dSys.setViewMtx(camera_p->view.viewMtx);
                 GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
+#if defined(DUSK_PICA_GAME_DRAW)
+                publishNativeSceneCamera(camera_p->view.projMtx, view_port);
+#endif
 
                 #if DEBUG
                 // "drawing up to full projection screen (Rendering)"
@@ -2706,6 +2736,9 @@ int mDoGph_Painter() {
                 GX_DEBUG_GROUP(mDoGph_gInf_c::getBloom()->draw);
                 j3dSys.setViewMtx(camera_p->view.viewMtx);
                 GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
+#if defined(DUSK_PICA_GAME_DRAW)
+                publishNativeSceneCamera(camera_p->view.projMtx, view_port);
+#endif
 
                 #if DEBUG
                 if (g_kankyoHIO.navy.field_0x30d != 0 && dKy_darkworld_check() == TRUE) {

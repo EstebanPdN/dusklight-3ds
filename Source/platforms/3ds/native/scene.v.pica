@@ -1,0 +1,132 @@
+; Native PICA vertex ABI from native/contracts.hpp; no source-platform state.
+; u0..23 position palette,24..47 normal palette,48..51 viewProjection,
+; u52 ambient RGB/lit, u53/55 light direction, u54/56 light RGB.
+.fvec u[57]
+.in nativePosition v0
+.in nativeNormal v1
+.in nativeUv0 v2
+.in nativeUv1 v3
+.in nativeUv2 v4
+.in nativeColor v5
+.in nativeBoneRows v6
+.in nativeWeights v7
+.constf k(0.0,1.0,0.00392156862745098,0.000000000001)
+.out outpos position
+.out outcolor color
+.out outtex0 texcoord0.st
+.out - texcoord0w outtex0.p
+.out outtex1 texcoord1.st
+.out outtex2 texcoord2.st
+.proc main
+    mov r15, k.xxxx
+    mov r0, k.xxxx
+    mov r1, k.xxxx
+    mov r14.xyz, v0
+    mov r14.w, k.y
+    cmp v7.x, gt, gt, r15.x
+    ifc cmp.x
+        mova a0.x, v6.x
+        dp4 r2.x, u[a0.x+0], r14
+        dp4 r2.y, u[a0.x+1], r14
+        dp4 r2.z, u[a0.x+2], r14
+        mul r3.x, k.z, v7.x
+        mul r2.xyz, r2, r3.x
+        add r0.xyz, r0, r2
+        cmp u[52].w, gt, gt, r15.x
+        ifc cmp.x
+            dp3 r2.x, u[a0.x+24], v1
+            dp3 r2.y, u[a0.x+25], v1
+            dp3 r2.z, u[a0.x+26], v1
+            mul r2.xyz, r2, r3.x
+            add r1.xyz, r1, r2
+        .end
+    .end
+    cmp v7.y, gt, gt, r15.x
+    ifc cmp.x
+        mova a0.x, v6.y
+        dp4 r2.x, u[a0.x+0], r14
+        dp4 r2.y, u[a0.x+1], r14
+        dp4 r2.z, u[a0.x+2], r14
+        mul r3.x, k.z, v7.y
+        mul r2.xyz, r2, r3.x
+        add r0.xyz, r0, r2
+        cmp u[52].w, gt, gt, r15.x
+        ifc cmp.x
+            dp3 r2.x, u[a0.x+24], v1
+            dp3 r2.y, u[a0.x+25], v1
+            dp3 r2.z, u[a0.x+26], v1
+            mul r2.xyz, r2, r3.x
+            add r1.xyz, r1, r2
+        .end
+    .end
+    cmp v7.z, gt, gt, r15.x
+    ifc cmp.x
+        mova a0.x, v6.z
+        dp4 r2.x, u[a0.x+0], r14
+        dp4 r2.y, u[a0.x+1], r14
+        dp4 r2.z, u[a0.x+2], r14
+        mul r3.x, k.z, v7.z
+        mul r2.xyz, r2, r3.x
+        add r0.xyz, r0, r2
+        cmp u[52].w, gt, gt, r15.x
+        ifc cmp.x
+            dp3 r2.x, u[a0.x+24], v1
+            dp3 r2.y, u[a0.x+25], v1
+            dp3 r2.z, u[a0.x+26], v1
+            mul r2.xyz, r2, r3.x
+            add r1.xyz, r1, r2
+        .end
+    .end
+    cmp v7.w, gt, gt, r15.x
+    ifc cmp.x
+        mova a0.x, v6.w
+        dp4 r2.x, u[a0.x+0], r14
+        dp4 r2.y, u[a0.x+1], r14
+        dp4 r2.z, u[a0.x+2], r14
+        mul r3.x, k.z, v7.w
+        mul r2.xyz, r2, r3.x
+        add r0.xyz, r0, r2
+        cmp u[52].w, gt, gt, r15.x
+        ifc cmp.x
+            dp3 r2.x, u[a0.x+24], v1
+            dp3 r2.y, u[a0.x+25], v1
+            dp3 r2.z, u[a0.x+26], v1
+            mul r2.xyz, r2, r3.x
+            add r1.xyz, r1, r2
+        .end
+    .end
+    mov r0.w, k.y
+    dp4 outpos.x, u[48], r0
+    dp4 outpos.y, u[49], r0
+    dp4 outpos.z, u[50], r0
+    dp4 outpos.w, u[51], r0
+    mul r10, k.z, v5
+    cmp u[52].w, gt, gt, r15.x
+    ifc cmp.x
+        mov r4, u[52]
+        dp3 r3.x, r1, r1
+        cmp k.w, lt, lt, r3.x
+        ifc cmp.x
+            rsq r3.x, r3.x
+            mul r1.xyz, r1, r3.x
+            dp3 r3.x, u[53], r1
+            max r3.x, k.x, r3.x
+            mul r2.xyz, u[54], r3.x
+            add r4.xyz, r4, r2
+            dp3 r3.x, u[55], r1
+            max r3.x, k.x, r3.x
+            mul r2.xyz, u[56], r3.x
+            add r4.xyz, r4, r2
+        .end
+        min r4.xyz, k.y, r4
+        mul r10.xyz, r10, r4
+    .end
+    mov outcolor, r10
+    mov outtex0.xy, v2
+    mov outtex0.z, k.y
+    mov outtex1, k.xxxx
+    mov outtex1.xy, v3
+    mov outtex2, k.xxxx
+    mov outtex2.xy, v4
+    end
+.end

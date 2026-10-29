@@ -13,9 +13,15 @@ flowchart TD
     Disc --> Engine["Original game and JSystem"]
     Input["libctru HID / IRRST"] --> Pad["Native PAD mapping"]
     Pad --> Engine
-    Engine --> GX["GX command decoding and retained state"]
-    GX --> Plan["Material / texture / geometry planning"]
-    Plan --> PICA["Citro3D / PICA200 submission"]
+    Disc --> Identity["Original model identity before mutation"]
+    Identity --> Banks["Matching prepared native banks"]
+    Engine --> Packets["Native model / shape dispatch"]
+    Banks --> Models["Native resident model + explicit game parameters"]
+    Packets --> Models
+    Models --> PICA["Citro3D / PICA200 submission"]
+    Engine --> Remaining["Unmigrated UI / effects compatibility"]
+    Remaining --> GX["Retained GX command / material / geometry path"]
+    GX --> PICA
     Engine --> DSP["Original JAudio software DSP"]
     DSP --> NDSP["NDSP PCM output / OpenDSP component"]
     Engine --> Card["Native SD card container"]
@@ -37,6 +43,17 @@ configurations, not evidence of equivalent functionality.
   `TARGET_PC` is also used by the selected reconstructed source ABI.
 
 ## Rendering
+
+The default game model route is now the independent `native/` library, selected
+by `DUSK_PICA_GAME_DRAW`. Prepared native resources and explicit game parameters
+reach Citro3D without runtime GX decoding inside that module. The surrounding
+engine migration is unfinished: see [Native renderer](NATIVE_RENDERER.md), its
+[API/format contracts](NATIVE_RENDERER.md#format-and-api-references), and
+[ADR 0001](decisions/0001-native-renderer.md). Missing native assets/inputs reject;
+this route has no automatic old-model-renderer fallback. The diagram shows both
+current paths and does not imply complete native asset or producer coverage.
+
+The following compatibility sources remain for unmigrated callers:
 
 `gx_api.cpp` and `gx_command_api.cpp` expose compatibility entry points.
 `runtime/gx_commands*`, `gx_stream*`, `gx_*_commands*` and Aurora's selected

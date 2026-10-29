@@ -4,6 +4,9 @@
 #include "JSystem/J3DGraphAnimator/J3DSkinDeform.h"
 #include "JSystem/J3DGraphBase/J3DPacket.h"
 #include <types.h>
+#if defined(DUSK_PICA_GAME_DRAW)
+#include "../../../../../platforms/3ds/native/game_draw_api.hpp"
+#endif
 
 enum J3DMdlFlag {
     J3DMdlFlag_None                           = 0x0,
@@ -53,6 +56,10 @@ public:
 
     void initialize();
     s32 entryModelData(J3DModelData*, u32, u32);
+#if defined(DUSK_PICA_GAME_DRAW)
+    bool drawNativeShape(unsigned shape);
+    bool copyNativePalette(const dusk::pica::UniformBinding&, dusk::pica::Palette&);
+#endif
     s32 createShapePacket(J3DModelData*);
     s32 createMatPacket(J3DModelData*, u32);
     s32 newDifferedDisplayList(u32);
@@ -76,7 +83,11 @@ public:
     virtual void calcMaterial();
     virtual void calcDiffTexMtx();
     virtual void viewCalc();
-    virtual ~J3DModel() {}
+    virtual ~J3DModel() {
+#if defined(DUSK_PICA_GAME_DRAW)
+        dusk::pica::game::forget(this);
+#endif
+    }
 
 #if TARGET_PC
     void calc_presentation_base_mtx();
