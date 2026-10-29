@@ -26,6 +26,11 @@ SDK and Aurora code are preserved in their established locations. The existing
 desktop build and resources remain upstream material; the native build has its
 own CMake entry point.
 
+The PAL identity/save checks and dual-raster mathematical lookup helpers use the
+existing platform adapters, C++ standard library and installed Citro3D/libctru.
+They add no external port implementation or dependency. Their generated lookup
+images and public regression inputs are mathematical fixtures, not game assets.
+
 ## Reference-only projects
 
 [Melee 3DS](https://github.com/2gifts/melee-3ds/tree/81cd9f05de43435c9cc71972c16862234c616749)

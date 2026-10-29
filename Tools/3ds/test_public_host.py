@@ -77,9 +77,16 @@ def main():
             run(name, [binary, *arguments], 120)
             receipt['cases'].append(name)
             print('PASS: ' + name, flush=True)
+        run('disc-pack', [sys.executable, ROOT / 'Tools/3ds/test_twilight_pack.py'], 90)
+        receipt['cases'].append('disc-pack')
+        print('PASS: disc-pack', flush=True)
         run('dump-verifier', [sys.executable, ROOT / 'Tools/3ds/test_application_dump_verifier.py'], 180)
         receipt['cases'].append('dump-verifier')
         print('PASS: dump-verifier', flush=True)
+        run('memcard-permission', [sys.executable, ROOT / 'Tools/3ds/test_memcard_permission.py',
+                                  '--compiler', compiler, '--output', work / 'memcard-permission'], 180)
+        receipt['cases'].append('memcard-permission')
+        print('PASS: memcard-permission', flush=True)
         receipt['status'] = 'pass'
     except (OSError, subprocess.SubprocessError) as error:
         receipt.update(status='fail', error=str(error))

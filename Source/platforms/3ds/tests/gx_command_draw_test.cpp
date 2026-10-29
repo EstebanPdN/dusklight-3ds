@@ -17,6 +17,7 @@
 #include <cassert>
 #include <bit>
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -56,13 +57,17 @@ std::vector<u16> expandedIndices;
 std::array<TextureHandle,3> protectedTextures{};
 }
 namespace dusk::native {
+std::uint64_t gxProfileTick(){return std::chrono::steady_clock::now().time_since_epoch().count();}
+std::uint32_t residentIndexEpoch(){assert(false&&"resident replay is outside this adapter fixture");return 0;}
+std::uint16_t* allocateResidentIndices(const std::uint16_t*,unsigned){assert(false&&"resident replay is outside this adapter fixture");return nullptr;}
+bool submitNativeRigid(const RasterPlan&,const PicaMaterialPlan&,const RigidVertexPlan&,const void*,const std::uint16_t*,unsigned){assert(false&&"resident replay is outside this adapter fixture");return false;}
 GxTextureDrawScope::GxTextureDrawScope(std::span<const gx::Texture> textures):active(!scopeFailure){
     assert((textures.size()<=3&&protectedTextures==std::array<TextureHandle,3>{}));
     for(unsigned n=0;n<textures.size();++n)protectedTextures[n]=textures[n].handle;
 }
 GxTextureDrawScope::~GxTextureDrawScope(){protectedTextures={};}
 bool reserveGxGeometry(std::size_t v,std::size_t i,GpuGeometryBatch& b){return !reservationFailure&&arena.reserve(v,i,b);}
-bool shrinkGxGeometry(GpuGeometryBatch& b,std::size_t v,std::size_t i){return arena.shrinkPending(b,v,i);}
+bool shrinkGxGeometry(GpuGeometryBatch& b,std::size_t v,std::size_t i,bool external){return arena.shrinkPending(b,v,i,external);}
 bool cancelGxGeometry(const GpuGeometryBatch& b){return arena.cancel(b)&&!cancellationFailure;}
 const char* gxGeometryFailure(){return "test arena failure";}
 const char* gxPicaFailure(){return "test GPU failure";}
@@ -1157,7 +1162,12 @@ int main(){
     GXSetChanAmbColor(GX_COLOR0A0,{30,60,90,128});
     GXLightObj light;GXInitLightPos(&light,0,0,100);GXInitLightDir(&light,0,0,1);
     GXInitLightColor(&light,{100,180,220,255});GXInitLightAttn(&light,1,.2f,.1f,1,.001f,.00001f);GXLoadLightObjImm(&light,GX_LIGHT0);
-    GXLoadPosMtxImm(identity,GX_PNMTX0);GXLoadNrmMtxImm(identity,GX_PNMTX0);GXSetCurrentMtx(GX_PNMTX0);
+    // The preceding cases deliberately use a 2D orthographic UI. Select a
+    // genuine, fully visible 3D draw before comparing the rigid GPU path.
+    const float rigidProjection[16]{.5f,0,0,0,0,.7f,0,0,0,0,-1.01f,-10,0,0,-1,0};
+    const float rigidPosition[12]{1,0,0,0,0,1,0,0,0,0,1,-100};
+    GXSetProjection(rigidProjection,GX_PERSPECTIVE);
+    GXLoadPosMtxImm(rigidPosition,GX_PNMTX0);GXLoadNrmMtxImm(identity,GX_PNMTX0);GXSetCurrentMtx(GX_PNMTX0);
     const u32 enabledClip=0;assert(stream.writeXf(0x1005,{&enabledClip,1}));
     GXClearVtxDesc();GXSetVtxDesc(GX_VA_POS,GX_DIRECT);GXSetVtxDesc(GX_VA_NRM,GX_DIRECT);GXSetVtxDesc(GX_VA_CLR0,GX_DIRECT);GXSetVtxDesc(GX_VA_TEX0,GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_NRM,GX_NRM_XYZ,GX_F32,0);

@@ -2,7 +2,26 @@
 
 This file records public source milestones. It does not announce a binary release.
 
-## Unreleased — native renderer checkpoint (2026-10-29)
+## Unreleased — PAL input and GX compatibility fixes
+
+- Accept European/PAL revision-0 (`GZ2P01`) data alongside USA revision-0
+  (`GZ2E01`) in the packer and disc reader without relabeling original data.
+- Preserve game/maker IDs in new save metadata and reject foreign ownership
+  without reading, overwriting or converting the existing save container.
+- Route native card permission errors through the existing non-formatting menu
+  error state instead of leaving file selection busy.
+- Translate supported dual-raster GX materials using independently interpolated
+  RGBA colors, keeping their multiplication in the fragment combiner.
+- Preserve both lookup bindings when an untextured dual-raster draw appends a
+  third fog sampler, including its separate texture-coordinate output.
+- Retain ordinary two-texture rendering when raster-1 alpha is unobserved;
+  alpha tests, blending and alpha writes keep their real dependencies.
+- Add regional data/save regressions, full-color adapter checks and an asset-free
+  GPU probe; repair the archive test harness's Linux worker linkage.
+- Keep the unfinished native-model renderer default and performance work separate.
+  These fixes target `DUSK_PICA_GAME_DRAW=OFF`; no hardware 30-FPS claim is made.
+
+## Native renderer checkpoint — 2026-10-29
 
 - Add the standalone direct Citro3D/PICA200 engine, six vertex shader variants,
   resource lifetime/budget contracts and native model/scene submission.

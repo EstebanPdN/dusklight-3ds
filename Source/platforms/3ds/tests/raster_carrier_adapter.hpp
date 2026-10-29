@@ -2,6 +2,9 @@
 #include "raster_carrier_fixture.hpp"
 #include "../runtime/gx_compact_cache.hpp"
 #include "../runtime/gx_profile.hpp"
+#include "../native/color_lookup.hpp"
+#include "../runtime/gx_material_liveness.hpp"
+#include "material_equivalence.hpp"
 // Included after the existing adapter test's bounded backend definitions.
 static void carrierAdapterCases(const CommandDraw& original){
  using namespace carrier_test;
@@ -188,9 +191,11 @@ static void carrierAdapterCases(const CommandDraw& original){
  }
  currentTargetExtent=target;regs=validRegs;make(3);
  std::puts("PASS carrier fog adapter: complete 3447/indexed-unreferenced last negatives; pinned fog words + synthetic range table; real ramp bytes/filter; range/viewport/target; original alpha/depth; 2+1 sampler and stage capacity; missing state, exhausted registry, helper bind/scope/reserve/cancel/submit failures");
- // Default-off preserves the existing fatal rejection; diagnostic policy does
- // not grant a degraded raster0 substitution.
- context={};context.allowDegradedDraws=true;context.allowVisualFallback=[](const CommandDraw&,DrawVisualFallback){return true;};reject(context,"TEV source/order unsupported");
+ // Full-color translation must submit the formerly rejected final non-gray
+ // vertex without selecting a skipped/simplified visual stand-in.
+ make(3447);bytes[(count()-1)*plan.packedStride()+25]^=1;context={};
+ assert(draw(context)&&context.rasterCarrierDraws==1&&!context.rejected&&!context.skippedDraws&&!context.simplifiedDraws);
+ reset();make(3);
  // Clip-side/camera/depth crossings retain the CPU geometry and interpolants.
  // This is host ownership/state verification, not hardware coverage proof.
  for(float z:{-1.f,-.1f,1.f}){make(3);const auto bits=std::bit_cast<u32>(z);for(unsigned i=0;i<3;++i)for(unsigned c=0;c<4;++c)bytes[i*plan.packedStride()+8+c]=u8(bits>>(24-8*c));
@@ -201,6 +206,187 @@ static void carrierAdapterCases(const CommandDraw& original){
  scopeFailure=true;context=fresh();reject(context,"test texture failure");scopeFailure=false;
  reservationFailure=true;context=fresh();reject(context,"test arena failure");reservationFailure=false;
  gpuFailure=true;context=fresh();reject(context,"test GPU failure");gpuFailure=false;
+ // Automatic full-RGBA2 + fog: no original samplers, two lookup resources,
+ // then the fog ramp in unit 2. Keep the real packed stream layout.
+ {
+  auto rgba=m;rgba.stageCount=2;rgba.texgenCount=0;
+  rgba.stages[0].alpha={7,7,7,5};rgba.stages[1].alpha={7,0,5,7};
+  regs=fogRegs;installMaterial(rgba,regs);xf(0x1010,1|1024);xf(0x1011,1|1024);
+  MaterialState decoded;assert(decodeMaterial(regs,decoded));
+  for(unsigned i=0;i<decoded.stageCount;++i)assert(!decoded.stages[i].textureEnabled);
+  PicaMaterialPlan lookup;assert(planRasterLookupMaterial(decoded,lookup));
+  assert(!lookup.sourceTextures()&&lookup.textureCount==2&&lookup.rasterReadMask[0]==3&&lookup.rasterReadMask[1]==3);
+  RasterColorPlan primaryPlan,secondaryPlan;VertexTransformPlan transform;VertexFogPlan fog;
+  assert(planRasterColorChannel(regs,0,3,primaryPlan)&&planRasterColorChannel(regs,1,3,secondaryPlan));
+  assert(regs.xf[0x1026]==0&&planVertexTransform(regs,0,transform));
+  assert(planVertexFog(regs,fog)&&fog.enabled&&fog.rangeEnabled&&!fog.orthographic);
+  const std::array<std::array<u8,4>,3> primary{{{19,83,147,211},{231,37,109,61},{73,199,43,157}}};
+  const std::array<std::array<u8,4>,3> secondary{{{173,29,97,53},{47,181,239,127},{223,113,11,193}}};
+  auto automaticVertices=[&](bool clr1=true){
+   make(3,clr1);
+   for(unsigned i=0;i<3;++i){
+    const auto at=i*plan.packedStride();const auto z=std::bit_cast<u32>(-float(1u<<i));
+    for(unsigned c=0;c<4;++c){bytes[at+8+c]=u8(z>>(24-8*c));bytes[at+24+c]=primary[i][c];if(clr1)bytes[at+28+c]=secondary[i][c];}
+   }
+  };
+  auto automaticContext=[](){CommandDrawContext c;c.diagnosticRasterCarrier=false;c.allowVertexFog=true;return c;};
+  automaticVertices();context=automaticContext();carrierTextures={};
+  const auto automaticBefore=submissions;
+  assert(draw(context)&&context.submitted==1&&submissions==automaticBefore+1&&context.rasterCarrierDraws==1&&context.rasterCarrierAttempts==1&&context.vertexFogDraws==1);
+  assert(!context.rejected&&!context.triangleFogDraws&&!context.skippedDraws&&!context.simplifiedDraws);
+  assert(carrierMaterial.rasterCarrier==RasterCarrier::raster0RgbaRaster1Lookup&&carrierMaterial.textureCount==3);
+  const std::array lookupBytes{dusk::pica::colorLookupBti(0),dusk::pica::colorLookupBti(1)};
+  for(unsigned unit=0;unit<3;++unit){
+   const auto& texture=carrierTextures[unit];
+   assert(texture.handle&&texture.immutablePixels&&texture.height==8&&texture.minFilter==1&&texture.magFilter==1&&!texture.wrapS&&!texture.wrapT);
+   for(unsigned other=0;other<unit;++other)assert(texture.handle!=carrierTextures[other].handle&&texture.image.data()!=carrierTextures[other].image.data());
+   if(unit<2)assert(texture.width==8&&texture.format==6&&texture.bti.size()==lookupBytes[unit].size()&&!std::memcmp(texture.bti.data(),lookupBytes[unit].data(),lookupBytes[unit].size()));
+  }
+  const auto& fogTexture=carrierTextures[2];assert(fogTexture.width==256&&fogTexture.format==1);
+  for(unsigned y=0;y<8;++y)for(unsigned x=0;x<256;++x)assert(fogTexture.image[((y/4)*32+x/8)*32+(y%4)*8+x%8]==x);
+  const auto& fogStage=carrierMaterial.stages[carrierMaterial.stageCount-1];
+  assert(fogStage.rgb.function==MaterialFunction::interpolate&&fogStage.rgb.inputs[2].source==MaterialSource::texture2&&fogStage.rgb.inputs[2].operand==MaterialOperand::alpha&&fogStage.constant==fog.color);
+  assert(fogStage.alpha.function==MaterialFunction::replace&&fogStage.alpha.inputs[0].source==MaterialSource::previous&&fogStage.alpha.inputs[0].operand==MaterialOperand::alpha);
+  assert(carrierVertices.size()==3&&carrierIndices.size()==3);
+  for(unsigned i=0;i<3;++i){
+   DecodedVertex decodedVertex;TransformedVertex transformed;std::array<float,4> p,s;
+   assert(decodeVertex(plan,std::span<const u8>(bytes).subspan(i*plan.packedStride(),plan.packedStride()),arrays,decodedVertex));
+   assert(transformVertex(transform,decodedVertex,transformed)&&transformed.clip[3]==float(1u<<i));
+   assert(evaluateRasterColor(primaryPlan,decodedVertex,p,nullptr,&transformed)&&evaluateRasterColor(secondaryPlan,decodedVertex,s,nullptr,&transformed));
+   const auto& vertex=carrierVertices[i];assert(carrierIndices[i]==i&&vertex.position==transformed.clip&&vertex.color==p);
+   for(unsigned c=0;c<4;++c)assert(p[c]==float(primary[i][c])/255&&s[c]==float(secondary[i][c])/255);
+   for(unsigned unit=0;unit<2;++unit){
+    assert(vertex.texcoord[unit][0]==(.5f+s[2*unit])/8.f);
+    assert(vertex.texcoord[unit][1]==1.f-(.5f+s[2*unit+1])/8.f);
+   }
+   const float factor=evaluateVertexFog(fog,transformed.clip,currentTargetExtent.logicalWidth);
+   assert(std::isfinite(factor)&&factor>0&&factor<1);
+   assert(vertex.texcoord[2][0]==(factor*255+.5f)/256&&vertex.texcoord[2][1]==.5f);
+  }
+  reset();
+  for(unsigned unit=0;unit<3;++unit){carrierFailBind=unit;context=automaticContext();reject(context,"test texture failure");assert(context.failureKind==DrawFailureKind::resource);}
+  carrierFailBind=UINT32_MAX;
+  scopeFailure=true;context=automaticContext();reject(context,"test texture failure");assert(context.failureKind==DrawFailureKind::resource);scopeFailure=false;
+  automaticVertices(false);context=automaticContext();reject(context,"GX raster vertex color missing");
+  automaticVertices();context=automaticContext();assert(draw(context)&&context.rasterCarrierDraws==1&&context.vertexFogDraws==1&&!context.rejected&&!context.skippedDraws&&!context.simplifiedDraws);reset();
+  std::puts("PASS automatic full RGBA2 fog adapter: independent primary/secondary RGBA, lookup units 0/1 + fog unit/UV2, real helper bytes, perspective transform, bind/scope/missing CLR1 rejection");
+ }
+ // Only TEV alpha reads Ras1. The same two-texture RGB draw must use ordinary
+ // planning before considering lookup, without losing either original UV.
+ {
+  const auto savedRegs=regs;PicaMaterialPlan ordinaryRgb;RasterPlan ordinaryRgbRaster;
+  std::vector<GpuVertex> ordinaryRgbVertices;std::vector<u16> ordinaryRgbIndices;
+  std::array<Texture,3> ordinaryRgbTextures;CommandRegisters alphaRegs;
+  MaterialState alphaMaterial;
+  for(bool rasterAlpha:{false,true}){
+   alignas(32) u8 commands[512];GDLObj gd;const auto previousGd=__GDCurrentDL;
+   GDInitGDLObj(&gd,commands,sizeof(commands));GDSetCurrent(&gd);
+   GDSetGenMode2(2,2,2,0,GX_CULL_NONE);
+   GDSetTevSwapModeTable(GX_TEV_SWAP0,GX_CH_RED,GX_CH_GREEN,GX_CH_BLUE,GX_CH_ALPHA);
+   GDSetTevOrder(GX_TEVSTAGE0,GX_TEXCOORD0,GX_TEXMAP0,GX_COLOR1A1,GX_TEXCOORD1,GX_TEXMAP1,GX_COLOR_NULL);
+   GDSetTevColorCalc(GX_TEVSTAGE0,GX_CC_ZERO,GX_CC_ZERO,GX_CC_ZERO,GX_CC_TEXC,GX_TEV_ADD,GX_TB_ZERO,GX_CS_SCALE_1,GX_TRUE,GX_TEVPREV);
+   GDSetTevColorCalc(GX_TEVSTAGE1,GX_CC_ZERO,GX_CC_TEXC,GX_CC_CPREV,GX_CC_ZERO,GX_TEV_ADD,GX_TB_ZERO,GX_CS_SCALE_1,GX_TRUE,GX_TEVPREV);
+   for(unsigned i=0;i<2;++i){const auto stage=GXTevStageID(i);
+    GDSetTevAlphaCalcAndSwap(stage,GX_CA_ZERO,GX_CA_ZERO,GX_CA_ZERO,i?GX_CA_APREV:(rasterAlpha?GX_CA_RASA:GX_CA_ZERO),GX_TEV_ADD,GX_TB_ZERO,GX_CS_SCALE_1,GX_TRUE,GX_TEVPREV,GX_TEV_SWAP0,GX_TEV_SWAP0);
+    GDSetTevDirect(stage);
+   }
+   const auto size=GDGetCurrOffset();GDSetCurrent(previousGd);
+   CommandMemory memory;CommandProcessor capture(memory);assert(capture.execute({commands,size}));
+   regs=original.registers;
+   for(unsigned at=0;at<256;++at)if(capture.registers().bpValid[at]){regs.bp[at]=capture.registers().bp[at];regs.bpValid.set(at);}
+   regs.bp[0x41]=(regs.bp[0x41]&~(1u|2u|16u|2048u))|8u; // No blend or alpha writes.
+   regs.bp[0x43]&=~71u;regs.bp[0xf1]=0;regs.bp[0xf3]=(7u<<16)|(7u<<19);
+   MaterialState decoded;RasterPlan raster;
+   assert(decodeMaterial(regs,decoded)&&planRaster(regs,raster));
+   assert(decoded.stageCount==2&&decoded.texgenCount==2&&decoded.channelCount==2);
+   assert(!raster.blend.mode&&!raster.writeAlpha&&raster.alpha.comparison==7);
+   if(rasterAlpha){
+    alphaRegs=regs;alphaMaterial=decoded;PicaMaterialPlan refused;MaterialPlanError error;
+    assert(!planPicaMaterial(decoded,refused,&error)&&error==MaterialPlanError::source);
+    // Explicit negative control: committing lookup first rejects this formerly
+    // supported RGB draw before the adapter can discard its unobserved alpha.
+    assert(!planRasterLookupMaterial(decoded,refused,&error)&&error==MaterialPlanError::textureUnits);
+   }
+   CommandDraw candidate{original.primitive,original.vertexCount,original.indexCount,original.vertices,original.indices,original.plan,original.arrays,regs};
+   context={};carrierTextures={};const auto sent=submissions,bound=binds;
+   assert(drawGxCommand(candidate,&context)&&submissions==sent+1&&binds==bound+2&&context.submitted==1);
+   assert(!context.rejected&&!context.culled&&!context.skippedDraws&&!context.simplifiedDraws&&!context.rasterCarrierAttempts&&!context.rasterCarrierDraws&&!context.rasterCarrierRejects&&!context.rasterCarrierFirstFailure);
+   assert(carrierMaterial.rasterCarrier==RasterCarrier::none&&carrierMaterial.sourceTextures()==2&&carrierMaterial.textureCount==2&&!carrierTextures[2].handle);
+   assert(carrierRaster.writeRgb&&!carrierRaster.writeAlpha&&!carrierRaster.blend.mode&&carrierRaster.alpha.comparison==7);
+   for(unsigned unit=0;unit<2;++unit){
+    assert((carrierMaterial.textures[unit]==MaterialTextureBinding{u8(unit),u8(unit)}));Texture expected;const char* why;
+    assert(resolveCommandTexture(regs,unit,expected,why)&&carrierTextures[unit].handle==expected.handle&&carrierTextures[unit].image.data()==expected.image.data());
+   }
+   assert(carrierVertices.size()==4&&(carrierIndices==std::vector<u16>{0,1,2,2,3,0}));
+   for(const auto& v:carrierVertices)for(unsigned unit=0;unit<2;++unit){
+    assert(std::abs(v.texcoord[unit][0]-(.1f+.2f*unit))<1e-6f);
+    assert(std::abs(v.texcoord[unit][1]-(1-(.2f+.2f*unit)*.5f))<1e-6f);
+   }
+   if(!rasterAlpha){ordinaryRgb=carrierMaterial;ordinaryRgbRaster=carrierRaster;ordinaryRgbVertices=carrierVertices;ordinaryRgbIndices=carrierIndices;ordinaryRgbTextures=carrierTextures;}
+   else{
+    assert(carrierMaterial.textures==ordinaryRgb.textures&&carrierIndices==ordinaryRgbIndices&&carrierVertices.size()==ordinaryRgbVertices.size());
+    assert(!std::memcmp(carrierVertices.data(),ordinaryRgbVertices.data(),carrierVertices.size()*sizeof(GpuVertex)));
+    for(unsigned unit=0;unit<2;++unit)assert(carrierTextures[unit].handle==ordinaryRgbTextures[unit].handle);
+    // Independent normalized-real TEV/PICA evaluation plus the actual raster
+    // write mask: RGB=T0*T1 and framebuffer alpha remains the destination's.
+    using PixelRGBA=material_test::Color;
+    for(unsigned sample=0;sample<256;++sample){
+     material_test::Samples inputs{};PixelRGBA expected{},actual{},control{};
+     inputs.secondary[3]=double(sample)/255;
+     for(unsigned c=0;c<4;++c){
+      inputs.texture[0][0][c]=double((sample+37*c)&255)/255;
+      inputs.texture[1][1][c]=double((251-3*sample+19*c)&255)/255;
+      expected[c]=actual[c]=control[c]=double((71+11*sample+23*c)&255)/255;
+     }
+     const auto gx=material_test::gxEvaluate(decoded,inputs),pica=material_test::picaEvaluate(carrierMaterial,inputs),plain=material_test::picaEvaluate(ordinaryRgb,inputs);
+     assert(gx[3]==inputs.secondary[3]);
+     for(unsigned c=0;c<4;++c){
+      if(c<3){expected[c]=inputs.texture[0][0][c]*inputs.texture[1][1][c];assert(std::abs(gx[c]-expected[c])<1e-12);}
+      if(c<3?carrierRaster.writeRgb:carrierRaster.writeAlpha)actual[c]=pica[c];
+      if(c<3?ordinaryRgbRaster.writeRgb:ordinaryRgbRaster.writeAlpha)control[c]=plain[c];
+      assert(std::abs(actual[c]-expected[c])<1e-12&&std::abs(control[c]-expected[c])<1e-12);
+     }
+    }
+   }
+   reset();
+  }
+  // Each real observer independently forbids alpha removal. Even requesting
+  // visual fallbacks must not turn the two-original-texture lookup limit into
+  // a dropped alpha dependency or a simplified/skipped successful draw.
+  for(unsigned observer=0;observer<3;++observer){
+   regs=alphaRegs;context={};context.allowRgba6Storage=true;context.allowDegradedDraws=true;
+   context.allowVisualFallback=[](const CommandDraw&,DrawVisualFallback){return true;};
+   if(observer==0)regs.bp[0xf3]=128|(4u<<16)|(7u<<19);
+   if(observer==1)regs.bp[0x41]|=1;
+   if(observer==2){regs.bp[0x43]|=1;regs.bp[0x41]|=16;}
+   RasterPlan raster;assert(planRaster(regs,raster,nullptr,FogPolicy::requireSupported,ColorStoragePolicy::rgba8ForRgba6));
+   auto live=alphaMaterial;assert(!discardUnobservedTevAlpha(live,raster)&&live.stages[0].alpha==alphaMaterial.stages[0].alpha);
+   CommandDraw candidate{original.primitive,original.vertexCount,original.indexCount,original.vertices,original.indices,original.plan,original.arrays,regs};
+   const auto sent=submissions,bound=binds;const auto used=arena.used();
+   assert(!drawGxCommand(candidate,&context)&&submissions==sent&&binds==bound&&arena.used()==used);
+   assert(context.rejected==1&&context.failureKind==DrawFailureKind::state&&!std::strcmp(context.failure,"PICA texture unit budget"));
+   assert(context.rejectedByKind[unsigned(DrawFailureKind::state)]==1&&context.rasterCarrierAttempts==1&&context.rasterCarrierRejects==1&&context.rasterCarrierFirstFailure==context.failure&&context.rasterCarrierFirstVertex==UINT32_MAX);
+   assert(!context.submitted&&!context.skippedDraws&&!context.simplifiedDraws&&!context.rasterCarrierDraws);
+   const auto first=context.failure;assert(!drawGxCommand(candidate,&context)&&context.failure==first&&context.rasterCarrierFirstFailure==first&&context.rejected==2&&context.rasterCarrierRejects==2&&submissions==sent&&binds==bound&&arena.used()==used);
+  }
+  // If RGB still needs Ras1, lookup receives the liveness-reduced material:
+  // its second original texture was alpha-only and must not consume a slot.
+  auto liveLookup=alphaMaterial;liveLookup.stages[1].color={15,0,10,15};
+  liveLookup.stages[1].raster=1;liveLookup.stages[1].alpha={7,7,7,4};
+  regs=validRegs;installMaterial(liveLookup,regs);regs.bp[0x41]&=~17u;
+  PicaMaterialPlan refused;MaterialPlanError error;
+  assert(!planRasterLookupMaterial(liveLookup,refused,&error)&&error==MaterialPlanError::textureUnits);
+  make(3);context={};const auto sent=submissions;assert(draw(context)&&submissions==sent+1);
+  assert(context.submitted==1&&context.rasterCarrierAttempts==1&&context.rasterCarrierDraws==1&&!context.rejected&&!context.skippedDraws&&!context.simplifiedDraws);
+  assert(carrierMaterial.rasterCarrier==RasterCarrier::raster0RgbaRaster1Lookup&&carrierMaterial.sourceTextures()==1&&carrierMaterial.textureCount==3);
+  assert((carrierMaterial.textures[0]==MaterialTextureBinding{0,0}));
+  material_test::Samples inputs{};inputs.texture[0][0]={.2,.4,.6,.8};inputs.texture[1][1]={.9,.7,.5,.3};inputs.secondary={.8,.6,.4,.2};
+  const auto gx=material_test::gxEvaluate(liveLookup,inputs),pica=material_test::picaEvaluate(carrierMaterial,inputs);
+  for(unsigned c=0;c<3;++c)assert(std::abs(gx[c]-pica[c])<1e-12&&std::abs(pica[c]-inputs.texture[0][0][c]*inputs.secondary[c])<1e-12);
+  reset();
+  regs=savedRegs;
+  std::puts("PASS automatic Ras1 alpha liveness: GD two-texture RGB/resources/UV0/UV1 and destination RGBA parity without lookup; alpha-test/blend/alpha-write observers retain unsupported alpha and first state failure");
+ }
  // Following a carrier draw, the ordinary GX draw has the same semantic plan
  // and exact host vertex bytes with the diagnostic switch on or off.
  carrierMode=false;rigidTestMode=true;

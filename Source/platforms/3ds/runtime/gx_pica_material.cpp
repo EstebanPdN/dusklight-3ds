@@ -91,7 +91,11 @@ struct Builder {
             if(slot==plan.textureCount){if(slot==3)return fail(MaterialPlanError::textureUnits);plan.textures[slot]=binding;++plan.textureCount;}
             source=static_cast<MaterialSource>(unsigned(MaterialSource::texture0)+slot);
         }else{
-            if(carrier==RasterCarrier::raster1RgbRaster0GrayAlpha){
+            if(carrier==RasterCarrier::raster0RgbaRaster1Lookup){
+                if(stage.raster>1||state.channelCount!=2)return fail(MaterialPlanError::source);
+                plan.rasterReadMask[stage.raster]|=operand==MaterialOperand::alpha?2:1;
+                source=stage.raster?MaterialSource::texture2:MaterialSource::primary;
+            }else if(carrier==RasterCarrier::raster1RgbRaster0GrayAlpha){
                 if(stage.raster>1||state.channelCount!=2||componentAlpha||operand!=MaterialOperand::color)
                     return fail(MaterialPlanError::source);
                 operand=stage.raster==0?MaterialOperand::alpha:MaterialOperand::color;
@@ -497,10 +501,40 @@ bool planRasterCarrierMaterial(const MaterialState& state,PicaMaterialPlan& out,
     if(!rgb||!scalar){out={};return reject(MaterialPlanError::source);}
     return true;
 }
+bool planRasterLookupMaterial(const MaterialState& state,PicaMaterialPlan& out,MaterialPlanError* error,MaterialPolicy policy){
+    out={};if(error)*error=MaterialPlanError::none;
+    auto reject=[&](MaterialPlanError e){if(error)*error=e;return false;};
+    if(state.channelCount!=2)return reject(MaterialPlanError::source);
+    PicaMaterialPlan candidate;
+    if(!buildPicaMaterial(state,candidate,error,policy,0,RasterCarrier::raster0RgbaRaster1Lookup))return false;
+    if(!candidate.rasterReadMask[1])return reject(MaterialPlanError::source);
+    if(candidate.textureCount>1)return reject(MaterialPlanError::textureUnits);
+    if(candidate.stageCount>4)return reject(MaterialPlanError::stages);
+    if(candidate.bufferUpdateRgb||candidate.bufferUpdateAlpha)return reject(MaterialPlanError::equation);
+    for(unsigned n=0;n<candidate.stageCount;++n)for(auto* channel:{&candidate.stages[n].rgb,&candidate.stages[n].alpha}){
+        for(auto& input:channel->inputs){
+            if(input.source==MaterialSource::buffer)return reject(MaterialPlanError::constantConflict);
+            if(input.source==MaterialSource::texture2)input.source=MaterialSource::buffer;
+        }
+    }
+    const unsigned base=candidate.textureCount;
+    for(unsigned n=candidate.stageCount;n>0;--n)candidate.stages[n+1]=candidate.stages[n-1];
+    candidate.stages[0]={};candidate.stages[1]={};
+    const auto rg=MaterialSource(unsigned(MaterialSource::texture0)+base),ba=MaterialSource(unsigned(rg)+1);
+    candidate.stages[0].rgb={MaterialFunction::add,{{{rg,MaterialOperand::color,false},{ba,MaterialOperand::color,false},{}}}};
+    candidate.stages[0].alpha.inputs[0]={ba,MaterialOperand::alpha,false};
+    candidate.stages[1].rgb.inputs[0]={MaterialSource::previous,MaterialOperand::color,false};
+    candidate.stages[1].alpha.inputs[0]={MaterialSource::previous,MaterialOperand::alpha,false};
+    candidate.bufferUpdateRgb=candidate.bufferUpdateAlpha=1;
+    candidate.stageCount+=2;
+    candidate.textures[base]=candidate.textures[base+1]={255,255};
+    candidate.textureCount+=2;
+    out=candidate;return true;
+}
 bool routeProjectiveTexture(PicaMaterialPlan& plan,std::uint8_t projectiveCoordinates) {
     if(plan.textureCount>3 || !plan.stageCount || plan.stageCount>6)return false;
     unsigned projected=3;
-    for(unsigned unit=0;unit<plan.textureCount;++unit) {
+    for(unsigned unit=0;unit<plan.sourceTextures();++unit) {
         if(plan.textures[unit].coordinate>=8)return false;
         if(projectiveCoordinates&(1u<<plan.textures[unit].coordinate)) {
             if(projected!=3)return false;

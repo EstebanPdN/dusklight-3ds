@@ -536,6 +536,9 @@ s32 mDoMemCd_Ctrl_c::mount() {
     s32 result = CARDMount(mChannel, MemCardWorkArea0, NULL);
 
     switch (result) {
+#if defined(DUSK_TARGET_3DS)
+    case CARD_RESULT_NOPERM:
+#endif
     case CARD_RESULT_IOERROR:
     case CARD_RESULT_FATAL_ERROR:
         mCardState = CARD_STATE_FATAL_ERROR_e;
@@ -552,6 +555,9 @@ s32 mDoMemCd_Ctrl_c::mount() {
             mCardState = CARD_STATE_BROKEN_e;
             return FALSE;
         case CARD_RESULT_IOERROR:
+#if defined(DUSK_TARGET_3DS)
+        case CARD_RESULT_NOPERM:
+#endif
             mCardState = CARD_STATE_FATAL_ERROR_e;
             return FALSE;
         case CARD_RESULT_NOCARD:
@@ -611,6 +617,9 @@ s32 mDoMemCd_Ctrl_c::checkspace() {
 
 void mDoMemCd_Ctrl_c::setCardState(s32 i_result) {
     switch (i_result) {
+#if defined(DUSK_TARGET_3DS)
+    case CARD_RESULT_NOPERM:
+#endif
     case CARD_RESULT_IOERROR:
     case CARD_RESULT_FATAL_ERROR:
         mCardState = CARD_STATE_FATAL_ERROR_e;

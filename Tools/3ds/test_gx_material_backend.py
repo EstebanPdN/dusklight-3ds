@@ -19,18 +19,19 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     native = ROOT/'Source/platforms/3ds'
     aurora = ROOT/'Source/extern/aurora'
-    sources = [native/'tests/gx_material_backend_test.cpp', native/'gx_material_pica.cpp']
+    sources = [native/'tests/gx_material_backend_test.cpp', native/'gx_material_pica.cpp', native/'runtime/gx_pica_material.cpp']
     headers = [native/'gx_material_pica.hpp',native/'gx_blend_pica.hpp',native/'runtime/gx_raster_plan.hpp', native/'runtime/gx_pica_tev.hpp',native/'runtime/gx_pica_material.hpp', native/'runtime/gx_material.hpp',
                native/'tests/material_equivalence.hpp', native/'runtime/gx_commands.hpp']
     inputs = [*sources, *headers, Path(__file__).resolve()]
-    installed_headers = [Path('/opt/devkitpro/libctru/include')/h for h in ['3ds/types.h','3ds/gpu/enums.h','c3d/types.h','c3d/texenv.h']]
+    devkit=Path(os.environ.get('DEVKITPRO','/opt/devkitpro'))
+    installed_headers = [devkit/'libctru/include'/h for h in ['3ds/types.h','3ds/gpu/enums.h','c3d/types.h','c3d/texenv.h']]
     hashes = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     common = ['-std=c++20', '-DTARGET_PC=1', '-DDUSK_TARGET_3DS=1',
-              '-I'+str(aurora/'include'), '-I/opt/devkitpro/libctru/include', '-Wall', '-Wextra', '-Werror']
+              '-I'+str(aurora/'include'), '-I'+str(devkit/'libctru/include'), '-Wall', '-Wextra', '-Werror']
     commands = [['clang++', *common, '-O1', '-g',
                  '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
                  *map(str,sources), '-o', str(OUT/'test')],
-                ['/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++', *common,
+                [str(devkit/'devkitARM/bin/arm-none-eabi-g++'), *common,
                  '-O2', '-g', '-march=armv6k', '-mtune=mpcore', '-mfloat-abi=hard',
                  '-mfpu=vfp', '-mtp=soft', '-D__3DS__', '-fstack-usage', '-c',
                  str(native/'gx_material_pica.cpp'), '-o', str(OUT/'commands-arm.o')]]

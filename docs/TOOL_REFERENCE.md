@@ -18,6 +18,7 @@ arguments and prerequisites before running historical workflows.
 | [azahar_debug.py](../Tools/3ds/azahar_debug.py) | Bounded local guest diagnostics over Azahar's GDB stub. No emulator launch. |
 | [azahar_rpc_probe.py](../Tools/3ds/azahar_rpc_probe.py) | Read process/performance data and a screenshot from a local Azahar RPC server. |
 | [azahar_run_report.py](../Tools/3ds/azahar_run_report.py) | Classify native Azahar evidence without confusing process exit with game success. |
+| [build_color_lookup_probe.py](../Tools/3ds/build_color_lookup_probe.py) | Build the asset-free dual-raster RGBA GPU probe; execution and completed pixel metrics are separate. |
 | [build_public.py](../Tools/3ds/build_public.py) | Build the existing native target locally; never tag, upload or publish. |
 | [capture_to_png.py](../Tools/3ds/capture_to_png.py) | Convert native DSKCAP01 framebuffer captures to PNG in LCD orientation. |
 | [check_publication.py](../Tools/3ds/check_publication.py) | Check tracked public content, maintained guide links and open firmware integrity. |
@@ -94,6 +95,7 @@ arguments and prerequisites before running historical workflows.
 | [test_gx_uniforms.py](../Tools/3ds/test_gx_uniforms.py) | Verify exact Citro3D uniform shadow updates; no GPU/hardware timing claim. |
 | [test_gx_vertex_commands.py](../Tools/3ds/test_gx_vertex_commands.py) | Verify typed vertex state against original GD and decode registered arrays. |
 | [test_gx_vertex_transform.py](../Tools/3ds/test_gx_vertex_transform.py) | Verify GX vertex transforms against independent double-precision equations. |
+| [test_memcard_permission.py](../Tools/3ds/test_memcard_permission.py) | Execute production card-controller and file-select permission recovery with real synthetic native CARD storage. |
 | [test_native_archive.py](../Tools/3ds/test_native_archive.py) | Original JKR memory archive integration under host ASan/UBSan; no extracted payloads. |
 | [test_native_bootstrap.py](../Tools/3ds/test_native_bootstrap.py) | Host integration checks. Synthetic input only; no hardware claims. |
 | [test_native_contracts.py](../Tools/3ds/test_native_contracts.py) | Exercise actual JKR code with native policy and test-only host OS primitives. |
@@ -133,13 +135,14 @@ arguments and prerequisites before running historical workflows.
 | [test_title_typed_vertex.py](../Tools/3ds/test_title_typed_vertex.py) | Verify the native typed vertex state and list ABI with the owner's title model in memory. |
 | [test_title_vertex.py](../Tools/3ds/test_title_vertex.py) | Read the owner's local title model in memory; verify original DL optimization and native vertex decoding. |
 | [test_trace.py](../Tools/3ds/test_trace.py) | Synthetic collector regression checks; never reads game input. |
+| [test_twilight_pack.py](../Tools/3ds/test_twilight_pack.py) | Synthetic USA/PAL bundle identity, payload round trips and unsupported revision rejection. |
 | [test_vertex_decode.py](../Tools/3ds/test_vertex_decode.py) | Check bounded native vertex decoding on host sanitizers and ARM compiler. |
 | [test_video_retrace.py](../Tools/3ds/test_video_retrace.py) | Test native retrace/sleep contracts with a synthetic event source and real queues. |
 | [test_worker_shutdown.py](../Tools/3ds/test_worker_shutdown.py) | Test production worker shutdown with real host threads; never builds ARM or controls an emulator. |
 | [texture_compression_lab.py](../Tools/3ds/texture_compression_lab.py) | Bounded PRIVATE host texture lab. No game assets, source or installed tools modified. |
 | [texture_lab_etc_host.cpp](../Tools/3ds/texture_lab_etc_host.cpp) | Native development fixture or configuration; inspect the source before use. |
 | [texture_lab_formats.py](../Tools/3ds/texture_lab_formats.py) | Host lab formats. Independent ETC1 decoder follows the Khronos bit grammar. |
-| [twilight_pack.py](../Tools/3ds/twilight_pack.py) | Private, bounded GameCube USA r0 -> DuskLight indexed asset container v1. |
+| [twilight_pack.py](../Tools/3ds/twilight_pack.py) | Private, bounded GameCube USA/PAL r0 -> DuskLight indexed asset container v1. |
 | [validate_texture_compression_lab.py](../Tools/3ds/validate_texture_compression_lab.py) | Reopen a lab run, validate every actual PICA payload, and retain receipts. |
 | [verify_application_dump.py](../Tools/3ds/verify_application_dump.py) | Read-only verification of a private DUSKLIGHT_APPLICATION_DUMP_1 directory. |
 | [verify_diagnostic_package.py](../Tools/3ds/verify_diagnostic_package.py) | Validate this diagnostic CIA's structure and hashes, not signatures or hardware. |

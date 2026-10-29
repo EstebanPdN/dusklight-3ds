@@ -10,7 +10,7 @@
 namespace material_test {
 using namespace dusk::native::gx;
 using Color=std::array<double,4>;
-struct Samples {Color raster;std::array<std::array<Color,8>,8> texture;};
+struct Samples {Color raster;std::array<std::array<Color,8>,8> texture;Color secondary;};
 inline double operand(const Color& c,MaterialOperand op,unsigned component){
     switch(op){case MaterialOperand::color:return c[component];case MaterialOperand::alpha:return c[3];
     case MaterialOperand::red:return c[0];case MaterialOperand::green:return c[1];case MaterialOperand::blue:return c[2];}
@@ -26,7 +26,7 @@ inline Color gxEvaluate(const MaterialState& s,const Samples& samples){
             auto value=[&](unsigned arg)->double{
                 if((alpha&&arg<4)||(!alpha&&arg<8))return regs[alpha?arg:arg/2][alpha||(arg&1)?3:c];
                 if((alpha&&arg==4)||(!alpha&&(arg==8||arg==9)))return samples.texture[stage.texture][stage.coordinate][s.swaps[stage.textureSwap][alpha||arg==9?3:c]];
-                if((alpha&&arg==5)||(!alpha&&(arg==10||arg==11)))return stage.raster==7?0:samples.raster[s.swaps[stage.rasterSwap][alpha||arg==11?3:c]];
+                if((alpha&&arg==5)||(!alpha&&(arg==10||arg==11)))return stage.raster==7?0:(stage.raster==1?samples.secondary:samples.raster)[s.swaps[stage.rasterSwap][alpha||arg==11?3:c]];
                 if((alpha&&arg==6)||(!alpha&&arg==14)){
                     const unsigned k=alpha?stage.konstAlpha:stage.konstColor;
                     if(k<8)return (8-k)/8.0;
@@ -68,7 +68,10 @@ inline Color picaEvaluate(const PicaMaterialPlan& p,const Samples& samples){
                 case MaterialSource::constant:for(unsigned k=0;k<4;++k)source[k]=stage.constant[k]/255.0;break;
                 case MaterialSource::buffer:source=buffer;break;
                 default:{const unsigned unit=unsigned(in.source)-unsigned(MaterialSource::texture0);assert(unit<p.textureCount);
-                    const auto& binding=p.textures[unit];source=samples.texture[binding.map][binding.coordinate];break;}
+                    const auto& binding=p.textures[unit];
+                    if(binding.map==255&&p.rasterCarrier==RasterCarrier::raster0RgbaRaster1Lookup){
+                        source=unit==p.sourceTextures()?Color{samples.secondary[0],samples.secondary[1],0,0}:Color{0,0,samples.secondary[2],samples.secondary[3]};
+                    }else source=samples.texture[binding.map][binding.coordinate];break;}
                 }
                 const double v=operand(source,in.operand,c);return in.inverse?1-v:v;
             };
@@ -86,6 +89,7 @@ inline Color picaEvaluate(const PicaMaterialPlan& p,const Samples& samples){
         }
         buffer=nextBuffer;
         if(p.bufferUpdateRgb&(1u<<t))for(unsigned c=0;c<3;++c)nextBuffer[c]=next[c];
+        if(p.bufferUpdateAlpha&(1u<<t))nextBuffer[3]=next[3];
         prev=next;
     }
     return prev;
@@ -97,6 +101,7 @@ inline void compare(const MaterialState& state,const PicaMaterialPlan& plan,unsi
         Samples samples{};
         auto sample=[&](){return n==0?0.0:n==1?1.0:double(randomWord(seed)&255)/255.0;};
         for(auto& v:samples.raster)v=sample();
+        for(auto& v:samples.secondary)v=sample();
         for(auto& map:samples.texture)for(auto& uv:map)for(auto& v:uv)v=sample();
         const auto a=gxEvaluate(state,samples),b=picaEvaluate(plan,samples);
         for(unsigned c=0;c<4;++c)if(std::abs(a[c]-b[c])>=1e-12){

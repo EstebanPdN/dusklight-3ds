@@ -7,12 +7,19 @@ backends; they do not prove PICA rendering or physical service behavior.
 Use the root [public host runner](../../../../Tools/3ds/test_public_host.py) for
 the enumerated data-free checks. It compiles the existing disc, texture, PICA
 math, bootstrap and controller fixtures with sanitizers, then runs synthetic
-dump verification. [Testing](../../../../docs/TESTING.md) defines the limits.
+USA/PAL bundle round trips and dump verification.
+[Testing](../../../../docs/TESTING.md) defines the limits.
 
 The other fixtures are retained for source completeness and focused research.
 Their corresponding `Tools/3ds/test_*.py` runners may need a private disc, a
 particular SDK, public reference checkout or historical baseline not included
 in Git. Do not infer that all fixtures form a clean-checkout test suite.
+
+The focused full-color compatibility fixtures and asset-free
+`color_lookup_gpu_probe.cpp` are described in
+[regional/GX checks](../../../../docs/TESTING.md#regional-data-and-gx-compatibility-checks).
+Host GPU substitutes, actual emulator pixels and physical console execution are
+separate evidence levels.
 
 Keep synthetic assets small and generated inside tests. Place local results
 under ignored `Build/` or `Diagnostics/`; never add a real game's captured
