@@ -18,7 +18,9 @@ remaining work. This is not a playable native-renderer release.
 | Model-plan suite | Passes hierarchy/producer admission and all 65,536 modeled source bias values; filtering on hardware remains unverified. |
 | Private fixture boundary | Six tests pass for ignored root-repository data, tracked-file rejection, nested repositories, symlinks and Git-check failure. |
 | New native game rendering | Not executed. No original scene, full opening, gameplay or physical acceptance is claimed. |
-| Historical full game link | The October 25 result below predates the new model renderer and is not current native migration acceptance. |
+| Current game target | Complete `dusklight-native` ARM compile/link passes with `DUSK_PICA_GAME_DRAW=ON`; the ELF contains native model-dispatch and camera symbols. No execution or playability claim. |
+| Isolated source copy | All 20,695 public files match the intended Git tree. Publication/public-host/native-host checks and a fresh 21-unit ARM library build/audit pass without private research inputs. |
+| Historical full game link | The October 25 result below predates the new model renderer and remains separate historical evidence. |
 
 Detailed compiler commands and generated receipts remain local. The published
 commands in [Testing](TESTING.md) and [Building](BUILDING.md) reproduce source
