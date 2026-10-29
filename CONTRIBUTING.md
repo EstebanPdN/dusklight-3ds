@@ -20,6 +20,28 @@ File-organization commits use `Clean project files`. Avoid unrelated broad
 formatting of reconstructed game code. Do not change original savedata or omit
 unsupported draws just to turn a test green.
 
+## Automated code review
+
+CodeRabbit's repository configuration is maintained in `.coderabbit.yaml`.
+After the GitHub App is installed for `EstebanPdN/dusklight-3ds`, non-draft pull
+requests into the default branch receive automatic incremental reviews.
+The five-commit automatic pause is disabled; service plan/rate limits still apply.
+Direct pushes to `main` are not pull-request reviews. Existing GitHub Actions
+checks remain independent and continue to run on pushes and pull requests.
+
+Review guidance covers ARM/PICA resource ownership, shared JSystem changes,
+local Aurora adaptations, offline conversion and evidence limits. Selected
+unmodified dependencies and artwork are excluded. CodeRabbit is configured
+for feedback, with automatic approvals and code-writing finishing touches off.
+Maintainers still decide which suggestions to apply.
+
+First-time activation requires the repository owner to install the
+[CodeRabbit GitHub App](https://github.com/apps/coderabbitai/installations/new),
+choose **Only select repositories**, and select **dusklight-3ds**. Committing
+the YAML alone does not install the app. Verify activation on a real pull
+request by its CodeRabbit review/status; if automatic review is absent, use
+`@coderabbitai review` in that PR. Keep private game data out of review comments.
+
 ## Tests and reports
 
 Use synthetic fixtures where they can exercise the real production contract.
