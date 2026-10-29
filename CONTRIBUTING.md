@@ -25,6 +25,7 @@ unsupported draws just to turn a test green.
 CodeRabbit's repository configuration is maintained in `.coderabbit.yaml`.
 After the GitHub App is installed for `EstebanPdN/dusklight-3ds`, non-draft pull
 requests into the default branch receive automatic incremental reviews.
+The five-commit automatic pause is disabled; service plan/rate limits still apply.
 Direct pushes to `main` are not pull-request reviews. Existing GitHub Actions
 checks remain independent and continue to run on pushes and pull requests.
 

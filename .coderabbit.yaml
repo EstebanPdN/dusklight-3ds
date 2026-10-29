@@ -23,6 +23,7 @@ reviews:
   auto_review:
     enabled: true
     auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 0
     drafts: false
   finishing_touches:
     docstrings:
