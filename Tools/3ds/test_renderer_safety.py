@@ -36,7 +36,12 @@ def main():
         'lib/dolphin/gd/GDGeometry.cpp', 'lib/dolphin/gd/GDTev.cpp',
         'lib/dolphin/gd/GDIndirect.cpp', 'lib/gx/dl.cpp', 'lib/gx/attr_fmt.cpp']]
     inputs = [*sources, Path(__file__).resolve(), ROOT / 'Tools/3ds/test_gx_lookup.py',
-              native / 'tests/gx_lookup_test.cpp', native / 'gx_command_draw.hpp',
+              *[native / name for name in [
+                  'tests/gx_lookup_test.cpp', 'tests/gx_rigid_reference.hpp',
+                  'tests/raster_carrier_adapter.hpp', 'tests/raster_carrier_fixture.hpp',
+                  'tests/material_equivalence.hpp',
+                  'gx_command_draw.hpp', 'gx_geometry_pica.hpp',
+                  'gx_texture_pica.hpp', 'gx_pica.hpp', 'native/color_lookup.hpp']],
               *sorted((native / 'runtime').glob('*.hpp'))]
     hashes = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     command = ['clang++', '-std=c++20', '-DTARGET_PC=1', '-DDUSK_TARGET_3DS=1',

@@ -7,10 +7,11 @@ python3 Tools/3ds/check_publication.py
 python3 Tools/3ds/test_public_host.py
 ```
 
-The host runner builds existing synthetic native fixtures with C++20,
-AddressSanitizer and UndefinedBehaviorSanitizer. It checks disc-structure bounds,
-I4 texture decoding, PICA math/alpha/clip planning, bootstrap state and controller
-mapping. It also runs synthetic dump-verifier tests. Generated binaries and
+The host runner enumerates ten synthetic checks. Its C++ checks use C++20,
+AddressSanitizer and UndefinedBehaviorSanitizer; `disc-pack` and `dump-verifier`
+execute Python tests. It covers disc bounds, I4/IA8 decoding, PICA math,
+boot-stage parsing, bootstrap/controller integration, USA/PAL bundle round trips,
+dump verification and card-permission consumer recovery. Generated binaries and
 fixtures stay in `Build/public-host/`; no original disc is opened.
 
 Use `--compiler PATH` to choose a host compiler and `--output PATH` to choose
@@ -24,6 +25,57 @@ It also runs five SDK-independent new-native suites: offline geometry/material
 conversion and native mesh/texture/material bank formats. The complete new
 engine mock suite and ARM/shader checks require the additional prerequisites
 below; they are not implied by the CI job.
+
+## Regional data and GX compatibility checks
+
+The public suite includes synthetic USA/PAL packing and permission-error recovery
+through actual card-controller and file-select methods. Save ownership and
+original DVD/JKR integration have additional host sanitizer checks:
+
+```sh
+python3 Tools/3ds/test_framebuffer_execution.py --suite storage \
+  --output Build/regional-save-check
+python3 Tools/3ds/test_native_archive.py --output Build/regional-archive-check
+```
+
+The save fixture creates disposable data, checks both regions and rejects
+foreign game/maker access while preserving the complete original container.
+The consumer regression additionally verifies that permission denial leaves the
+busy state and reaches a non-formatting terminal error, while matching ownership
+still dispatches the ordinary load path.
+Use new output directories; the storage and renderer-safety runners refuse
+to reuse an existing result directory.
+
+With `clang++`, devkitARM and `DEVKITPRO` pointing at the installed SDK:
+
+```sh
+python3 Tools/3ds/test_gx_pica_material.py --output Build/gx-material-check
+python3 Tools/3ds/test_gx_material_backend.py --output Build/gx-register-check
+python3 Tools/3ds/test_renderer_safety.py --output Build/gx-adapter-check
+python3 Tools/3ds/build_color_lookup_probe.py --build-dir Build/color-lookup-probe
+```
+
+These host checks exercise original material equations, independent raster RGBA,
+buffer-alpha lifetimes, actual SDK register packing and adapter failure paths.
+The default full-color adapter case also checks two lookup resources plus a
+third fog resource without overwriting either color's coordinates.
+
+Run the generated `color-lookup-probe.3dsx` separately on a console or emulator.
+It needs no game data. Its SD directory
+`/3ds/dusklight-color-lookup/run-<tick>/` contains a completion receipt and
+pixel metrics for affine, perspective and byte-atlas inputs. It compares identity,
+fragment products and textured products, verifies subsequent ordinary-state
+restoration, and rejects the incorrect vertex-premultiplication alternative.
+Compilation or the absence of an emulator crash is not a passing GPU result.
+Require `status=pass`, all nine cases, and passing metrics.
+
+The probe validates a nonuniform reference and acquires synchronized readbacks
+on the CPU before filesystem writes; a uniform clear alone cannot detect a
+corrupted readback. Comparisons allow bounded UNORM rounding, not a blanket claim
+of exact GX integer arithmetic or physical PICA behavior.
+
+Use the explicit [compatibility configuration](BUILDING.md#retained-gx-compatibility-renderer)
+for original-game route testing. The native-model renderer default is unchanged.
 
 ## New native renderer checks
 

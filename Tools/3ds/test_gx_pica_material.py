@@ -23,6 +23,7 @@ def main():
     headers = [native/'runtime/gx_pica_material.hpp', native/'runtime/gx_material.hpp',
                native/'tests/material_equivalence.hpp', native/'runtime/gx_commands.hpp']
     headers.extend([native/'runtime/gx_material_liveness.hpp',native/'runtime/gx_raster_plan.hpp',native/'runtime/gx_fog.hpp'])
+    headers.extend([native/'native/color_lookup.hpp',native/'tests/color_lookup_test.hpp',native/'tests/raster_carrier_fixture.hpp'])
     inputs = [*sources, *headers, Path(__file__).resolve()]
     hashes = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     common = ['-std=c++20', '-DTARGET_PC=1', '-DDUSK_TARGET_3DS=1',

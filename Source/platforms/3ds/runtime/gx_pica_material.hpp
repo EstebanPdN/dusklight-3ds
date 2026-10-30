@@ -23,7 +23,7 @@ struct MaterialTextureBinding {
     std::uint8_t map{},coordinate{};
     bool operator==(const MaterialTextureBinding&) const = default;
 };
-enum class RasterCarrier : std::uint8_t { none, raster1RgbRaster0GrayAlpha };
+enum class RasterCarrier : std::uint8_t { none, raster1RgbRaster0GrayAlpha, raster0RgbaRaster1Lookup };
 struct PicaMaterialPlan {
     std::array<PicaMaterialStage,6> stages{};
     // Bind these map/coordinate pairs to PICA texture units in this order.
@@ -31,9 +31,12 @@ struct PicaMaterialPlan {
     std::uint8_t stageCount{},textureCount{};
     std::array<std::uint8_t,4> bufferConstant{}; // Initial combiner buffer; usable after stage0.
     std::uint8_t bufferUpdateRgb{}; // Capture stage0..3 RGB; visible two stages later.
+    std::uint8_t bufferUpdateAlpha{};
+    std::array<std::uint8_t,2> rasterReadMask{}; // RGB=1, alpha=2, after dead-input elimination.
     bool projectiveTexture0{};
     bool quantizedConstants{};
-    RasterCarrier rasterCarrier{}; // Diagnostic packing only; requires whole-draw grayscale proof.
+    RasterCarrier rasterCarrier{};
+    unsigned sourceTextures()const{return rasterCarrier==RasterCarrier::raster0RgbaRaster1Lookup?textureCount-2:textureCount;}
 };
 enum class MaterialPlanError {
     none, stages, operation, indirect, source, uninitialized, constantRange,
@@ -53,6 +56,10 @@ bool planPicaMaterial(const MaterialState&,PicaMaterialPlan&,MaterialPlanError* 
 // identity raster swaps, no indirect. Never enables this route implicitly.
 // All original stage boundaries, register allocation and constants use Builder.
 bool planRasterCarrierMaterial(const MaterialState&,PicaMaterialPlan&,MaterialPlanError* = nullptr);
+// Transport a second full RGBA stream through two identity lookup textures.
+// At most one original texture and four original PICA stages; no preexisting
+// combiner-buffer dependency. Original equations and fragment interpolation stay intact.
+bool planRasterLookupMaterial(const MaterialState&,PicaMaterialPlan&,MaterialPlanError* = nullptr,MaterialPolicy = MaterialPolicy::exactConstants);
 // PICA provides homogeneous texture sampling on unit 0 only. Route a single
 // consumed projective binding there and rewrite every TEV source consistently.
 // Multiple consumed projective bindings reject; the input stays intact on error.

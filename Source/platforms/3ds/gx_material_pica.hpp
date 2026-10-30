@@ -13,6 +13,7 @@ struct PreparedPicaMaterial {
     std::array<C3D_TexEnv,6> stages{};
     u32 bufferColor{};
     unsigned bufferUpdateRgb{};
+    unsigned bufferUpdateAlpha{};
 };
 PreparedPicaMaterial preparePicaMaterial(const gx::PicaMaterialPlan&);
 void applyPreparedPicaMaterial(const PreparedPicaMaterial&);

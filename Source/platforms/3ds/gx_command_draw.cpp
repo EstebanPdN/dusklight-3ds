@@ -21,6 +21,7 @@
 #include "runtime/gx_camera_clip.hpp"
 #include "runtime/gx_i4_bake_cache68.hpp"
 #include "runtime/gx_compact_cache.hpp"
+#include "native/color_lookup.hpp"
 #include "runtime/gx_stream.hpp"
 #include <algorithm>
 #include <cmath>
@@ -288,6 +289,17 @@ bool fogRampTexture(gx::Texture& texture) {
     std::uint32_t token{};
     return gx::textureCommandToken(ramp.data()+32,token)&&gx::textureFromCommandToken(token,texture);
 }
+bool rasterLookupTextures(std::array<gx::Texture,3>& textures,unsigned first){
+    if(first>1)return false;
+    static constexpr std::array ramps{dusk::pica::colorLookupBti(0),dusk::pica::colorLookupBti(1)};
+    static std::array<gx::TextureHandle,2> handles{};
+    for(unsigned n=0;n<2;++n){
+        if(!handles[n]&&!gx::registerTexture(ramps[n],handles[n],true))return false;
+        std::uint32_t token{};
+        if(!gx::textureCommandToken(ramps[n].data()+32,token)||!gx::textureFromCommandToken(token,textures[first+n]))return false;
+    }
+    return true;
+}
 // Native PICA engine: precompiled static draws. The first complete
 // translation of a static J3D display-list batch records its final raster
 // state and PICA material; later frames with an identical state fingerprint
@@ -537,7 +549,7 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
         state.indirectCount=0;for(auto& stage:state.stages)stage.indirect=0;
     }
     gx::PicaMaterialPlan material;gx::MaterialPlanError planError;
-    bool carrier=false,exactI4Pending=false;
+    bool carrier=false,lookupCarrier=false,exactI4Pending=false;
     const char* exactI4OriginalFailure="GX exact I4 material unsupported";
     { static const auto index=registerGxNamedProfile("adapter.materialPlan");GxNamedProfileScope detail(index);
     const auto policy=context.allowQuantizedConstants&&!raster.alphaInterval.enabled?gx::MaterialPolicy::quantizedConstants:gx::MaterialPolicy::exactConstants;
@@ -553,13 +565,22 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
            (gx::bake67::plan(originalMaterial,material,gx::bake67::Policy::strictNonzeroI4)||
             gx::bake84::plan(originalMaterial,material,gx::bake84::Policy::exactNearestI4))){
             exactI4Pending=true;
-        }else{
+        // The explicit diagnostic retains its original conservative input
+        // contract. Automatic lookup must not preempt ordinary alpha liveness.
+        }else if(context.diagnosticRasterCarrier||!gx::discardUnobservedTevAlpha(state,raster)||
+                 !gx::planPicaMaterial(state,material,&planError,policy)){
         bool raster1Read=false;
         for(unsigned i=0;i<state.stageCount;++i)if(state.stages[i].raster==1){
             for(auto id:state.stages[i].color)raster1Read|=id==10||id==11;
             for(auto id:state.stages[i].alpha)raster1Read|=id==5;
         }
-        if(context.diagnosticRasterCarrier&&raster1Read){
+        if(raster1Read&&!context.diagnosticRasterCarrier){
+            carrierAttempt=true;++context.rasterCarrierAttempts;
+            // Liveness may remove alpha, not the lookup's original indirect veto.
+            if(originalMaterial.indirectCount)return fail(gx::materialPlanErrorText(gx::MaterialPlanError::indirect));
+            if(!gx::planRasterLookupMaterial(state,material,&planError,policy))return fail(gx::materialPlanErrorText(planError));
+            carrier=lookupCarrier=true;
+        }else if(context.diagnosticRasterCarrier&&raster1Read){
             carrierAttempt=true;++context.rasterCarrierAttempts;
             // No scene/material IDs. Restrict interactions until independently
             // proved. Active fog additionally needs the existing vertex-fog policy.
@@ -574,7 +595,9 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
                 return fail(gx::materialPlanErrorText(planError));
             carrier=true;
         }else{
-            if(!gx::discardUnobservedTevAlpha(state,raster)||!gx::planPicaMaterial(state,material,&planError,policy)){
+            // Automatic recovery was already tried above; only the legacy
+            // diagnostic's non-carrier branch still needs that attempt here.
+            if(!context.diagnosticRasterCarrier||!gx::discardUnobservedTevAlpha(state,raster)||!gx::planPicaMaterial(state,material,&planError,policy)){
                 if(raster.alphaInterval.enabled||!visualMaterialLimit(planError)||!allowsFallback(DrawVisualFallback::tevMaterial))
                     return fail(gx::materialPlanErrorText(planError));
                 const char* why;
@@ -594,23 +617,24 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
     { static const auto index=registerGxNamedProfile("adapter.lightingPlan");GxNamedProfileScope detail(index);
     if(carrier){
         secondColorPlan.emplace();
-        if(!gx::planRasterColorChannel(draw.registers,0,1,colorPlan,&colorError)||
-           !gx::planRasterColorChannel(draw.registers,1,1,*secondColorPlan,&colorError))return fail(gx::rasterColorErrorText(colorError));
+        if(!gx::planRasterColorChannel(draw.registers,0,lookupCarrier?material.rasterReadMask[0]:1,colorPlan,&colorError)||
+           !gx::planRasterColorChannel(draw.registers,1,lookupCarrier?material.rasterReadMask[1]:1,*secondColorPlan,&colorError))return fail(gx::rasterColorErrorText(colorError));
     }else if(!gx::planRasterColor(draw.registers,material,colorPlan,&colorError))return fail(gx::rasterColorErrorText(colorError));
     }
+    const unsigned originalTextureCount=material.sourceTextures();
     std::uint8_t coordinates=indirect.coordinates;
     std::array<gx::Texture,3> textures{};
-    for(unsigned unit=0;unit<material.textureCount;++unit)coordinates|=1u<<material.textures[unit].coordinate;
+    for(unsigned unit=0;unit<originalTextureCount;++unit)coordinates|=1u<<material.textures[unit].coordinate;
     gx::VertexTransformPlan transform;gx::VertexTransformError transformError;
     { static const auto index=registerGxNamedProfile("adapter.transformPlan");GxNamedProfileScope detail(index);
     if(!gx::planVertexTransform(draw.registers,coordinates,transform,&transformError))return fail(gx::vertexTransformErrorText(transformError));
     }
     if(exactI4Pending&&transform.projectiveMask())return fail(exactI4OriginalFailure);
-    if(carrier&&transform.projectiveMask())return fail("GX diagnostic raster carrier projective unsupported");
+    if(carrier&&!lookupCarrier&&transform.projectiveMask())return fail("GX diagnostic raster carrier projective unsupported");
     if(!gx::routeProjectiveTexture(material,transform.projectiveMask()))return fail("GX multiple projected textures pending");
     std::array<const gx::VertexIndirectEffect*,3> indirectUnits{};
     { static const auto index=registerGxNamedProfile("adapter.textureResolve");GxNamedProfileScope detail(index);
-    for(unsigned unit=0;unit<material.textureCount;++unit){
+    for(unsigned unit=0;unit<originalTextureCount;++unit){
         const auto binding=material.textures[unit];
         const char* textureFailure;
         if(!gx::resolveCommandTexture(draw.registers,binding.map,textures[unit],textureFailure))return fail(textureFailure,DrawFailureKind::resource);
@@ -650,11 +674,12 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
             static_cast<unsigned long>(draw.registers.bp[0xf1]),static_cast<unsigned long>(draw.registers.bp[0xe8]));
     }
 #endif
-    const unsigned originalTextureCount=material.textureCount;
-    bool fogPrimaryAlpha=!carrier&&!(colorPlan.required&2);
-    bool fogPrimaryRed=!carrier&&!fogPrimaryAlpha&&!(colorPlan.required&1);
+    if(lookupCarrier&&!rasterLookupTextures(textures,originalTextureCount))return fail("GX raster color lookup unavailable",DrawFailureKind::resource);
+    bool fogPrimaryAlpha=(!carrier||lookupCarrier)&&!(colorPlan.required&2);
+    bool fogPrimaryRed=(!carrier||lookupCarrier)&&!fogPrimaryAlpha&&!(colorPlan.required&1);
     gx::VertexFogPlan fog;
     bool triangleFog=false;gx::RasterPlan fogRaster;gx::PicaMaterialPlan fogMaterial;
+    unsigned fogTextureUnit=0;
     if(context.allowVertexFog) {
         if(carrier&&!gx::currentTargetExtent.valid())return fail("GX diagnostic raster carrier target invalid");
         if(!gx::planVertexFog(draw.registers,fog))return fail("GX vertex fog parameters invalid");
@@ -698,12 +723,13 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
                 }
             }
         }
+        fogTextureUnit=material.textureCount;
         if(!gx::appendVertexFog(material,fog,fogPrimaryAlpha,fogPrimaryRed)){
-            if(carrier||!context.allowTriangleFog||expanded||!gx::planTriangleFogPass(raster,fogRaster,fogMaterial))
+            if((carrier&&!lookupCarrier)||!context.allowTriangleFog||expanded||!gx::planTriangleFogPass(raster,fogRaster,fogMaterial))
                 return fail("GX vertex fog TEV/texture capacity");
             triangleFog=true;
         }
-        if(fog.enabled&&!triangleFog&&!fogPrimaryAlpha&&!fogPrimaryRed&&!fogRampTexture(textures[originalTextureCount]))return fail("GX vertex fog ramp unavailable",carrier?DrawFailureKind::resource:DrawFailureKind::state);
+        if(fog.enabled&&!triangleFog&&!fogPrimaryAlpha&&!fogPrimaryRed&&!fogRampTexture(textures[fogTextureUnit]))return fail("GX vertex fog ramp unavailable",carrier?DrawFailureKind::resource:DrawFailureKind::state);
     }
     const auto count=draw.vertexCount;
     const auto stride=draw.plan.packedStride();
@@ -866,7 +892,7 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
     // storage. No full transformed/colored CPU mesh or duplicate decode pass.
     auto transformOne=[&](unsigned i,gx::GpuVertex& target,bool requirePositiveQ=true,bool* invalidDivisor=nullptr)->const char*{
         if(carrier)carrierFailureVertex=i;
-        gx::DecodedVertex decoded;gx::TransformedVertex vertex;std::array<float,4> color;
+        gx::DecodedVertex decoded;gx::TransformedVertex vertex;std::array<float,4> color,secondColor{};
         const bool sample=gxSparseVertexProfiling&&(i&63)==0;
         {GxProfileScope section(GxProfilePart::vertexDecode,sample);
         if(!draw.vertex(i,decoded))return "GX command vertex decode failed";}
@@ -892,15 +918,17 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
         {GxProfileScope section(GxProfilePart::vertexLighting,sample);
         if(!gx::evaluateRasterColor(colorPlan,decoded,color,&colorError,&vertex))return gx::rasterColorErrorText(colorError);
         if(carrier){
-            std::array<float,4> second;
+            auto& second=secondColor;
             if(!gx::evaluateRasterColor(*secondColorPlan,decoded,second,&colorError,&vertex)){
                 carrierFailureVertex=i;return gx::rasterColorErrorText(colorError);
             }
             for(unsigned c=0;c<3;++c)if(!std::isfinite(color[c])||color[c]<0||color[c]>1||
                 !std::isfinite(second[c])||second[c]<0||second[c]>1){carrierFailureVertex=i;return "GX diagnostic raster carrier nonfinite/range";}
-            if(color[0]!=color[1]||color[1]!=color[2]){carrierFailureVertex=i;return "GX diagnostic raster0 not grayscale";}
-            // Independent fields; the product stays in the material combiner.
-            color={second[0],second[1],second[2],color[0]};
+            if(!lookupCarrier){
+                if(color[0]!=color[1]||color[1]!=color[2]){carrierFailureVertex=i;return "GX diagnostic raster0 not grayscale";}
+                // Independent fields; the product stays in the material combiner.
+                color={second[0],second[1],second[2],color[0]};
+            }
         }} // Both independent evaluations belong to the same lighting phase.
         target={};target.position=vertex.clip;target.color=color;
         bool invalidQ=false,invalidIndirectQ=false;
@@ -935,13 +963,17 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
             if(unit==0)target.textureQ=q;
             target.texcoord[unit]={uv[0]*scales[unit][0],q-uv[1]*scales[unit][1]};
         }
+        if(lookupCarrier){
+            target.texcoord[originalTextureCount]=dusk::pica::colorLookupUv(secondColor[0],secondColor[1]);
+            target.texcoord[originalTextureCount+1]=dusk::pica::colorLookupUv(secondColor[2],secondColor[3]);
+        }
         if(fog.enabled&&!triangleFog) {
             GxProfileScope section(GxProfilePart::vertexFog,sample);
             const float factor=gx::evaluateVertexFog(fog,vertex.clip,gx::currentTargetExtent.logicalWidth);
             if(carrier&&(!std::isfinite(factor)||factor<0||factor>1))return "GX diagnostic raster carrier fog invalid";
             if(fogPrimaryAlpha)target.color[3]=factor;
             else if(fogPrimaryRed)target.color[0]=factor;
-            else target.texcoord[originalTextureCount]={(factor*255+.5f)/256,.5f};
+            else target.texcoord[fogTextureUnit]={(factor*255+.5f)/256,.5f};
         }
         if(invalidDivisor)*invalidDivisor=invalidQ||invalidIndirectQ;
         if(!requirePositiveQ)return nullptr;

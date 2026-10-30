@@ -60,6 +60,20 @@ The October 25 full-link result in the historical status predates the new
 renderer. See [current verification](STATUS.md) before attributing that result
 to this checkpoint.
 
+## Retained GX compatibility renderer
+
+To exercise the regional data and dual-raster fixes without selecting the
+unfinished native-model route, use an explicit separate configuration:
+
+```sh
+python3 Tools/3ds/build_public.py --profile game \
+  --build-dir Build/compatibility-game \
+  --cmake-option=-DDUSK_PICA_GAME_DRAW=OFF
+```
+
+The default is unchanged. Compatibility-route observations do not establish
+acceptance of the new native renderer, complete gameplay or physical performance.
+
 ## Synthetic diagnostic profile
 
 ```sh
