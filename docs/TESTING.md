@@ -7,8 +7,9 @@ python3 Tools/3ds/check_publication.py
 python3 Tools/3ds/test_public_host.py
 ```
 
-The host runner enumerates ten synthetic checks with C++20, AddressSanitizer and
-UndefinedBehaviorSanitizer. It covers disc bounds, I4/IA8 decoding, PICA math,
+The host runner enumerates ten synthetic checks. Its C++ checks use C++20,
+AddressSanitizer and UndefinedBehaviorSanitizer; `disc-pack` and `dump-verifier`
+execute Python tests. It covers disc bounds, I4/IA8 decoding, PICA math,
 boot-stage parsing, bootstrap/controller integration, USA/PAL bundle round trips,
 dump verification and card-permission consumer recovery. Generated binaries and
 fixtures stay in `Build/public-host/`; no original disc is opened.
