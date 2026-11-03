@@ -75,6 +75,7 @@ PreparedPicaMaterial preparePicaMaterial(const gx::PicaMaterialPlan& p){
     PreparedPicaMaterial result;
     for(auto& env:result.stages)C3D_TexEnvInit(&env);
     result.bufferUpdateRgb=p.bufferUpdateRgb;
+    result.bufferUpdateAlpha=p.bufferUpdateAlpha;
     const auto& b=p.bufferConstant;
     result.bufferColor=u32(b[0])|(u32(b[1])<<8)|(u32(b[2])<<16)|(u32(b[3])<<24);
     for(unsigned i=0;i<p.stageCount;++i){
@@ -88,6 +89,7 @@ void applyPreparedPicaMaterial(const PreparedPicaMaterial& p){
     for(unsigned i=0;i<p.stages.size();++i)*C3D_GetTexEnv(i)=p.stages[i];
     C3D_TexEnvBufUpdate(C3D_Both,0);
     if(p.bufferUpdateRgb)C3D_TexEnvBufUpdate(C3D_RGB,p.bufferUpdateRgb);
+    if(p.bufferUpdateAlpha)C3D_TexEnvBufUpdate(C3D_Alpha,p.bufferUpdateAlpha);
     C3D_TexEnvBufColor(p.bufferColor);
 }
 void applyPicaMaterial(const gx::PicaMaterialPlan& p){
@@ -95,6 +97,7 @@ void applyPicaMaterial(const gx::PicaMaterialPlan& p){
     for(unsigned i=0;i<6;++i)C3D_TexEnvInit(C3D_GetTexEnv(i));
     C3D_TexEnvBufUpdate(C3D_Both,0);
     if(p.bufferUpdateRgb)C3D_TexEnvBufUpdate(C3D_RGB,p.bufferUpdateRgb);
+    if(p.bufferUpdateAlpha)C3D_TexEnvBufUpdate(C3D_Alpha,p.bufferUpdateAlpha);
     const auto& b=p.bufferConstant;C3D_TexEnvBufColor(u32(b[0])|(u32(b[1])<<8)|(u32(b[2])<<16)|(u32(b[3])<<24));
     for(unsigned i=0;i<p.stageCount;++i){
         auto* env=C3D_GetTexEnv(i);const auto& stage=p.stages[i];

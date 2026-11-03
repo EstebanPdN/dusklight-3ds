@@ -1,4 +1,4 @@
-# Native mesh pack version 1
+# Native mesh pack version 2
 
 This format feeds the native renderer directly. It contains native vertex and
 triangle-index bytes, not display lists or source-platform register state.
@@ -14,7 +14,7 @@ IDs; these are asset identities, not the renderer's generation handles.
 | Header offset | Type | Meaning |
 | --- | --- | --- |
 | 0 | 8 bytes | ASCII `DUSKPN01` |
-| 8 | u32 | Version = 1 |
+| 8 | u32 | Version = 2; version 1 is rejected |
 | 12 | u32 | Exact file size |
 | 16 | u32 | Mesh count |
 | 20 | u32 | Directory offset = 32 |
@@ -30,7 +30,7 @@ Each directory entry is eight u32 words:
 | 2 | Index count, at most 65,535, divisible by three |
 | 3 | Vertex payload offset |
 | 4 | Index payload offset |
-| 5 | Vertex bytes = count × 60 |
+| 5 | Vertex bytes = count × 64 |
 | 6 | Index bytes = count × 2 |
 | 7 | IEEE CRC32 of vertex bytes followed by index bytes |
 
@@ -40,16 +40,17 @@ boundary after vertices. The next mesh/file end is the next 16-byte boundary
 after indices. All alignment bytes must be zero. Gaps, overlaps, duplicate IDs,
 unexpected trailing bytes, contradictory sizes and unsupported versions refuse.
 
-The fixed 60-byte vertex contains:
+The fixed 64-byte vertex contains nine input attributes:
 
 | Offset | Data |
 | --- | --- |
 | 0 | Position: three float32 values |
 | 12 | Normal: three float32 values |
 | 24 | UV0, UV1, UV2: six float32 values |
-| 48 | R, G, B, A: four unsigned bytes |
-| 52 | Four palette row offsets: 0, 3, …, 21 |
-| 56 | Four unsigned weights, sum exactly 255 |
+| 48 | Raster 0 R, G, B, A: four unsigned bytes |
+| 52 | Raster 1 R, G, B, A: four unsigned bytes |
+| 56 | Four palette row offsets: 0, 3, 6, 9 |
+| 60 | Four unsigned weights, sum exactly 255 |
 
 Indices are native u16 triangle indices. `contracts.hpp` asserts the same
 record size/offsets on ARM. `createMeshBytes()` validates copied native records
@@ -64,9 +65,9 @@ checks the selected payload CRC. The caller owns and retains the file buffer
 until upload; no concurrent mutation or free is permitted. This view does not
 perform file I/O, stream the SD card, authenticate content or own a full-file
 allocation. CRC detects accidental changes, not adversarial forgery. Full-file
-SHA-256 provenance is recorded by the Mac writer.
+SHA-256 provenance is recorded by the Python writer.
 
-## Mac preparation
+## Offline preparation
 
 `Tools/3ds/native_mesh_pack.py` accepts the following **already native** JSON:
 
@@ -86,9 +87,10 @@ SHA-256 provenance is recorded by the Mac writer.
 ```
 
 Optional vertex members: `normal` (three numbers, default +Z), `uv` (three
-native pairs, default zero), `color` (four bytes, default white), `bones`
-(four indices 0–7, default zero), and `weights` (four bytes, default
-255/0/0/0). Bone indices become row offsets offline. Unknown fields and invalid
+native pairs, default zero), `color` and `color1` (four bytes each, independently
+defaulting to white), `bones` (four indices 0–3, default zero), and `weights`
+(four bytes, default 255/0/0/0). Bone indices become row offsets offline.
+Unknown fields and invalid
 numbers, domains, lengths or sums refuse; the writer does not guess conversion
 rules or silently discard attributes.
 

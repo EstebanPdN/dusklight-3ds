@@ -33,6 +33,19 @@ def main():
     assert len(plan['parts'])==2 and [u['palette'] for u in plan['uniforms']]==[[1,2],[1,3]]
     assert plan['parts'][0]['samplers'][0]['wrap_s']=='mirror' and plan['parts'][0]['samplers'][1]['lod_bias']==-152 and plan['parts'][0]['samplers'][1]['last_level']==1
     assert native==compile_plan(plan) and not receipt['rendering_ready'];(out/'fixture.dnl').write_bytes(native);(out/'plan.json').write_text(json.dumps(plan,indent=2)+'\n')
+    uniform_offset=struct.unpack_from('<I',native,32)[0]
+    assert struct.unpack_from('<II',native,8)==(4,len(native))
+    assert uniform_offset==48+64*len(plan['parts'])
+    assert struct.unpack_from('<I',native,36)[0]==80*len(plan['uniforms'])
+    assert len(native)==uniform_offset+80*len(plan['uniforms'])
+    for index,binding in enumerate(plan['uniforms']):
+        at=uniform_offset+80*index
+        assert native[at+40]==binding['channel_read_mask']
+        for field,start in (('parameter_read_masks',41),('parameter_wrap_masks',48),('parameter_signed_masks',55)):
+            assert list(native[at+start:at+start+7])==binding[field]
+        assert struct.unpack_from('<II',native,at+64)==(binding['source_shape'],binding['billboard_mode'])
+        assert native[at+72:at+74]==bytes((binding['source_stage_count'],binding['source_texgen_count']))
+        assert (binding['source_stage_count'],binding['source_texgen_count'])==(3,2)
     # Independently serialized hierarchy demonstrates prepend order and the
     # parent argument's ownership, rather than a naive last-declaration walk.
     b=sections(source);joint=bytearray(b['JNT1']);struct.pack_into('>H',joint,8,3);shape=bytearray(b['SHP1']);struct.pack_into('>H',shape,8,3);mat=bytearray(b['MAT3']);struct.pack_into('>H',mat,8,3)

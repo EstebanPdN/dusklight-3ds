@@ -3,6 +3,12 @@
 #include <assert.h>
 #include <math.h>
 
+#if defined(__3DS__) && defined(DUSK_TARGET_3DS)
+#include <stdint.h>
+
+extern void DuskMtxConcatArm11(const Mtx a, const Mtx b, Mtx ab);
+#endif
+
 void C_MTXIdentity(Mtx m) {
   assert(m && "MtxIdentity():  NULL Mtx 'm' ");
   m[0][0] = 1;
@@ -38,7 +44,12 @@ void C_MTXCopy(const Mtx src, Mtx dst) {
   }
 }
 
+#if defined(__3DS__) && defined(DUSK_TARGET_3DS)
+/* Keep partial-overlap store order and scratch off the disjoint fast path. */
+static __attribute__((noinline)) void DuskMtxConcatPortable(const Mtx a, const Mtx b, Mtx ab) {
+#else
 void C_MTXConcat(const Mtx a, const Mtx b, Mtx ab) {
+#endif
   Mtx mTmp;
   MtxPtr m;
 
@@ -71,6 +82,29 @@ void C_MTXConcat(const Mtx a, const Mtx b, Mtx ab) {
     C_MTXCopy(mTmp, ab);
   }
 }
+
+#if defined(__3DS__) && defined(DUSK_TARGET_3DS)
+void C_MTXConcat(const Mtx a, const Mtx b, Mtx ab) {
+  assert(a && "MTXConcat():  NULL MtxPtr 'a'  ");
+  assert(b && "MTXConcat():  NULL MtxPtr 'b'  ");
+  assert(ab && "MTXConcat():  NULL MtxPtr 'ab' ");
+
+  /* Integer distances avoid ordering/subtracting unrelated C pointers.
+   * Exact alias with one input still falls back if it partially overlaps the
+   * other: snapshotting that input would change the original C semantics. */
+  const uintptr_t out = (uintptr_t)ab;
+  const uintptr_t left = (uintptr_t)a;
+  const uintptr_t right = (uintptr_t)b;
+  const uintptr_t leftDistance = out > left ? out - left : left - out;
+  const uintptr_t rightDistance = out > right ? out - right : right - out;
+  if ((leftDistance == 0 || leftDistance >= sizeof(Mtx)) &&
+      (rightDistance == 0 || rightDistance >= sizeof(Mtx))) {
+    DuskMtxConcatArm11(a, b, ab);
+  } else {
+    DuskMtxConcatPortable(a, b, ab);
+  }
+}
+#endif
 
 void C_MTXConcatArray(const Mtx a, const Mtx* srcBase, Mtx* dstBase, u32 count) {
   u32 i;

@@ -9,6 +9,9 @@ struct CameraRegion {
     float x{},y{},width{},height{};
     float nearDepth=0,farDepth=1;
 };
+struct CameraScissor {
+    std::uint32_t x{},y{},width{},height{};
+};
 struct CameraProjection {
     Matrix rows{};
     unsigned left{},top{},right{},bottom{}; // Physical PICA scissor bounds.
@@ -17,4 +20,7 @@ struct CameraProjection {
 // SDK calls, allocation, projection reconstruction or division by vertex W.
 // Scissor edges round outward; exact physical raster/edge precision is unproved.
 bool prepareCamera(const Matrix& projection,const CameraRegion&,unsigned physicalWidth,unsigned physicalHeight,CameraProjection&);
+// Intersect a logical source rectangle with the prepared viewport scissor.
+bool restrictCameraScissor(CameraProjection&,const CameraRegion&,const CameraScissor&,
+                           unsigned physicalWidth,unsigned physicalHeight);
 }

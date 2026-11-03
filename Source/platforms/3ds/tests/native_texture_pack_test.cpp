@@ -14,12 +14,19 @@ void repair(std::vector<std::byte>& b){write(b,28,crc32(std::span(b).first(28),s
 int main(int argc,char** argv){
     assert(argc==2);std::ifstream file(argv[1],std::ios::binary);assert(file.good());
     std::vector<char> raw((std::istreambuf_iterator<char>(file)),{});std::vector<std::byte> bytes(raw.size());std::memcpy(bytes.data(),raw.data(),raw.size());
-    TexturePack pack;assert(TexturePack::open(bytes,pack)==PackError::none&&pack.size()==4);
+    TexturePack pack;assert(TexturePack::open(bytes,pack)==PackError::none&&pack.size()==5);
     TextureView image;
     for(unsigned id=1;id<=4;++id){assert(pack.image(id,image)==PackError::none);assert(unsigned(image.image.format)==id-1);
         assert(image.image.width==16&&image.image.height==16&&image.image.mipLevels==2);
         TextureInfo info{16,16,TextureFormat(id-1)};info.mipLevels=2;assert(image.payload.size()==textureBytes(info));
     }
+    assert(pack.image(6,image)==PackError::none&&image.image.format==TextureFormat::rgba5551);
+    assert(image.image.width==16&&image.image.height==16&&image.image.mipLevels==2&&image.payload.size()==640);
+    {auto rgba5551=bytes;write(rgba5551,76,5);repair(rgba5551);TexturePack p;
+        assert(TexturePack::open(rgba5551,p)==PackError::none&&p.image(2,image)==PackError::none);
+        assert(image.image.format==TextureFormat::rgba5551&&image.payload.size()==640&&!std::memcmp(image.payload.data(),bytes.data()+read(bytes,84),640));
+        write(rgba5551,88,624);repair(rgba5551);assert(TexturePack::open(rgba5551,p)==PackError::layout);}
+    {auto old=bytes;write(old,8,2);repair(old);TexturePack p;assert(TexturePack::open(old,p)==PackError::header);}
     assert(pack.image(9,image)==PackError::missing&&image.payload.empty());
     std::vector<std::byte> unaligned(bytes.size()+1);std::memcpy(unaligned.data()+1,bytes.data(),bytes.size());
     assert(TexturePack::open(std::span(unaligned).subspan(1),pack)==PackError::none&&pack.image(1,image)==PackError::none);
@@ -33,5 +40,5 @@ int main(int argc,char** argv){
         assert(p.image(1,image)==PackError::none&&image.image.width==16&&image.payload.size()==1280);}
     {auto bad=bytes;bad[read(bad,52)]^=std::byte{1};TexturePack p;assert(TexturePack::open(bad,p)==PackError::none);
         assert(p.image(1,image)==PackError::checksum&&image.payload.empty());++rejected;}
-    std::printf("PASS four native image formats, mip chains, owned metadata, unaligned input and %u malformed/truncated rejections\n",rejected);
+    std::printf("PASS five native image formats, mip chains, owned metadata, unaligned input and %u malformed/truncated rejections\n",rejected);
 }

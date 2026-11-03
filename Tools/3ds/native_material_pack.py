@@ -1,4 +1,10 @@
-"""Mac-only native fragment-state writer. Never emits source command packets."""
+"""Offline native fragment-state writer; DUSKMT01 wire version3 only.
+
+Material payload bytes10/11 hold rasterLookup/lookupBase; byte26 is FogCarrier
+(none, primaryAlpha/Red, secondaryAlpha/Red, texture0/1/2 = 0..7).
+Stage bytes20..23 hold independent per-component native parameter selectors.
+Original texture-table IDs are unchanged; RG/BA/fog IDs append at TEX1.count+1/+2/+3.
+"""
 import math
 import struct
 import zlib
@@ -11,6 +17,7 @@ COMPARE=['never','always','equal','notEqual','less','lessEqual','greater','great
 BLENDS=['opaque','alpha','additive','custom'];CULL=['none','front','back']
 EQUATIONS=['add','subtract','reverseSubtract','minimum','maximum']
 FACTORS=['zero','one','sourceColor','oneMinusSourceColor','destinationColor','oneMinusDestinationColor','sourceAlpha','oneMinusSourceAlpha','destinationAlpha','oneMinusDestinationAlpha']
+FOG_CARRIERS=['none','primaryAlpha','primaryRed','secondaryAlpha','secondaryRed','texture0','texture1','texture2']
 MAX_FILE=32+64*(32+1248)
 
 def enum(value,values):
@@ -49,7 +56,7 @@ def stage_bytes(stage,mask,index):
     return bytes(result)
 
 def material_bytes(record):
-    allowed={'id','images','stages','blend','custom_blend','cull','depth','alpha','depth_test','depth_write','color_write','alpha_write','alpha_reference','buffer_rgb_mask','buffer_alpha_mask','buffer_color','fog_color','fog_values','fog_depth_flip','requires_fog','initial_snapshot_only'}
+    allowed={'id','images','stages','blend','custom_blend','cull','depth','alpha','depth_test','depth_write','color_write','alpha_write','alpha_reference','buffer_rgb_mask','buffer_alpha_mask','buffer_color','fog_color','fog_values','fog_depth_flip','requires_fog','initial_snapshot_only','raster_lookup','lookup_base','fog_carrier'}
     if not isinstance(record,dict) or set(record)-allowed:raise ValueError('Native material fields')
     identifier=integer(record['id'],0xffffffff)
     if not identifier:raise ValueError('Zero native material ID')
@@ -62,6 +69,24 @@ def material_bytes(record):
     fog=record.get('fog_values');result[6]|=16 if fog is not None else 0
     if boolean(record.get('fog_depth_flip',False)):result[6]|=32
     result[7]=integer(record.get('alpha_reference',0),255);result[8]=integer(record.get('buffer_rgb_mask',0),15);result[9]=integer(record.get('buffer_alpha_mask',0),15)
+    lookup=boolean(record.get('raster_lookup',False));base=integer(record.get('lookup_base',0),1)
+    carrier=enum(record.get('fog_carrier','none'),FOG_CARRIERS)
+    texture_carrier=carrier>=5;carrier_unit=carrier-5
+    lookup_mask=(1<<(base+2))-1 if lookup else 0
+    if (lookup and mask!=(lookup_mask|(1<<carrier_unit if texture_carrier else 0))) or (not lookup and base) or (carrier in (3,4) and not lookup):raise ValueError('Native lookup binding layout')
+    if texture_carrier and (not mask&(1<<carrier_unit) or lookup_mask&(1<<carrier_unit)):raise ValueError('Native fog texture binding layout')
+    if fog is not None and carrier:raise ValueError('Native fog LUT/carrier conflict')
+    if carrier:
+        last=stages[-1];secondary=carrier in (3,4);red=carrier in (2,4)
+        source='texture'+str(carrier_unit) if texture_carrier else 'texture'+str(base+(0 if red else 1)) if secondary else 'primary'
+        if len(stages)<2 or last.get('rgb')!=['constant','previous',source] or last.get('rgb_operand')!=['color','color','red' if red else 'alpha'] or last.get('rgb_function')!='interpolate' or last.get('alpha_function','replace')!='replace' or last.get('alpha',['primary'])[0]!='previous' or last.get('alpha_operand',['alpha'])[0]!='alpha' or last.get('constant_bindings')!=[29,30,31,32] or last.get('rgb_scale',0) or last.get('alpha_scale',0):
+            raise ValueError('Native final fog carrier equation')
+        if texture_carrier:
+            for stage in stages[:-1]:
+                for lane in ('rgb','alpha'):
+                    function=stage.get(lane+'_function','replace');arity=1 if function=='replace' else 3 if function in ('interpolate','multiplyAdd','addMultiply') else 2
+                    if source in stage.get(lane,['primary']*3)[:arity]:raise ValueError('Native fog texture unit already consumed')
+    result[10]=int(lookup);result[11]=base;result[26]=carrier
     struct.pack_into('<II',result,12,integer(record.get('buffer_color',0),0xffffffff),integer(record.get('fog_color',0),0xffffffff))
     blend=record.get('custom_blend',{})
     fields=['color','alpha','color_source','color_destination','alpha_source','alpha_destination']
@@ -82,6 +107,5 @@ def compile_materials(records):
     for identifier,images,data,requirements in rows:
         table.extend(struct.pack('<8I',identifier,cursor,len(data),zlib.crc32(data),*images,requirements));payload.extend(data);cursor+=len(data)
     if cursor>MAX_FILE:raise ValueError('Native material bank size')
-    version=2 if any(any(s.get('constant_bindings',[])) for m in records for s in m['stages']) else 1
-    prefix=struct.pack('<8s5I',b'DUSKMT01',version,cursor,len(rows),32,len(table))
+    prefix=struct.pack('<8s5I',b'DUSKMT01',3,cursor,len(rows),32,len(table))
     return prefix+struct.pack('<I',zlib.crc32(prefix+table))+table+payload

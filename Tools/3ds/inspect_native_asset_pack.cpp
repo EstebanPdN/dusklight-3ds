@@ -4,6 +4,7 @@
 #include <fstream>
 #include <memory>
 #include <vector>
+#include <cstring>
 alignas(4) extern const unsigned char native_scene_shader[]={0};extern const unsigned int native_scene_shader_size=1;
 alignas(4) extern const unsigned char native_scene_rigid_shader[]={1};extern const unsigned int native_scene_rigid_shader_size=1;
 alignas(4) extern const unsigned char native_scene_uv_shader[]={2};extern const unsigned int native_scene_uv_shader_size=1;
@@ -13,8 +14,13 @@ alignas(4) extern const unsigned char native_scene_rigid_projective_shader[]={5}
 using namespace dusk::pica;
 std::vector<std::byte> read(const char* path){std::ifstream f(path,std::ios::binary|std::ios::ate);if(!f)return {};const auto size=f.tellg();if(size<0||static_cast<std::size_t>(size)>AssetPack::maxBytes)return {};f.seekg(0);std::vector<std::byte> data(static_cast<std::size_t>(size));if(!f.read(reinterpret_cast<char*>(data.data()),size))return {};return data;}
 int main(int argc,char** argv){
-    if(argc!=4)return 2;auto original=read(argv[1]),bytes=read(argv[2]);SourceIdentity source;auto asset=std::make_unique<AssetPack>();
-    if(!identifySource(original,source)||AssetPack::open(bytes,source,*asset)!=PackError::none)return 3;
+    if(argc!=5||std::strlen(argv[4])!=64)return 2;auto original=read(argv[1]),bytes=read(argv[2]);SourceIdentity source;auto asset=std::make_unique<AssetPack>();
+    if(!identifySource(original,source))return 3;
+    constexpr char digits[]="0123456789abcdef";
+    for(unsigned n=0;n<32;++n){const auto* hi=std::strchr(digits,argv[4][n*2]);const auto* lo=std::strchr(digits,argv[4][n*2+1]);
+        if(!hi||!lo)return 2;source.imageContext[n]=std::uint8_t((hi-digits)*16+(lo-digits));}
+    source.hasImageContext=true;
+    if(AssetPack::open(bytes,source,*asset)!=PackError::none)return 3;
     for(unsigned n=0;n<asset->plan.size();++n){PartBinding p;unsigned pass;MeshView mesh;GeometryInfo info;
         if(!asset->plan.entry(n,p,pass)||asset->meshes.mesh(p.mesh,mesh)!=PackError::none||!inspectPackedGeometry(mesh.vertices,mesh.indices,info))return 4;
         const auto* binding=asset->plan.uniform(p.uniformSlot);if(!binding||binding->paletteCount<=info.highestBone)return 5;
@@ -28,7 +34,8 @@ int main(int argc,char** argv){
     const GameSourceProducer producer=+[](const void*,const UniformBinding&,DrawUniforms&,void* p) noexcept{++*static_cast<unsigned*>(p);return false;};
     const bool admitted=factory->bind(&instance,source,producer,&calls,orderingInput);const auto error=factory->error();
     if(admitted||error!=GameAssetError::inputs||calls||nativeMock::allocationCalls!=allocations||!factory->empty()||!draw->empty())return 9;
-    if(asset->requiresTextureContext&&(factory->bind(&instance,source,producer,&calls,63)||factory->error()!=GameAssetError::textureContext||nativeMock::allocationCalls!=allocations||calls||!factory->empty()))return 11;
+    auto missing=source;missing.hasImageContext=false;
+    if(factory->bind(&instance,missing,producer,&calls,63)||factory->error()!=GameAssetError::textureContext||nativeMock::allocationCalls!=allocations||calls||!factory->empty())return 11;
     if(!renderer->releaseAfterContextDestroyed()||!nativeMock::allocations.empty())return 10;
     std::printf("{\"parts\":%u,\"uniform_slots\":%u,\"required_inputs\":%u,\"source_shapes\":[",asset->plan.size(),asset->plan.uniformCount(),asset->plan.requiredInputs());
     for(unsigned n=0;n<asset->plan.size();++n)std::printf("%s%u",n?",":"",asset->shapes[n]);

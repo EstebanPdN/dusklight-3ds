@@ -10,7 +10,8 @@ args = parser.parse_args()
 out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
 sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
 def function(path, name):
-    text = path.read_text(); match = re.search(r'\b' + re.escape(name) + r'\(', text)
+    text = path.read_text()
+    match = re.search(r'\b' + re.escape(name) + r'\(', text)
     start = text.rfind('\n', 0, match.start()) + 1
     body = text.index('{', match.start()); end = body + 1; depth = 1
     while depth:

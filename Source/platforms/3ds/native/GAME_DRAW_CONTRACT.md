@@ -24,7 +24,7 @@ high-level packet order and hidden-shape decisions are retained. The bridge does
 not interpret command bytes, source materials or registers. A visible shape
 selects all its precompiled native parts, preserving their native order.
 
-At most64 live instance bindings are stored; each model contains at most64 parts.
+At most64 live instance bindings are stored; each model contains at most1024 parts.
 Each mapping entry names an original shape0..4095, matching the game shape object's
 index. The Mac asset factory must verify model identity/ownership and construct
 that correspondence from its native model plan/import receipts. It must not guess
@@ -47,12 +47,13 @@ direct GameDraw::forget does not unload the separately owned resident asset.
 The global game::forget wrapper also notifies GameAssets: the last bound
 instance retires that asset and releases its CPU metadata.
 
-Per-shape budget/parameter/resource preflight remains in Model::drawParts.
-Backend failure may follow a submitted prefix. Submission reports that count;
-the game boundary includes it in its fatal diagnostic and never selects the old
-model renderer afterwards. A material packet can have earlier successful shapes
-before a later failure; no transaction rollback is promised. Packet-chain traversal
-is bounded1024 to reject corrupt/cyclic hidden chains as well as visible chains.
+GameDraw checks each selected shape against the remaining frame draw budget and
+preflights all of its parts before submission. Backend failure may follow a
+submitted prefix. Submission reports that count; the game boundary includes it in
+its fatal diagnostic and never selects the old model renderer afterwards. A
+material packet can have earlier successful shapes before a later failure; no
+transaction rollback is promised. Packet-chain traversal is bounded1024 to
+reject corrupt/cyclic hidden chains as well as visible chains.
 
 ## Shared SDK frame and state boundary
 
@@ -88,11 +89,18 @@ those semantics before a graphics acceptance claim.
 
 ## Bootstrap, limits and teardown
 
-Game startup initializes this native session after Citro3D, with a declared512KiB
-command buffer. Existing UI/effects setup remains transitional. Normal frame and
-model dispatch code is selected by the same build definition across all game
-object/static-library targets, avoiding mismatched inline destructor behavior.
-There is no runtime toggle to silently enable old model-packet fallback.
+Game startup passes the same 4 MiB + 32 KiB command size to `C3D_Init` and the
+native renderer. The game frame permits at most4096 native draws, independently
+of the1024-part per-model limit. Before every native draw the shared queue owner
+reserves 32 KiB of command space, splitting and waiting for reported queue
+completion before reusing the arena when needed. Failure refuses the draw;
+splitting alone does not authorize reuse. The existing libctru unrelated-IRQ
+accounting limitation can report completion early and remains unresolved. This
+keeps the existing 16 MiB linear and 80 MiB libc heap allocations unchanged;
+neither heap's real-game headroom is proven.
+Existing UI/effects setup remains transitional. Normal frame and model dispatch
+code is selected by the same build definition across all game object/static-library
+targets. There is no runtime toggle to silently enable old model-packet fallback.
 
 The global session is one-context-lifetime only; repeated initialization after
 teardown rejects before allocation. Models must be forgotten and resident assets
@@ -102,13 +110,13 @@ released. Incomplete registry/frame ownership prevents a normal clean-release
 claim and main uses direct kernel containment. Any remaining native asset/instance ownership also prevents normal release;
 there is no implicit destructor-time GPU cleanup.
 
-ARM object sizes: GameDraw80400B, Model4520B, Renderer124840B. The bootstrap retains
-one renderer and one bridge. GameDraw contains a shared64-slot uniform workspace
-and64 fixed instance records, not a full workspace per instance. These CPU bytes,
-asset payloads and renderer allocations must be included in eventual real hardware
-admission/telemetry. The helper's largest local compiler frame is1456B; this is
-not a full call-chain/SDK/interrupt stack bound. No hardware RAM/FPS saving or
-complete memory suitability has been demonstrated.
+Earlier checkpoint ARM object sizes predate framebuffer-role metadata and must be remeasured. The bootstrap retains
+one renderer and one bridge. GameDraw has64 fixed instance records and one shared
+uniform workspace bounded to512KiB, not a full workspace per instance. These CPU
+bytes, asset payloads and renderer allocations must be included in eventual real
+hardware admission/telemetry. The helper's largest local compiler frame is1456B;
+this is not a full call-chain/SDK/interrupt stack bound. No hardware RAM/FPS
+saving or complete memory suitability has been demonstrated.
 
 Actual game ARM objects and native library compilation, preprocessor/disassembly
 inspection and host SDK-substitute fixtures verify the call boundary. They do
@@ -129,7 +137,7 @@ all game libraries must use the same DUSK_PICA_GAME_DRAW definition.
 The actual source shape boundary calls J3DModel::drawNativeShape, which reaches
 GameAssets via game::drawSourceShape. Native asset keys contain original bytes,
 not addresses or display-list identities. The provisional development lookup is
-sdmc:/3ds/DuskLight/native/<64 lowercase SHA256 characters>.dna. These are private
+sdmc:/3ds/DuskLight/native/<source-sha256>-<image-context-sha256>.dna. These are private
 authoring banks, not a delivered SD layout or a replacement for the owner's
 one-file extractor requirement. Native payload/index embedding into a separately
 prepared zelda.twilight remains packaging work; the original bundle is unchanged.
@@ -151,24 +159,32 @@ empty()/normal shutdown must not report success in that state.
 
 The producer receives a native UniformBinding, not source registers. Original
 animated joint/envelope matrices are already calculated by gameplay; gathering
-at most8 of them does not CPU-transform vertices. copyNativePalette refuses
-shared/no-animation banks (source flags0x10/0x100), invalid views, billboards,
-CPU deformation/skinning/color/custom calculators and unsupported numeric values.
-The shared-bank guard precedes view indexing. Position/normal space conventions
-and complete animated-character GPU behavior still require further integration.
+at most four of them does not CPU-transform vertices. For concat-view shapes it
+concatenates the packet base with the remapped joint/envelope animation matrix;
+ordinary SMTX/SMML shapes consume their calculated draw and normal banks.
+Supported concat-view billboard loaders use the J3D view, as in the source.
+Unsupported shared/no-matrix banks (flag 0x100), CPU skinning, custom deformation,
+invalid matrix groups and unsupported numeric values reject.
 
-The live source adapter advertises ONLY orderingInput. Even the poseInput flag
-is withheld because DrawUniforms also needs the correct native camera transform.
-Its parameter callback can gather the palette but explicitly returns failure
-until the remaining recipe is implemented. The factory checks ModelPlan's full
-input requirements before Model::load/GPU allocation. Current real banks thus
-refuse as incomplete; none becomes rendering-ready merely by being present.
+The source adapter advertises the pose, ordering, color, lighting, texgen and
+fog producers; individual material, camera, geometry and parameter proofs can
+still reject. The factory checks the ModelPlan's declared inputs before GPU
+allocation. This is not proof of complete animated-character behavior.
 
 An external image can differ across contexts even for identical BMD source bytes.
-AssetPack marks such banks; GameAssets refuses them unconditionally after input
-preflight until a dependency/variant identity is implemented. An all-inputs mask
-cannot bypass this. Stable optional fog environments must also match exactly
-when sharing an asset; dynamic fog updates remain unsupported.
+The ordered `DUSKCTX1` digest selects and validates the actual variant.
+Only the registered framebuffer-color provider gets a stable `DUSKROLE1` role
+digest; unknown mutable images and depth captures reject. The v2 texture pack
+retains that slot's original ID without dummy pixels or owned GPU storage.
+After every producer callback completes, submission materializes a matching
+deferred copy and borrows the compatibility cache's current RGBA8 texture.
+Clamp/single-mip sampling and padded affine/projective UVs match compatibility;
+borrowed slots are generation checked and never flushed, deleted or charged as
+native-owned texture bytes. Synthetic fog/lookup units remain independent.
+Stable optional fog environments must also match exactly when sharing an asset.
+This targets parity with the existing compatibility capture, not proof of exact
+GX copy-filter coefficients or half-scale tap phase. Existing libctru
+unrelated-IRQ queue accounting and physical hardware remain independent limits.
 
 Latest ARM factory local frame:11,768 bytes, excluding callees/SDK/interrupts.
 All successful paths explicitly forget/unload before context destruction. No
@@ -189,8 +205,27 @@ publication clears prior validity; producer-time invalidation poisons the
 current preflight. A fresh main-target publication after an offscreen pass
 requires a subsequent main-target bind.
 
-The current J3D producer supplies pose/ordering and this camera only. Matrix
-calculation modes requiring additional world-to-view concatenation, CPU skin
-paths, billboards and custom deformations reject. Other required inputs still
-reject through model-plan admission. Host point mapping, rejection/reset and
-actual helper/producer fixtures are distinct from physical raster validation.
+The current J3D producer supplies pose, live material inputs and this camera.
+Unsupported matrix calculation modes, CPU skin paths, custom deformations and
+unproved producer inputs reject. Host point mapping, rejection/reset and actual
+helper/producer fixtures are distinct from physical raster validation.
+
+### Mirror pass
+
+The mirror preserves the current perspective/viewport; only its reflected packet
+base and logical scissor change. Its game-facing publisher verifies that the
+saved projection matches the canonical authored scene matrix, uses the actual
+saved viewport and integer mirror bounds, and intersects the physical scissor
+with the viewport. A mismatched projection or empty/unsupported region fails
+closed. After the compatibility mirror depth/mask quads restore GX projection
+and scissor, the original native camera and scissor are explicitly republished.
+
+Each native mirror shape uses the normal source-identified packet boundary,
+never J3D display lists. Scoped overrides bind the exact model/shape/material,
+write all four ambient-0 channels from the environment, and map GX front-cull
+to native back-cull without mutating the material. The packet's reflected base
+is used by concat-view palettes; ordinary SMTX/SMML and billboard loaders retain
+their source drawFast semantics. Mixed packet ownership and unsupported matrix
+producers reject. Compatibility quads remain ordered after the reflected models.
+Host SDK-substitute tests cover publication, restoration and the overrides; they
+do not establish emulator or hardware raster equivalence.

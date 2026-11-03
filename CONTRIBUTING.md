@@ -28,6 +28,10 @@ and issue attachments. The [testing guide](docs/TESTING.md) explains historical
 runner prerequisites and the [diagnostic guide](docs/DIAGNOSTICS.md) describes
 useful sanitized reports.
 
+Before opening a pull request, run the [local lint commands](docs/TESTING.md#local-lint-commands)
+as well as the relevant behavioral checks. GitHub Actions checks both host
+compilers and native build profiles; it never publishes a binary automatically.
+
 ## Licensing and attribution
 
 Preserve upstream copyright and license notices. Any new dependency needs an

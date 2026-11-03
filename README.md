@@ -69,9 +69,10 @@ are available for developers in [Building](docs/BUILDING.md).
 The port targets **New Nintendo 3DS, New Nintendo 3DS XL and New Nintendo 2DS XL**.
 Old Nintendo 3DS and Old Nintendo 2DS are outside the current target.
 
-A user-supplied **GameCube USA revision 0** game image (`GZ2E01`) is required for
-runtime data preparation. No disc image, extracted game data, save or private
-memory capture is included. See [Game data](docs/GAME_DATA.md).
+A user-supplied **GameCube USA or European/PAL revision 0** game image
+(`GZ2E01` or `GZ2P01`) is required for runtime data preparation. No disc image,
+extracted game data, save or private memory capture is included.
+See [Game data](docs/GAME_DATA.md).
 
 ## Documentation
 

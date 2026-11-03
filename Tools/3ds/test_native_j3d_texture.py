@@ -47,6 +47,7 @@ def main():
            'platforms/3ds/runtime/gx_tev_commands.cpp', 'platforms/3ds/gx_api.cpp', 'src/helpers/string.cpp', 'libs/JSystem/src/JSupport/JSUList.cpp']
     cpp += ['platforms/3ds/runtime/gx_texture_commands.cpp','platforms/3ds/runtime/gd_native.cpp','libs/JSystem/src/J3DGraphBase/J3DGD.cpp','libs/JSystem/src/J3DGraphBase/J3DTevs.cpp','libs/JSystem/src/J3DGraphBase/J3DSys.cpp','platforms/3ds/runtime/gx_transform_commands.cpp','platforms/3ds/runtime/gx_vertex_commands.cpp','platforms/3ds/runtime/gx_lighting_commands.cpp', 'platforms/3ds/runtime/gx_stream.cpp', 'platforms/3ds/runtime/gx_commands.cpp', 'platforms/3ds/runtime/gx_vertex_decode.cpp', 'platforms/3ds/gx_command_api.cpp', 'extern/aurora/lib/gx/dl.cpp', 'extern/aurora/lib/gx/attr_fmt.cpp']
     cpp += ['platforms/3ds/runtime/texture_resources.cpp','platforms/3ds/tests/host_j3d_boundaries.cpp']
+    cpp += ['platforms/3ds/native/game_source.cpp','platforms/3ds/native/contracts.cpp']
     cpp += ['platforms/3ds/runtime/'+name+'.cpp' for name in
             ['gx_copy_execution','gx_copy_pixels','gx_copy_commands','gx_framebuffer','gx_framebuffer_scale','copy_lifecycle_probe']]
     cpp += ['libs/JSystem/src/JKernel/' + name + '.cpp' for name in
@@ -75,6 +76,8 @@ def main():
                'source_sha256': {p: sha(SOURCE / p) for p, _, _ in units},
                'header_sha256': {p: sha(SOURCE / p) for p in [
                    'libs/JSystem/include/JSystem/JKernel/JKRHeap.h', 'libs/JSystem/include/JSystem/JKernel/JKRExpHeap.h',
+                   'include/m_Do/m_Do_graphic.h', 'platforms/3ds/native/game_source.hpp',
+                   'platforms/3ds/runtime/gx_copy_images.hpp',
                    'libs/JSystem/include/JSystem/J3DGraphBase/J3DTexture.h', 'platforms/3ds/runtime/texture_gx.hpp', 'libs/JSystem/include/JSystem/JUtility/JUTTexture.h', 'platforms/3ds/runtime/gx_state.hpp','platforms/3ds/runtime/gx_texture_commands.hpp','platforms/3ds/runtime/copy_lifecycle_probe.hpp','platforms/3ds/runtime/alpha_interval_target.hpp','platforms/3ds/gx_pica.hpp','platforms/3ds/gx_texture_pica.hpp','platforms/3ds/runtime/gx_copy_pixels.hpp','platforms/3ds/runtime/gx_profile.hpp']},
                'runner_sha256': sha(Path(__file__)), 'sanitizers': environment,
                'private_disc': 'not requested',

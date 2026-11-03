@@ -18,11 +18,12 @@ def append(block,alignment,payload):
 def finish(block,kind):
     block.extend(bytes((-len(block))%32));block[:4]=kind;word(block,4,len(block));return bytes(block)
 
-def model(primitive=0x98,groups=2,color_type=0,normal_count=0,shape_mode=3):
+def model(primitive=0x98,groups=2,color_type=0,normal_count=0,shape_mode=3,color1_type=None,color1_kind=2,color0_present=True):
     # Source fields are serialized independently from the converter, following
     # J3DVertexBlock/J3DShapeInitData/J3DShapeMtxInitData in the original headers.
     v=bytearray(64)
-    formats=[(9,1,3,2),(10,normal_count,1,0),(11,int(color_type>=3),color_type,0),(13,1,3,8),(14,1,4,0)]
+    formats=[(9,1,3,2),(10,normal_count,1,0),*([(11,int(color_type>=3),color_type,0)] if color0_present else []),
+             *([(12,int(color1_type>=3),color1_type,0)] if color1_type is not None else []),(13,1,3,8),(14,1,4,0)]
     raw=b''.join(struct.pack('>IIIB3x',*f) for f in formats)+struct.pack('>I12x',255)
     word(v,8,append(v,16,raw))
     positions=[(-8,0,0),(8,0,0),(8,8,0),(-8,8,0)]
@@ -30,7 +31,10 @@ def model(primitive=0x98,groups=2,color_type=0,normal_count=0,shape_mode=3):
     word(v,16,append(v,16,bytes([0,0,64])))
     colors=[0xf800,0x07e0,0x001f,0xffff]
     color_payload=b''.join(struct.pack('>H',c) for c in colors) if color_type in (0,3) else bytes([255,0,0,255]*4)
-    word(v,24,append(v,16,color_payload))
+    if color0_present:word(v,24,append(v,16,color_payload))
+    # CLR1 has its own format, byte stride and array, distinct from RGB565 CLR0.
+    color1_raw=[b'\x07\xe0',b'\x11\x22\x33',b'\x11\x22\x33\x00',b'\xf1\x08',b'\xff\x00\x00',b'\x11\x22\x33\x44']
+    if color1_type is not None:word(v,28,append(v,16,color1_raw[color1_type]*4))
     uv=[(-128,0),(256,0),(256,320),(-128,320)]
     word(v,32,append(v,16,b''.join(struct.pack('>2h',*p) for p in uv)))
     v=finish(v,b'VTX1')
@@ -39,7 +43,8 @@ def model(primitive=0x98,groups=2,color_type=0,normal_count=0,shape_mode=3):
     s=bytearray(44);half(s,8,1)
     init=bytearray(40);init[0]=shape_mode;half(init,2,groups)
     word(s,12,append(s,4,init));word(s,16,append(s,2,struct.pack('>H',0)))
-    desc=[(0,1),(9,3),(10,2),(11,2),(13,3),(14,1)]
+    desc=[(0,1),(9,3),(10,2),*([(11,2)] if color0_present else []),
+          *([(12,color1_kind)] if color1_type is not None else []),(13,3),(14,1)]
     word(s,24,append(s,4,b''.join(struct.pack('>II',*item) for item in reversed(desc))+struct.pack('>II',255,0)))
     word(s,28,append(s,2,struct.pack('>4H',0,1,65535,2)))
     display=bytearray();draws=[]
@@ -47,7 +52,11 @@ def model(primitive=0x98,groups=2,color_type=0,normal_count=0,shape_mode=3):
         start=len(display);display.extend(struct.pack('>BH',primitive,4 if primitive!=0x90 else 3))
         for i in range(4 if primitive!=0x90 else 3):
             selector=3 if i in (1,2) else 0
-            display.extend(struct.pack('>BHBBH2f',selector,i,0,i,i,float(i)+.25,float(group)+.5))
+            display.extend(struct.pack('>BHB',selector,i,0))
+            if color0_present:display.append(i)
+            if color1_type is not None:
+                display.extend(color1_raw[color1_type] if color1_kind==1 else i.to_bytes(color1_kind-1,'big'))
+            display.extend(struct.pack('>H2f',i,float(i)+.25,float(group)+.5))
         display.extend(bytes((-len(display))%32));draws.append((len(display)-start,start))
     word(s,32,append(s,32,display))
     word(s,36,append(s,4,b''.join(struct.pack('>HHI',0,2,2*g) for g in range(groups))))
@@ -67,21 +76,53 @@ def main():
         assert mesh['vertices'][0]['uv'][0]==[-.5,0]
         assert mesh['vertices'][0]['uv'][1]==[.25,group+.5]
         assert mesh['vertices'][0]['color']==[255,0,0,255]
+        assert mesh['vertices'][0]['color1']==[255]*4
+        assert metadata['meshes'][group]['source_attributes']==[0,9,10,11,13,14]
         assert mesh['vertices'][1]['bones']==[1,0,0,0]
     assert native==pack.compile_pack(document) and native==convert.convert(source)[1]
     assert convert.topology(0x80,4)==[(0,1,2),(2,3,0)]
     assert convert.topology(0xa0,4)==[(0,1,2),(0,2,3)]
     # All supported numeric/color paths have independently expected bytes.
     arrays=convert.Arrays(convert.sections(source)['VTX1'])
-    for kind,raw,want in [(0,b'\xf8\x00',[255,0,0,255]),(0,b'\xa5\x14',[165,162,165,255]),(1,b'\x11\x22\x33',[17,34,51,255]),(2,b'\x11\x22\x33\x00',[17,34,51,255]),
-                          (3,b'\xf1\x08',[255,17,0,136]),(4,b'\xff\x00\x00',[255,195,0,0]),(5,b'\x11\x22\x33\x44',[17,34,51,68])]:
-        arrays.formats[11]=(int(kind>=3),kind,0);assert arrays.decode(11,raw)==want,(kind,arrays.decode(11,raw),want)
+    color_cases=[(0,b'\xf8\x00',[255,0,0,255]),(0,b'\xa5\x14',[165,162,165,255]),(1,b'\x11\x22\x33',[17,34,51,255]),(2,b'\x11\x22\x33\x00',[17,34,51,255]),
+                 (3,b'\xf1\x08',[255,17,0,136]),(4,b'\xff\x00\x00',[255,195,0,0]),(5,b'\x11\x22\x33\x44',[17,34,51,68])]
+    for attr in (11,12):
+        for kind,raw,want in color_cases:
+            arrays.formats[attr]=(int(kind>=3),kind,0)
+            assert arrays.layout(attr)==len(raw) and arrays.decode(attr,raw)==want,(attr,kind,want)
+    for kind,want in [(0,[0,255,0,255]),(1,[17,34,51,255]),(2,[17,34,51,255]),(3,[255,17,0,136]),(4,[255,195,0,0]),(5,[17,34,51,68])]:
+        for encoding in (1,2,3):
+            doc,bank,manifest=convert.convert(model(color1_type=kind,color1_kind=encoding))
+            for mesh,binding in zip(doc['meshes'],manifest['meshes']):
+                assert binding['source_attributes']==[0,9,10,11,12,13,14]
+                assert [v['color1'] for v in mesh['vertices']]==[want]*4
+                assert [v['color'] for v in mesh['vertices']]==[[255,0,0,255],[0,255,0,255],[0,0,255,255],[255]*4]
+            vo=struct.unpack_from('<I',bank,44)[0]
+            assert bank[vo+48:vo+56]==bytes([255,0,0,255]+want)
+    doc,_,manifest=convert.convert(model(color1_type=5,color0_present=False))
+    assert manifest['meshes'][0]['source_attributes']==[0,9,10,12,13,14]
+    assert doc['meshes'][0]['vertices'][0]['color']==[255]*4
+    assert doc['meshes'][0]['vertices'][0]['color1']==[17,34,51,68]
+    # Equal positions but independently different colors must not deduplicate.
+    arrays=convert.Arrays(convert.sections(model(color1_type=5))['VTX1'])
+    pairs=[(0,0),(0,1),(1,0)]*2
+    data=struct.pack('>BH',0x90,6)+b''.join(struct.pack('>BB4B',0,c,*([17,34,51,68] if d==0 else [85,102,119,136])) for c,d in pairs)
+    vertices,indices,palette,count=convert.packets(data,[(9,2),(11,2),(12,1)],arrays,[0])
+    assert indices==[0,1,2,0,1,2] and palette==[0] and count==1
+    assert [(v['color'],v['color1']) for v in vertices]==[
+        ([255,0,0,255],[17,34,51,68]),([255,0,0,255],[85,102,119,136]),([0,255,0,255],[17,34,51,68])]
+    for attr,kind in [(11,0),(12,5)]:
+        arrays.formats[attr]=(int(kind>=3),kind,0)
+        offset=arrays.offsets[attr];past=(arrays.ends[offset]-offset)//arrays.layout(attr)
+        try:arrays.fetch(attr,past)
+        except ValueError:pass
+        else:raise AssertionError('Color fetch crossed its own array bound')
     refused=0
     for i in range(len(source)):
         try:convert.convert(source[:i])
         except (ValueError,struct.error,UnicodeDecodeError):refused+=1
         else:raise AssertionError('Truncated model accepted')
-    for raw in [model(normal_count=1),model(shape_mode=1),model(primitive=0xb8)]:
+    for raw in [model(normal_count=1),model(shape_mode=4),model(primitive=0xb8)]:
         try:convert.convert(raw)
         except convert.Unsupported:refused+=1
         else:raise AssertionError('Unsupported source rendered as success')

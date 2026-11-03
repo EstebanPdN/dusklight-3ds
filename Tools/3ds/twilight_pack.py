@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Private, bounded GameCube USA r0 -> DuskLight indexed asset container v1."""
+"""Private, bounded GameCube USA/PAL r0 -> DuskLight indexed asset container v1."""
 import argparse
 import bisect
 import hashlib
@@ -70,8 +70,9 @@ def layout(read, length):
     """Validate the complete original FST, return retained extents and file records."""
     require(0x440 <= length <= 0x7fffffff, 'Unsupported logical disc size')
     hdr = read(0, 0x440)
-    require(hdr[:8] == b'GZ2E01\0\0' and hdr[0x18:0x20] == b'\0\0\0\0\xc2\x33\x9f\x3d',
-            'Requires GameCube USA revision 0 (GZ2E01)')
+    require(hdr[:8] in (b'GZ2E01\0\0', b'GZ2P01\0\0') and
+            hdr[0x18:0x20] == b'\0\0\0\0\xc2\x33\x9f\x3d',
+            'Requires GameCube USA or PAL revision 0 (GZ2E01/GZ2P01)')
     dol, fst, fs = struct.unpack_from('>III', hdr, 0x420)
     require(dol >= 0x440 and fst >= 0x440 and 12 <= fs <= 4 * CHUNK and
             extent(length, dol, 256) and extent(length, fst, fs), 'Invalid DOL/FST bounds')

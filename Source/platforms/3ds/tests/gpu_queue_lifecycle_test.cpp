@@ -24,9 +24,9 @@ OSThread* current = &owner;
 gxCmdEntry_s entries[32]{};
 gxCmdQueue_s queue{entries, 32, 0, 0, 0, nullptr, nullptr};
 std::deque<unsigned> device;
-u32 commands[16384]{}, offset{};
+u32 commands[16384]{}, *currentCommands=commands, commandWords=16384, offset{};
 u64 tick{};
-unsigned submitted{}, completed{}, slept{}, flushes{};
+unsigned submitted{}, completed{}, slept{}, flushes{}, bufferResets{};
 bool stalled{}, flushOkay = true, unrelatedIrq{};
 std::atomic<bool> callbackActive{},releaseCallback{},callbackWaitMode{};
 bool inFrame{},tailAssembled{};
@@ -64,14 +64,16 @@ extern "C" Result gspSubmitGxCommand(const u32* data) {
     ++submitted; device.push_back(data[0] & 0xff); return 0;
 }
 extern "C" void GPUCMD_GetBuffer(u32** buffer, u32* size, u32* at) {
-    if (buffer) *buffer = commands;
-    if (size) *size = 16384;
+    if (buffer) *buffer = currentCommands;
+    if (size) *size = commandWords;
     if (at) *at = offset;
 }
-extern "C" void GPUCMD_SetBuffer(u32*, u32, u32 at) { offset = at; }
+extern "C" void GPUCMD_SetBuffer(u32* buffer, u32 size, u32 at) {
+    currentCommands=buffer;commandWords=size;offset=at;++bufferResets;
+}
 extern "C" void C3D_FrameSplit(u8 flags) {
     assert(flags == GX_CMDLIST_FLUSH);
-    if (offset) { add(1); offset = 0; }
+    if (offset) { assert(offset<=commandWords);add(1);currentCommands+=offset;commandWords-=offset;offset=0; }
 }
 extern "C" void C3D_FrameSync() {assert(!callbackActive);}
 extern "C" bool C3D_FrameBegin(u8 flags) {
@@ -179,6 +181,16 @@ int main(int argc, char** argv) {
     } else if (!std::strcmp(name,"frame-timeout")) {
         add(4);stalled=true;offset=8;
         assert(!platformEndGpuFrame(0)&&!tailAssembled&&queue.numEntries==1&&offset==8&&platformGpuFailurePending());
+    } else if (!std::strcmp(name,"command-reclaim")) {
+        assert(platformBeginGpuCommands());
+        offset=8192;assert(platformPrepareGpuDraw()&&offset==8192&&flushes==0&&bufferResets==0);
+        offset=8193;assert(platformPrepareGpuDraw());
+        assert(submitted==1&&completed==1&&flushes==1&&bufferResets==1);
+        assert(currentCommands==commands&&commandWords==16384&&offset==0);
+    } else if (!std::strcmp(name,"command-reclaim-failure")) {
+        assert(platformBeginGpuCommands());
+        offset=8193;stalled=true;assert(!platformPrepareGpuDraw());
+        assert(submitted==1&&completed==0&&bufferResets==0&&currentCommands==commands+8193&&commandWords==8191);
     } else std::abort();
     std::printf("%s result=%d submitted=%u completed=%u remaining=%zu queue=%u/%u/%u polls=%u\n",
                 name, int(result), submitted, completed, device.size(), queue.lastEntry, queue.curEntry, queue.numEntries, slept);

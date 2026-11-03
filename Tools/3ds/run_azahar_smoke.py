@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bounded emulator smoke test; private ISO read-only, workspace-only writes."""
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import datetime
 import hashlib
 import json
@@ -16,12 +16,15 @@ import stat
 import subprocess
 import sys
 import time
+import struct
+import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import capture_to_png  # noqa: E402
 import azahar_debug  # noqa: E402
 import gdb_sampler  # noqa: E402
 import twilight_pack  # noqa: E402
+import native_asset_pack  # noqa: E402
 from azahar_run_report import inspect_run, STOP_FAILURE  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -125,6 +128,136 @@ def inspect_data_bundle(path, *, expected=None):
     if expected is not None and record != expected:
         raise ValueError('Data bundle changed during emulator execution')
     return record
+
+
+def validate_native_asset(data, name):
+    """Validate the v2 envelope only; the guest owns native bank decoding."""
+    require = twilight_pack.require
+    require(160 <= len(data) <= native_asset_pack.MAX_BYTES and data[:8] == b'DUSKNA02',
+            'Native asset signature/extent')
+    version, size, source_size, count = struct.unpack_from('<4I', data, 8)
+    require(version == 2 and size == len(data), 'Native asset version/declared size')
+    require(32 <= source_size <= 16 << 20 and 1 <= count <= native_asset_pack.MAX_MODEL_PARTS,
+            'Native asset source extent/count')
+    require(name == data[24:56].hex() + '-' + data[100:132].hex() + '.dna',
+            'Native asset filename identity mismatch')
+    require(struct.unpack_from('<I', data, 96)[0] <= 1 and not any(data[132:156]),
+            'Native asset context/reserved flags')
+    # Same CRC convention as compile_asset/prepare_native_assets.verify_asset:
+    # the CRC field itself is omitted, not zeroed.
+    require(struct.unpack_from('<I', data, 156)[0] ==
+            zlib.crc32(memoryview(data)[160:], zlib.crc32(memoryview(data)[:156])),
+            'Native asset CRC mismatch')
+    cursor = 160
+    for index in range(5):
+        offset, length = struct.unpack_from('<2I', data, 56 + index * 8)
+        require(offset == cursor and length <= len(data) - cursor, 'Native asset bank extent')
+        require((length == count * 4 if index == 4 else length >= 32 or index == 1 and length == 0),
+                'Native asset bank length')
+        end = (cursor + length + 15) & ~15
+        require(end <= len(data) and not any(data[cursor + length:end]), 'Native asset bank padding')
+        cursor = end
+    require(cursor == len(data), 'Native asset trailing bytes')
+
+
+def stage_native_assets(path, sd):
+    """Preflight pinned private banks, then exclusively copy verified bytes."""
+    path = Path(os.path.abspath(path))
+    destination = sd / 'native'
+    with ExitStack() as stack:
+        parent, directory_name, unused = stack.enter_context(card_private_parent(path))
+        directory = os.open(directory_name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        stack.callback(os.close, directory)
+        before_directory = os.fstat(directory)
+        if before_directory.st_uid != os.getuid():
+            raise ValueError('Native asset directory must be owner-side')
+        try:
+            os.stat('.git', dir_fd=directory, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError('Native assets must not enter a nested Git repository')
+        names = []
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if not entry.name.endswith('.dna'):
+                    continue  # Preparer receipts, extracted inputs and tools are not bank bytes.
+                if not re.fullmatch(r'[0-9a-f]{64}-[0-9a-f]{64}\.dna', entry.name):
+                    raise ValueError('Native asset filename must contain canonical identity hashes')
+                names.append(entry.name)
+                if len(names) > 256:
+                    raise ValueError('Native asset directory exceeds 256 banks')
+        if not names:
+            raise ValueError('Native asset directory requires 1..256 banks')
+        selected = []
+        total = 0
+        for name in sorted(names):
+            # Check each actual source against tracked/ignored rules, not just
+            # its directory (a force-added bank can live under an ignored path).
+            with card_private_parent(path / name) as (checked, unused_name, unused_path):
+                if card_identity(os.fstat(checked)) != card_identity(before_directory):
+                    raise ValueError('Native asset directory changed during preflight')
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            source = stack.enter_context(os.fdopen(fd, 'rb'))
+            before = os.fstat(source.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_uid != os.getuid():
+                raise ValueError('Native asset must be an owner-side regular file with one link')
+            if not 160 <= before.st_size <= native_asset_pack.MAX_BYTES:
+                raise ValueError('Native asset exceeds bounded file size')
+            total += before.st_size
+            if total > 256 << 20:
+                raise ValueError('Native assets exceed 256 MiB aggregate')
+            data = source.read(before.st_size + 1)
+            validate_native_asset(data, name)
+            record = {'source': str(path / name), 'destination': str(destination / name),
+                      'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
+                      'identity': list(card_identity(before)),
+                      'source_sha256': data[24:56].hex(), 'image_context_sha256': data[100:132].hex()}
+            selected.append((name, source, before, record))
+
+        def check_sources():
+            if (card_identity(before_directory) != card_identity(os.fstat(directory)) or
+                    card_identity(before_directory) !=
+                    card_identity(os.stat(directory_name, dir_fd=parent, follow_symlinks=False))):
+                raise ValueError('Native asset directory changed during staging')
+            for name, source, before, record in selected:
+                if (card_identity(before) != card_identity(os.fstat(source.fileno())) or
+                        card_identity(before) != card_identity(os.stat(name, dir_fd=directory, follow_symlinks=False))):
+                    raise ValueError('Native asset changed during staging')
+
+        check_sources()  # Every source admitted before any destination publication.
+        with card_private_parent(destination) as (sd_fd, name, unused):
+            os.mkdir(name, mode=0o700, dir_fd=sd_fd)
+            output_directory = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=sd_fd)
+        stack.callback(os.close, output_directory)
+        for name, source, before, record in selected:
+            source.seek(0)
+            digest = hashlib.sha256()
+            copied = 0
+            fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=output_directory)
+            with os.fdopen(fd, 'w+b') as output:
+                while copied < before.st_size:
+                    chunk = source.read(min(1 << 20, before.st_size - copied))
+                    if not chunk:
+                        raise ValueError('Native asset changed during copy')
+                    if output.write(chunk) != len(chunk):
+                        raise OSError('Short native asset copy')
+                    digest.update(chunk)
+                    copied += len(chunk)
+                if source.read(1) or digest.hexdigest() != record['sha256']:
+                    raise ValueError('Native asset changed during copy')
+                output.flush()
+                os.fsync(output.fileno())
+                if twilight_pack.digest_region(output, 0, copied).hex() != record['sha256']:
+                    raise OSError('Native asset copy verification failed')
+            check_sources()
+        os.fsync(output_directory)
+        check_sources()
+    return {'source': str(path), 'destination': str(destination), 'count': len(selected), 'bytes': total,
+            'banks': [record for name, source, before, record in selected],
+            'status': 'staged', 'native_gameplay_accepted': False,
+            'scope': 'v2 envelope, filename identities, CRC and copied bytes only; guest bank acceptance not established'}
 
 
 def read_card_snapshot(path):
@@ -464,6 +597,8 @@ def main(argv=None):
     parser.add_argument('--azahar', type=Path, default=DEFAULT_AZAHAR)
     parser.add_argument('--renderer', choices=sorted(RENDERERS), default='vulkan')
     parser.add_argument('--unthrottled', action='store_true', help='Disable the emulator speed limit; guest ticks are unchanged')
+    parser.add_argument('--cpu-clock-percent', type=int, default=100,
+                        help='Explicit emulated CPU clock percentage; 300 is a timing diagnostic, not hardware proof')
     parser.add_argument('--dump-chord-on-a', action='store_true',
                         help='Isolated HID test: map keyboard A to all three physical L/R/A buttons')
     parser.add_argument('--input-script', type=Path, help='Private native input script copied to the isolated SD')
@@ -507,6 +642,8 @@ def main(argv=None):
     assets = parser.add_mutually_exclusive_group()
     assets.add_argument('--private-disc', action='store_true')
     assets.add_argument('--data-bundle', type=Path, help='Verified private zelda.twilight; no ISO staged or read')
+    parser.add_argument('--native-assets', type=Path,
+                        help='Private preparer output directory containing canonical .dna banks; requires game data')
     parser.add_argument('--initial-card', type=Path,
                         help='Explicit DSVCARD1 snapshot from project Diagnostics/Saves/Build; requires --private-disc or --data-bundle')
     parser.add_argument('--boot-stage', help='Explicit native development entry: STAGE,ROOM,POINT,LAYER')
@@ -522,6 +659,9 @@ def main(argv=None):
     # The child runs in its isolated SD workspace, not the caller's cwd.
     args.azahar = args.azahar.resolve()
     has_data = args.private_disc or args.data_bundle is not None
+    if args.native_assets is not None and not has_data:
+        parser.error('--native-assets requires --private-disc or --data-bundle')
+    native_assets_record = None
     bundle_record = None
     if args.data_bundle is not None:
         try:
@@ -540,6 +680,8 @@ def main(argv=None):
     duration_limit = 3600 if args.long_gameplay else 600
     if not args.name.replace('-', '').replace('_', '').isalnum() or not 1 <= args.seconds <= duration_limit:
         parser.error(f'Use a simple run name and duration 1..{duration_limit} seconds')
+    if not 5 <= args.cpu_clock_percent <= 400:
+        parser.error('Use CPU clock percentage 5..400')
     if (not 1 <= args.gdb_port <= 65535 or
             any(frame is not None and frame < 0 for frame in (args.profile_after_frame, args.debug_after_frame)) or
             not math.isfinite(args.profile_seconds) or not 0 < args.profile_seconds <= 300 or
@@ -622,11 +764,11 @@ def main(argv=None):
         parser.error('Another Azahar instance is running (PID ' + ', '.join(running) + '); run one at a time')
     runtime = ROOT / 'Build/azahar-runs' / args.name
     out = args.evidence_root.resolve() / args.name
-    if initial_card_record is None:
+    if initial_card_record is None and args.native_assets is None:
         runtime.mkdir(parents=True, exist_ok=False)
         out.mkdir(parents=True, exist_ok=False)
     else:
-        # Seeded runs also pin private output ancestors and refuse old run roots.
+        # Seeded/bank runs pin private output ancestors and refuse old run roots.
         out = Path(os.path.abspath(args.evidence_root)) / args.name
         for directory in (runtime, out):
             with card_private_parent(directory, create=True) as (parent, name, unused):
@@ -639,6 +781,7 @@ def main(argv=None):
         directory.mkdir(parents=True)
     (config / 'qt-config.ini').write_text(
         '[System]\nis_new_3ds=true\nis_new_3ds\\default=false\n'
+        '[Core]\ncpu_clock_percentage=' + str(args.cpu_clock_percent) + '\ncpu_clock_percentage\\default=false\n'
         '[UI]\nfirstStart=false\ncalloutFlags=4294967295\nconfirmClose=false\nconfirmClose\\default=false\n'
         '[Audio]\noutput_type=' + str(AUDIO_ENGINES[args.audio_engine]) + '\noutput_type\\default=false\n'
         'audio_emulation=' + str(AUDIO_EMULATION[args.audio_emulation]) + '\naudio_emulation\\default=false\n'
@@ -661,17 +804,18 @@ def main(argv=None):
                                f'profiles\\1\\button_{button}\\default=false\n')
     source_stat = (ROOT / 'twilight.iso').stat() if args.private_disc else None
     if has_data:
-        sd = user / ('sdmc/3ds/DuskLight' if bundle_record else 'sdmc/3ds/dusklight')
+        sd = user / ('sdmc/3ds/DuskLight' if bundle_record or args.native_assets is not None else 'sdmc/3ds/dusklight')
         sd.mkdir(parents=True)
         if bundle_record:
             (sd / 'zelda.twilight').symlink_to(bundle_record['path'])
+        else:
+            (sd / 'twilight.iso').symlink_to(ROOT / 'twilight.iso')
+        if bundle_record or args.native_assets is not None:
             # On case-sensitive hosts, mirror FAT's case-insensitive directory
-            # lookup for legacy save/config paths without staging an ISO.
+            # lookup for legacy save/config paths.
             legacy = user / 'sdmc/3ds/dusklight'
             if not legacy.exists():
                 legacy.symlink_to('DuskLight', target_is_directory=True)
-        else:
-            (sd / 'twilight.iso').symlink_to(ROOT / 'twilight.iso')
         if component_data is not None:
             destination = sd.parent / 'dspfirm.cdc'
             azahar_debug.private_write(destination, component_data)
@@ -700,6 +844,8 @@ def main(argv=None):
         if args.texture_scenery:(sd / 'texture-scenery.txt').write_text('1\n')
         if args.fused_color_copy:(sd / 'fused-color-copy.txt').write_bytes(b'enabled=1\n')
         if args.profile_all_frames:(sd / 'profile-all-frames.txt').write_text('1\n')
+        if args.native_assets is not None:
+            native_assets_record = stage_native_assets(args.native_assets, sd)
     profile = out / 'sandbox.sb'
     # Azahar creates an input/RPC UDP socket at startup. Permit binding only;
     # incoming/outgoing traffic remains denied, as do writes to the original ISO.
@@ -747,6 +893,7 @@ def main(argv=None):
               'image_loaded': 'Requires separate guest/UI evidence',
               'private_iso': 'read-only original symlink' if args.private_disc else 'absent test',
               'data_bundle': bundle_record,
+              'native_assets': native_assets_record,
               'initial_card': initial_card_record,
               'ISO_before': {'size': source_stat.st_size, 'mtime_ns': source_stat.st_mtime_ns} if source_stat else None}
 
@@ -918,8 +1065,11 @@ def main(argv=None):
                        'elapsed_seconds': round(time.monotonic() - start, 3),
                        'input': str(image), 'cxi_sha256': image_hash, 'boot_stage': args.boot_stage,
                        'gui_empty': args.gui_empty, 'rgb565_rgba8_reference': args.rgb565_rgba8_reference,
+                       'is_new_3ds': True, 'cpu_clock_percent': args.cpu_clock_percent,
+                       'cpu_timing_scope': 'Explicit emulator setting; New3DS model alone does not implement ConfigureNew3DSCPU',
                        'dump_chord_on_a': args.dump_chord_on_a,
                        'data_bundle': bundle_record,
+                       'native_assets': native_assets_record,
                        'initial_card': initial_card_record,
                        'texture_half_policy': half_record,
                        'alpha_interval_experiment': args.alpha_interval_experiment,
@@ -927,7 +1077,8 @@ def main(argv=None):
                        'movie_mode': launch['movie_mode'], 'movie_path': launch['movie_path'],
                        'guest_completion': 'Requires separate guest evidence; process exit alone is insufficient',
                        'private_iso': 'read-only symlink' if args.private_disc else 'absent test',
-                       'network': 'traffic denied; socket bind permitted',
+                       'network': ('not restricted by this runner (--no-sandbox)' if args.no_sandbox
+                                   else 'sandbox requested; traffic policy depends on platform enforcement'),
                        'profile': profile_result, 'debug_inventory': debug_result, 'audio': audio_record,
                        'runner_status': 'error' if primary_error or cleanup_errors else 'complete',
                        'runner_error': error_record(primary_error) if primary_error else None,

@@ -188,9 +188,11 @@ static void carrierAdapterCases(const CommandDraw& original){
  }
  currentTargetExtent=target;regs=validRegs;make(3);
  std::puts("PASS carrier fog adapter: complete 3447/indexed-unreferenced last negatives; pinned fog words + synthetic range table; real ramp bytes/filter; range/viewport/target; original alpha/depth; 2+1 sampler and stage capacity; missing state, exhausted registry, helper bind/scope/reserve/cancel/submit failures");
- // Default-off preserves the existing fatal rejection; diagnostic policy does
- // not grant a degraded raster0 substitution.
- context={};context.allowDegradedDraws=true;context.allowVisualFallback=[](const CommandDraw&,DrawVisualFallback){return true;};reject(context,"TEV source/order unsupported");
+ // Full-color translation must submit the formerly rejected final non-gray
+ // vertex without selecting a skipped/simplified visual stand-in.
+ make(3447);bytes[(count()-1)*plan.packedStride()+25]^=1;context={};
+ assert(draw(context)&&context.rasterCarrierDraws==1&&!context.rejected&&!context.skippedDraws&&!context.simplifiedDraws);
+ reset();make(3);
  // Clip-side/camera/depth crossings retain the CPU geometry and interpolants.
  // This is host ownership/state verification, not hardware coverage proof.
  for(float z:{-1.f,-.1f,1.f}){make(3);const auto bits=std::bit_cast<u32>(z);for(unsigned i=0;i<3;++i)for(unsigned c=0;c<4;++c)bytes[i*plan.packedStride()+8+c]=u8(bits>>(24-8*c));

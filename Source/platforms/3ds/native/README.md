@@ -94,6 +94,17 @@ completion of the previous queue before collection. Release invalidates a
 handle immediately, retains its storage and budget charge, then frees it at
 that completion boundary. Slot generations never wrap into reusable IDs.
 
+Owned immutable images prefer VRAM; if VRAM allocation fails, they use the
+original linear-heap path. Texture budgets include both pools. VRAM images use
+a 16-byte-aligned linear staging allocation and `C3D_TexLoadImage` at level -1
+to transfer the complete already-tiled mip chain. Outside a frame, Citro3D
+waits for the texture-copy PPF before staging is freed. Inside a frame it queues
+the copy, so staging stays with the texture until queue completion and is not
+freed on release or a busy begin. The shared game adapter completes prior work
+and reserves queue entries before each in-frame upload; only after that barrier
+can previous staging be reclaimed, bounding game upload staging to one image.
+Borrowed framebuffer captures remain borrowed and are never uploaded or freed.
+
 The application retains valid native render targets through completion.
 `target()` installs the full native viewport/scissor; clear is explicit and
 must precede draws in that pass. Materials requiring depth refuse a depthless
@@ -102,10 +113,18 @@ queue to flush its command list rather than the entire linear heap. The SDK's
 `GX_CMDLIST_FLUSH` name refers to the **3DS GSP queue**, not GameCube GX.
 
 The declared command-buffer size must match the application's actual
-`C3D_Init` allocation. The admission heuristic reserves 32 KiB plus 4 KiB per
-draw; it is not a proof of every future SDK command cost. Clear, frame end,
-APT hooks and context destruction still inherit SDK behavior; NONBLOCK begin
-does not make those operations universally bounded against hardware faults.
+`C3D_Init` allocation. Without a per-draw guard, admission reserves 32 KiB plus
+4 KiB per frame draw. The game instead allows 4096 native draws per frame, while
+each model remains limited to 1024 parts. Its unchanged 4 MiB + 32 KiB command
+arena comes from the existing 16 MiB linear heap, not a larger heap allocation.
+The shared-queue guard runs before every native draw: it checks for 32 KiB of
+available command space and, when necessary, splits and waits for queue completion
+before resetting the arena. A failed wait refuses the draw without reuse. The
+existing libctru queue can miscount unrelated IRQs as completion, so this is not
+yet a hardware proof of safe reuse. This reserve is a heuristic, not proof of
+every future SDK command cost, and the buffer is shared with transitional
+UI/effects. Clear, frame end, APT hooks and context destruction still inherit
+SDK behavior; NONBLOCK begin does not universally bound hardware faults.
 
 Citro3D retains shader, texture and fog pointers. The renderer must outlive its
 exclusive context. End its frame, complete/destroy that context, and only then
@@ -175,4 +194,4 @@ checks are distinct from rendering acceptance. See `MODEL_PLAN_FORMAT.md`.
 
 The game-facing model bridge preserves original model/shape order, then submits native resident parts and uniforms without interpreting their source display lists. Model entrypoints and shared SDK frame lifecycle are wired in game source; the source-identified native asset factory is wired, and complete live parameter producers remain the next integration work. Missing/expired model bindings refuse, with no model-packet fallback. The default game-build option selects this unfinished native model route; no new executable or package is delivered by the standalone build command above.
 
-`AssetPack` joins native banks and copied source-shape ownership under an original-file SHA256. The archive resource loader captures identity before byte swapping; native file/GPU admission happens on the render owner. `GameAssets` shares one resident asset across instances and unloads it after the final instance is forgotten, retaining completion-dependent GPU retirement. The actual model can copy prepared draw/normal matrices into native palettes without per-vertex work; selected main-target camera publication is now connected, with host-only math/lifecycle coverage; physical precision and all pass coverage remain unverified. External-image context variants explicitly refuse pending a verified variant key. See `ASSET_PACK_FORMAT.md` and `GAME_DRAW_CONTRACT.md`.
+`AssetPack` joins native banks and copied source-shape ownership under original-file and image-context SHA256 identities. The archive loader captures identity before byte swapping; native file/GPU admission happens on the render owner. `GameAssets` shares one resident asset across instances and retires it after the final instance is forgotten. The framebuffer-color role resolves the registered live capture at submission without uploading or owning its pixels; unknown mutable providers and depth images refuse. Physical precision and full pass coverage remain unverified. See `ASSET_PACK_FORMAT.md` and `GAME_DRAW_CONTRACT.md`.

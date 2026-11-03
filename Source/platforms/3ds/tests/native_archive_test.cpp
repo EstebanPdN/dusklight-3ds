@@ -154,11 +154,11 @@ void testArchive() {
     assert(kernelStats().free == before.free && kernelStats().healthy);
     std::puts("PASS archive: original JKR mount/name/path/id/copy, owned bytes, Yaz0, hostile metadata, allocation failure, worker affinity, no leaked JKR blocks");
 }
-void testDisc(const char* outputDirectory) {
+void testDisc(const char* outputDirectory, const char* gameId) {
     const auto arc = rarc();
     std::array<unsigned char, 0x1100> image{};
     auto w = [&](unsigned at, unsigned value) { word(image.data() + at, value); };
-    std::memcpy(image.data(), "GZ2E01", 6);
+    std::memcpy(image.data(), gameId, 6);
     w(0x1c, 0xc2339f3d); w(0x420, 0x500); w(0x424, 0x800); w(0x428, 128);
     w(0x500, 0x100); w(0x590, 16); w(0x800, 0x01000000); w(0x808, 6);
     w(0x80c, 0); w(0x810, 0x1000); w(0x814, arc.size());
@@ -187,11 +187,13 @@ void testDisc(const char* outputDirectory) {
         DvdProvider provider(disc); assert(provider.bound());
         assert(DVDCheckDisk()&&DVDGetDriveStatus()==DVD_STATE_END);
         DvdProvider nested(disc); assert(!nested.bound());
-        assert(DVDLowReadDiskID(&id,nullptr) && !std::memcmp(id.gameName,"GZ2E",4) && !std::memcmp(id.company,"01",2));
+        assert(DVDLowReadDiskID(&id,nullptr) && !std::memcmp(id.gameName,gameId,4) && !std::memcmp(id.company,"01",2));
         assert(DVDLowReadDiskID(nullptr,[](u32 status){assert(status==0);}));
         dusk::version::init();
-        assert(dusk::version::isGcn() && !dusk::version::isWii() && dusk::version::isRegionUsa());
-        assert(dusk::version::getGameVersion()==dusk::version::GameVersion::GcnUsa);
+        const bool pal = gameId[3]=='P';
+        assert(dusk::version::isGcn() && !dusk::version::isWii());
+        assert(dusk::version::isRegionPal()==pal && dusk::version::isRegionUsa()==!pal);
+        assert(dusk::version::getGameVersion()==(pal?dusk::version::GameVersion::GcnPal:dusk::version::GameVersion::GcnUsa));
         assert(DVDConvertPathToEntrynum("/ARCHIVE.ARC")==1);
         for(unsigned i=0;i<32;++i)assert(DVDConvertPathToEntrynum("archive.arc")==1);
         assert(DVDConvertPathToEntrynum("/absent.arc")==-1);
@@ -330,12 +332,14 @@ void testDisc(const char* outputDirectory) {
 int privateDisc(const char* path) {
     Disc disc;
     if (disc.open(path) != DiscStatus::ready) return 2;
+    const char* logo = nullptr;
     {
         DvdProvider provider(disc);
         if(!provider.bound())return 5;
         dusk::version::init();
-        if(dusk::version::getGameVersion()!=dusk::version::GameVersion::GcnUsa)return 8;
-        const char* paths[]{"/res/Object/LogoUs.arc","/res/Layout/Title2D.arc",
+        if(!dusk::version::isGcn() || (!dusk::version::isRegionUsa()&&!dusk::version::isRegionPal()))return 8;
+        logo = dusk::version::isRegionPal()?"/res/Object/LogoPal.arc":"/res/Object/LogoUs.arc";
+        const char* paths[]{logo,"/res/Layout/Title2D.arc",
                             "/res/Stage/F_SP103/R00_00.arc","/res/Stage/F_SP103/STG_00.arc"};
         for(unsigned i=0;i<4;++i) {
             const auto entry=DVDConvertPathToEntrynum(paths[i]);
@@ -347,7 +351,7 @@ int privateDisc(const char* path) {
             std::printf("private original DVD file %u: bounded header read complete; bytes=%d\n",i,original.getFileSize());
         }
     }
-    const char* archives[]{"/res/Object/LogoUs.arc", "/res/Layout/Title2D.arc"};
+    const char* archives[]{logo, "/res/Layout/Title2D.arc"};
     const char* resources[]{"nintendo_376x104.bti", "zelda_press_start.blo"};
     for (unsigned i = 0; i < 2; ++i) {
         ArchiveBootstrap archive; ResourceSpan output;
@@ -369,7 +373,7 @@ int main(int argc, char** argv) {
     std::thread loadingWorker([&] {
         JKRHeap::setCurrentHeap(JKRHeap::getSystemHeap());
         if (argc == 3 && !std::strcmp(argv[1], "--private-disc")) result = privateDisc(argv[2]);
-        else { assert(argc == 2); testArchive(); testDisc(argv[1]); }
+        else { assert(argc == 2); testArchive(); testDisc(argv[1],"GZ2E01"); testDisc(argv[1],"GZ2P01"); }
         JKRHeap::setCurrentHeap(nullptr);
     });
     loadingWorker.join();

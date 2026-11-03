@@ -9,12 +9,14 @@ import random
 import struct
 from j3d_native_materials import convert,compile_material,alpha_test,Unsupported
 from j3d_material_source import materials
+from native_material_pack import compile_materials
 
 ROOT=Path(__file__).resolve().parents[2]
 
-def source_fixture():
+def source_fixture(cull=2):
     block=bytearray(132);block[:4]=b'MAT3';struct.pack_into('>H',block,8,1)
     record=bytearray(b'\xff'*332);record[0]=1;record[1]=record[3]=record[4]=record[6]=0
+    record[2]=0
     for base,values in [(132,[0,1]),(148,[0,0,1,1]),(188,[0,1,2]),(220,[0,1,1,0]),(228,[0,1,2]),(260,[0,0,0]),(292,[0]),(324,[0,0,0])]:
         for n,value in enumerate(values):struct.pack_into('>H',record,base+n*2,value)
     for n,value in enumerate([0,17,12]):record[156+n]=value
@@ -23,7 +25,7 @@ def source_fixture():
     def table(field,data):
         block.extend(bytes((-len(block))%4));struct.pack_into('>I',block,field,len(block));block.extend(data)
     def stage(rgb,rgbop,alpha,alphaop):return bytes([255,*rgb,*rgbop,*alpha,*alphaop,255])
-    table(12,record);table(16,bytes(2));table(28,struct.pack('>I',2));table(52,b'\2');table(56,bytes((1,4,60,255,0,0,33,255)));table(72,struct.pack('>2H',0,1))
+    table(12,record);table(16,bytes(2));table(28,struct.pack('>I',cull));table(36,b'\1');table(52,b'\2');table(56,bytes((1,4,60,255,0,0,33,255)));table(72,struct.pack('>2H',0,1))
     table(76,bytes((0,0,4,255,1,1,255,255,255,255,255,255)))
     table(80,struct.pack('>8h',0,0,0,255,255,255,255,255));table(84,bytes((0,0,0,255,255,255,255,255)));table(88,b'\3')
     table(92,b''.join([stage([15,8,10,15],[0,0,0,1,0],[7,5,4,7],[0,0,0,1,0]),stage([15,12,14,8],[0,0,0,1,3],[7,7,7,0],[0,0,0,0,0]),stage([14,6,0,2],[0,0,2,1,0],[7,6,0,7],[0,0,0,0,0])]))
@@ -45,12 +47,14 @@ def compare(code,a,b):
 def source_eval(material,samples,primary):
     rgb=[None]+[[v/255 for v in x[:3]] for x in material['registers'][:3]];alpha=[None]+[x[3]/255 for x in material['registers'][:3]]
     def k(sel,scalar):
-        if sel<8:value=[1,7/8,3/4,5/8,1/2,3/8,1/4,1/8][sel];return value if scalar else [value]*3
+        if sel<8:value=[255,223,191,159,128,96,64,32][sel]/255;return value if scalar else [value]*3
         if sel<16:return [x/255 for x in material['konst'][sel-12][:3]]
         value=material['konst'][(sel-16)%4][(sel-16)//4]/255;return value if scalar else [value]*3
     for stage in material['stages']:
         slot=stage['texture_slot'];image=material['textures'][slot] if slot<8 else None
-        tex=samples.get((image,stage['coordinate']),(0,0,0,0));t=[tex[i] for i in stage['texture_swap']];ras=[primary[i] for i in stage['raster_swap']]
+        tex=samples.get((image,stage['coordinate']),(0,0,0,0));t=[tex[i] for i in stage['texture_swap']]
+        raster=primary[stage['raster']&1] if isinstance(primary[0],(list,tuple)) else primary
+        ras=[raster[3]]*4 if stage['raster'] in (2,3) else [raster[i] for i in stage['raster_swap']]
         def color(arg):
             if arg<8:return [alpha[arg//2]]*3 if arg%2 else rgb[arg//2]
             if arg==8:return t[:3]
@@ -100,8 +104,21 @@ def main():
     source=source_fixture();(out/'fixture.bmd').write_bytes(source)
     missing,receipt=convert(source);assert missing is None and receipt['materials'][0]['status']=='refused'
     blocked,metadata=convert(source,allow_normalized_arithmetic=True);assert blocked is None and metadata['materials'][0]['status']=='refused'
-    packed,receipt=convert(source,allow_normalized_arithmetic=True,specialize_initial_constants=True);record=receipt['records'][0];bindings=receipt['materials'][0]['bindings'];original=list(materials(source))[0]
+    packed,receipt=convert(source,allow_normalized_arithmetic=True,specialize_initial_constants=True);record=receipt['records'][0];bindings=receipt['materials'][0]['texture_bindings'];original=list(materials(source))[0]
     assert len(record['stages'])==2 and record['images']==[2,1,0] and bindings[0]['projective'] and not receipt['rendering_ready'];(out/'fixture.dnm').write_bytes(packed)
+    for source_cull,name,byte in [(0,'none',0),(1,'back',2),(2,'front',1),(3,None,None)]:
+        fixture=source_fixture(source_cull);parsed=list(materials(fixture))[0]
+        assert parsed['states']['cull']==source_cull
+        bank,result=convert(fixture,allow_normalized_arithmetic=True,specialize_initial_constants=True)
+        if source_cull==3:
+            assert bank is None and not result['records'] and result['materials'][0]['status']=='refused'
+            assert result['materials'][0]['reason']=='Cull-all requires native draw visibility lowering'
+        else:
+            assert result['records'][0]['cull']==name
+            offset=struct.unpack_from('<I',bank,36)[0];assert bank[offset+3]==byte
+    for name,byte in [('none',0),('front',1),('back',2)]:
+        bank=compile_materials([{'id':1,'stages':[{}],'cull':name}])
+        offset=struct.unpack_from('<I',bank,36)[0];assert bank[offset+3]==byte
     rng=random.Random(147);pixels=0
     for _ in range(1024):
         samples={(0,0):[rng.randrange(256)/255 for _ in range(4)],(1,1):[rng.randrange(256)/255 for _ in range(4)]};primary=[rng.randrange(256)/255 for _ in range(4)]

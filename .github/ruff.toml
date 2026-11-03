@@ -1,0 +1,5 @@
+# Correctness checks for maintained tooling, not a reformat of upstream source.
+target-version = "py310"
+
+[lint]
+select = ["E9", "F63", "F7", "F82"]

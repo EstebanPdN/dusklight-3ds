@@ -2,7 +2,8 @@
 # Downloads only public, pinned source repositories. Never reads twilight.iso.
 set -euo pipefail
 
-readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly ROOT
 readonly DESTINATION="$ROOT/Upstream/git"
 
 checkout() {

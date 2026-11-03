@@ -39,9 +39,43 @@ bool identifySource(std::span<const std::byte> original,SourceIdentity& out){
     if(declared!=original.size())return false; // The archive supplies the actual expanded extent.
     Hash h;h.append(original);out.sha256=h.finish();out.bytes=std::uint32_t(original.size());return true;
 }
+bool identifyImage(std::span<const std::uint8_t> header,std::span<const std::uint8_t> image,
+                   std::span<const std::uint8_t> palette,std::array<std::uint8_t,32>& out){
+    out={};
+    if(header.size()!=32||image.empty()||image.size()>16u<<20||palette.size()>32768)return false;
+    const auto be16=[&](unsigned at){return(unsigned(header[at])<<8)|header[at+1];};
+    const unsigned width=be16(2),height=be16(4),levels=header[24],kind=header[0];
+    if(!width||width>1024||!height||height>1024||!levels||levels>8)return false;
+    unsigned bw=4,bh=4,bytes=32;
+    switch(kind){case 0:case 8:bw=8;bh=8;break;case 1:case 2:case 9:bw=8;break;
+        case 3:case 4:case 5:case 10:break;case 6:bytes=64;break;case 14:bw=bh=8;break;default:return false;}
+    std::size_t expected=0;
+    for(unsigned n=0;n<levels;++n){const auto w=width>>n,h=height>>n;
+        expected+=(((w?w:1)+bw-1)/bw)*(((h?h:1)+bh-1)/bh)*bytes;}
+    const bool indexed=kind==8||kind==9||kind==10;
+    if(image.size()!=expected||palette.size()!=(indexed?be16(10)*2:0)||
+       (indexed&&(!be16(10)||header[9]>2)))return false;
+    Hash hash;hash.append(std::as_bytes(std::span("DUSKIMG1",8)));
+    for(unsigned n=0;n<32;++n)hash.put((n>=12&&n<16)||n>=28?0:header[n]);
+    for(auto size:{image.size(),palette.size()})for(unsigned n=0;n<4;++n)hash.put(std::uint8_t(size>>(8*n)));
+    hash.append(std::as_bytes(image));hash.append(std::as_bytes(palette));out=hash.finish();return true;
+}
+std::array<std::uint8_t,32> identifyFramebufferColor(){
+    static const auto digest=[] {
+        constexpr char role[]="DUSKROLE1framebuffer-color";
+        Hash hash;hash.append(std::as_bytes(std::span(role,sizeof(role)-1)));return hash.finish();
+    }();
+    return digest;
+}
+bool identifyImageContext(std::span<const std::array<std::uint8_t,32>> images,std::array<std::uint8_t,32>& out){
+    out={};if(images.size()>4096)return false;
+    Hash hash;hash.append(std::as_bytes(std::span("DUSKCTX1",8)));
+    for(unsigned n=0;n<4;++n)hash.put(std::uint8_t(images.size()>>(8*n)));
+    hash.append(std::as_bytes(images));out=hash.finish();return true;
+}
 bool copyGamePalette(const UniformBinding& binding,unsigned count,const float (*position)[3][4],const float (*normal)[3][3],Palette& out){
     out={};out.count=0;
-    if(!count||count>65535||!position||!normal||!binding.paletteCount||binding.paletteCount>8)return false;
+    if(!count||count>65535||!position||!normal||!binding.paletteCount||binding.paletteCount>paletteSize)return false;
     Palette result{};result.count=binding.paletteCount;
     for(unsigned n=0;n<binding.paletteCount;++n){const unsigned id=binding.palette[n];if(!id||id>count)return false;
         const auto* p=reinterpret_cast<const std::byte*>(position)+(id-1)*48;

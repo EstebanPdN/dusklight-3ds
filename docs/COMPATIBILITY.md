@@ -11,7 +11,7 @@ This is an experimental adaptation. No supported binary release is available.
 | Old 3DS / Old 2DS | Outside the current target |
 | Presentation target | 400×240 top screen, 2D; diagnostic lower screen |
 | Simulation/performance goal | 30 Hz; sustained hardware 30 FPS is unverified |
-| Native runtime data | GameCube USA revision 0, `GZ2E01` |
+| Native runtime data | GameCube USA `GZ2E01` or European/PAL `GZ2P01`, revision 0 |
 | Other GameCube revisions / Wii discs | Not claimed for this native adapter |
 | Desktop upstream | Retained source; not revalidated by this publication |
 

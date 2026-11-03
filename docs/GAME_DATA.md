@@ -6,9 +6,11 @@ saves or extracted content to this repository or its issues.
 
 ## Compatible input and preparation
 
-The native adapter currently validates **GameCube USA revision 0 (`GZ2E01`)**.
-The upstream desktop project's wider disc support does not apply automatically
-to this native path.
+The native adapter validates **GameCube USA (`GZ2E01`) or European/PAL
+(`GZ2P01`) revision 0**. Packing preserves the original disc ID, DOL, FST and
+resource bytes; the existing game version selection chooses PAL resources and
+offsets without relabeling the disc as USA. Other revisions and Wii images
+remain unsupported by this native adapter.
 
 On a POSIX host, inspect the tool and then prepare a new local output:
 
@@ -21,6 +23,8 @@ python3 Tools/3ds/twilight_pack.py --input /path/to/your/twilight.iso \
 The tool verifies the source structure, writes an indexed `DLTWPK01` container,
 checks payload readback and refuses to replace an existing output. It preserves
 the source input. The generated file contains game data and must remain private.
+Both regions use the same bundle format and command. Validate the synthetic
+regional packing regression with `python3 Tools/3ds/test_twilight_pack.py`.
 The tool's signal handling and publication mechanics use POSIX facilities;
 Windows compatibility is not claimed by this guide.
 
@@ -38,6 +42,8 @@ and no ready-to-install package accompanies this source publication.
 Preserve the exact spellings. Data and save paths currently differ in case in
 the source. The save container uses `DSVCARD1`, preserves the original game save
 payload and is neither a raw GameCube memory card nor a Dolphin GCI file.
+New save metadata uses the game/maker ID passed by the original memory-card
+initialization, including `GZ2P` for PAL. Existing saves are not converted.
 Do not rename another save format into this path. Keep backups outside Git.
 A staged native save provider is implemented; full progression save/reload has
 not been accepted across the game.

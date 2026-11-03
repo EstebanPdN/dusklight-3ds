@@ -15,7 +15,8 @@ Material image IDs resolve inside the native image bank. Required fog needs an
 explicit native environment binding; initial-state snapshots remain refused.
 
 Load preflights the complete dependency list before allocation, then uploads
-each distinct referenced mesh/material/image ID once within the resident model.
+each distinct referenced mesh/material and all owned bank images. Framebuffer
+role entries allocate no pixels at load and preserve their one-based bank IDs.
 Different parts can share an image with different native sampler settings.
 Descriptor/parameter metadata is owned; file spans and input bindings are
 borrowed only through synchronous load and may be released afterwards.
@@ -35,9 +36,8 @@ visibility/LOD selection and original animation producers remain unfinished.
 
 `draw(parameters)` validates used uniform slots, palette coverage, required
 color producers, projective/UV conflicts, depth availability and whole-model
-frame-draw budget before submitting parts. Parts retain input order. Sampler
-settings belong to the model; an instance cannot also request conflicting
-sampler overrides. No source matrix/vertex processing occurs on the CPU.
+frame-draw budget before submitting parts. Parts retain input order; permitted
+sampler overrides apply per instance. No source matrix/vertex processing occurs on the CPU.
 Submission still prepares native uniforms/state; there is no performance claim.
 
 `drawParts(indices, parameters)` selects native parts explicitly, preserving the
@@ -71,6 +71,14 @@ override or projected unit0. Views share the original image address and contain
 no new pixel allocation. Unit0 can project while units1/2 sample that same image
 as ordinary2D. Borrowed views are never deleted/flushed as separate images.
 Without an override, previous image sampler presets retain their exact path.
+
+The framebuffer-color role requires a live registered render-owner provider and
+a clamp, single-level sampler. Submission refreshes the shared capture after
+producer callbacks, then resolves its evictable descriptor into a generation-
+checked borrowed slot. It applies `(S*w/paddedW, 1-T*h/paddedH)` after affine
+texgen; projected S/T rows use `(S*w/paddedW, Q-T*h/paddedH)` before division.
+Synthetic fog/lookup units cannot be rebound to this role. The owner, not the
+native renderer, manages the capture allocation and its GPU completion.
 
 The installed Citro3D `C3D_TexBind` marks the unit dirty on every accepted call,
 even for the same view address. Updating a stable view between ordered draws

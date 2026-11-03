@@ -10,6 +10,7 @@
 #include "helpers/gx_helper.h"
 #if defined(DUSK_TARGET_3DS)
 #include "JSystem/JKernel/JKRDisposer.h"
+#include <array>
 #endif
 
 /**
@@ -35,7 +36,15 @@ private:
     u8** mpTlutDataPtr;
 #endif
 #if defined(DUSK_TARGET_3DS)
+    enum class NativeImageState : u8 {
+        unresolved, valid, missingToken, missingRegistration, mutablePixels, invalidBti, invalidIdentity
+    };
     const ResTIMG** mpNativeSources{};
+    std::array<uint8_t,32>* mpNativeImageDigests{};
+    NativeImageState* mpNativeImageState{};
+    std::array<uint8_t,32> mNativeImageContext{};
+    bool mNativeImageContextValid{};
+    void captureNativeImage(u16 index, const ResTIMG& source);
     bool mNativeResOwned{};
     void retainNativeTexture(u16 index, const ResTIMG& source);
     void releaseNativeTextures();
@@ -51,6 +60,8 @@ public:
         mpTlutDataPtr = new u8*[num];
 #if defined(DUSK_TARGET_3DS)
         mpNativeSources = new const ResTIMG*[num]();
+        mpNativeImageDigests = new std::array<uint8_t,32>[num]();
+        mpNativeImageState = new NativeImageState[num]();
 #endif
         for (u16 i = 0; i < num; i++) {
 #if defined(DUSK_TARGET_3DS)
@@ -75,6 +86,9 @@ public:
     virtual ~J3DTexture();
 
     u16 getNum() const { return mNum; }
+#if defined(DUSK_TARGET_3DS)
+    bool getNativeImageContext(std::array<uint8_t,32>& out);
+#endif
 
     ResTIMG* getResTIMG(u16 index) const {
         J3D_ASSERT_RANGE(72, index < mNum);
@@ -96,6 +110,8 @@ public:
         // Retire the old object owner before assigning another original image.
         releaseNativeTexture(index);
         mpNativeSources[index] = &timg;
+        mpNativeImageState[index] = NativeImageState::unresolved;
+        mNativeImageContextValid = false;
 #endif
         mpRes[index] = timg;
 

@@ -64,9 +64,11 @@ in-place comparison sort; it adds no GPU/resident image allocation or parameter
 snapshot arena. Caller item storage is separate. The installed ARM ABI gives
 20 bytes per item, so a full1024-item caller list alone is20480 bytes. Prefer
 explicitly budgeted storage rather than a large automatic caller array.
-The default64-draw budget remains unchanged. Reaching the API maximum requires
-an appropriately provisioned command buffer; maximum capacity is not a
-recommendation for a hardware frame or a proven feasible game workload.
+The default64-draw budget remains unchanged. A scene list and each model are
+still limited to1024 parts, independently of the renderer's4096-draw frame
+ceiling. A larger frame budget requires either an appropriately provisioned
+command buffer or a per-draw queue-completion guard; it is not a recommendation
+for a hardware frame or a proven feasible game workload.
 
 ARM local-stack reports, host SDK-substitute checks and dependency auditing
 establish code contracts only. Original scene fidelity, PICA precision,

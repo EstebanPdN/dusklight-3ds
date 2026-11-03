@@ -97,7 +97,8 @@ void J3DDisplayListObj::swapBuffer() {
 
 void J3DDisplayListObj::callDL() const {
 #if defined(DUSK_PICA_GAME_DRAW)
-    OSPanic(__FILE__,__LINE__,"J3D display-list execution is forbidden in the native model renderer");
+    OSPanic(__FILE__,__LINE__,"J3D display-list execution is forbidden in the native model renderer (caller=%p)",
+        __builtin_extract_return_addr(__builtin_return_address(0)));
 #else
     GXCallDisplayList(mpDisplayList[0], mSize);
 

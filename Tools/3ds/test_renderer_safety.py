@@ -37,6 +37,7 @@ def main():
         'lib/dolphin/gd/GDIndirect.cpp', 'lib/gx/dl.cpp', 'lib/gx/attr_fmt.cpp']]
     inputs = [*sources, Path(__file__).resolve(), ROOT / 'Tools/3ds/test_gx_lookup.py',
               native / 'tests/gx_lookup_test.cpp', native / 'gx_command_draw.hpp',
+              native / 'native/color_lookup.hpp',
               *sorted((native / 'runtime').glob('*.hpp'))]
     hashes = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     command = ['clang++', '-std=c++20', '-DTARGET_PC=1', '-DDUSK_TARGET_3DS=1',

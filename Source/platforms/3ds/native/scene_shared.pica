@@ -1,0 +1,521 @@
+; Shared native GPU implementation. Link after exactly one scene*.v.pica.
+; c0..11 position,12..23 normal,24..27 projection,28..59 eight lights,
+; 60..63 material/ambient,64..71 channel pairs,72 light kinds0..3,
+; 73..78 affine UV,79 UV/lookup flags,80..82 projective,83 draw flags,
+; 84=(A,B,C,rangeScale),85=(rangeBias,enabledFunction,range,ortho),
+; 86..88 range K0..9 (last repeated),89 light kinds4..7,90..93 constants.
+.nodvle
+.fvec u[90]
+.ivec lightLoop
+.alias k c90
+.alias q c91
+.alias t c92
+.alias f c93
+.alias outpos o0
+.alias outcolor o1
+.alias outtex0 o2
+.alias outtex1 o3
+.alias outtex2 o4
+
+; r14 object position, a0.x palette row, r3.x normalized weight.
+; Accumulate view-space position/normal in r0/r1. No CPU vertex work.
+.proc influence
+    dp4 r2.x, u[a0.x+0], r14
+    dp4 r2.y, u[a0.x+1], r14
+    dp4 r2.z, u[a0.x+2], r14
+    mul r2.xyz, r2, r3.x
+    add r0.xyz, r0, r2
+    dp3 r2.x, u[a0.x+12], v1
+    dp3 r2.y, u[a0.x+13], v1
+    dp3 r2.z, u[a0.x+14], v1
+    mul r2.xyz, r2, r3.x
+    add r1.xyz, r1, r2
+.end
+
+.proc project
+    mov r0.w, k.y
+    dp4 r2.x, u[24], r0
+    dp4 r2.y, u[25], r0
+    dp4 r2.z, u[26], r0
+    dp4 r2.w, u[27], r0
+    mov outpos, r2
+    dp3 r3.x, r1, r1
+    add r4.x, q.y, r0.w
+    mul r3.y, k.w, r4.x
+    mul r3.y, r3.y, r3.y
+    cmp r3.y, lt, lt, r3.x
+    ifc cmp.x
+        rsq r3.x, r3.x
+        mul r1.xyz, r1, r3.x
+    .end
+.end
+
+; r12 control, r13 lower membership, r14 material, r3 ambient,
+; r2 vertex RGBA. Return complete RGBA in r14; caller selects RGB/alpha.
+; r0/r1 (view position/normal), r10/r11 (outputs) are preserved.
+.proc channel
+    mul r4.x, q.x, r12.x
+    flr r4.x, r4.x
+    add r4.y, r4.x, r4.x
+    add r4.y, r12.x, -r4.y
+    cmp r4.y, gt, gt, r15.x
+    ifc cmp.x
+        mov r14, r2
+    .end
+    cmp r4.x, gt, gt, r15.x
+    ifc cmp.x
+        mov r3, r2
+    .end
+    cmp r12.z, gt, gt, r15.x
+    ifc cmp.x
+        dp4 r4.x, k.yyyy, r13
+        add r4.x, r12.w, r4.x
+        cmp r4.x, gt, gt, r15.x
+        ifc cmp.x
+            mov r8, u[72]
+            mov r9, k.xxxx
+            mov r9.y, r12.w
+            for lightLoop
+                ; aL advances four rows; r9.x is the logical light index.
+                mov r4.x, t.z
+                cmp r9.x, eq, eq, r4.x
+                ifc cmp.x
+                    mov r8, u[89]
+                .end
+                cmp r9.x, ge, ge, r4.x
+                ifc cmp.x
+                    mul r4.y, q.x, r9.y
+                    flr r4.y, r4.y
+                    add r4.z, r4.y, r4.y
+                    add r4.w, r9.y, -r4.z
+                    mov r9.y, r4.y
+                .else
+                    mov r4.w, r13.x
+                .end
+                cmp r4.w, gt, gt, r15.x
+                ifc cmp.x
+                    mov r5, k.xxxx
+                    cmp r8.x, gt, gt, r15.x
+                    ifc cmp.x
+                        ; Authored directional light: exact surface-to-light.
+                        mov r4.xyz, u[aL+30]
+                    .else
+                        mov r4.xyz, k.xxx
+                        mov r5.w, t.y
+                        cmp r12.z, lt, lt, r5.w
+                        ifc cmp.x
+                            mov r5.w, k.y
+                        .else
+                            mov r5.w, r12.y
+                        .end
+                        cmp r5.w, gt, gt, r15.x
+                        ifc cmp.x
+                            add r4.xyz, u[aL+28], -r0
+                            dp3 r5.x, r4, r4
+                            cmp r5.x, gt, gt, r15.x
+                            ifc cmp.x
+                                rsq r5.y, r5.x
+                                mul r5.z, r5.x, r5.y
+                                mul r4.xyz, r4, r5.y
+                            .end
+                        .end
+                    .end
+                    dp3 r6.w, r4, r1
+                    mov r7.w, k.y
+                    mov r7.x, t.y
+                    cmp r12.z, lt, lt, r7.x
+                    ifc cmp.x
+                        mov r7.x, t.x
+                        cmp r12.z, eq, eq, r7.x
+                        ifc cmp.x
+                            ; Point directions are declared OUTWARD.
+                            dp3 r6.y, u[aL+30], -r4
+                        .else
+                            dp3 r6.y, u[aL+30], r1
+                            cmp r6.w, lt, lt, r15.x
+                            ifc cmp.x
+                                mov r6.y, k.x
+                            .end
+                        .end
+                        max r6.y, k.x, r6.y
+                        mov r6.x, k.y
+                        mul r6.z, r6.y, r6.y
+                        mov r7.x, u[aL+28].w
+                        mov r7.y, u[aL+30].w
+                        mov r7.z, u[aL+31].w
+                        dp3 r7.w, r7, r6
+                        mov r7.x, t.x
+                        cmp r12.z, eq, eq, r7.x
+                        ifc cmp.x
+                            mov r7.x, k.y
+                            mov r7.y, r5.z
+                            mov r7.z, r5.x
+                            dp3 r5.w, u[aL+31], r7
+                        .else
+                            mov r7.xyz, u[aL+31]
+                            cmp r12.y, gt, gt, r15.x
+                            ifc cmp.x
+                                dp3 r5.w, r7, r7
+                                rsq r5.w, r5.w
+                                mul r7.xyz, r7, r5.w
+                            .end
+                            dp3 r5.w, r7, r6
+                            max r5.w, k.x, r5.w
+                        .end
+                        rcp r5.w, r5.w
+                        mul r7.w, r7.w, r5.w
+                        max r7.w, k.x, r7.w
+                    .end
+                    cmp r12.y, gt, gt, r15.x
+                    ifc cmp.x
+                        mov r5.w, k.y
+                        cmp r12.y, gt, gt, r5.w
+                        ifc cmp.x
+                            max r6.w, k.x, r6.w
+                        .end
+                        mul r7.w, r7.w, r6.w
+                    .end
+                    mul r7, u[aL+29], r7.w
+                    add r3, r3, r7
+                .end
+                mov r13, r13.yzwx
+                mov r8, r8.yzwx
+                add r9.x, k.y, r9.x
+            .end
+        .end
+        max r3, k.x, r3
+        min r3, k.y, r3
+        mul r14, r14, r3
+    .end
+.end
+
+.proc colors
+    mov r12, u[64]
+    mov r13, u[65]
+    mov r14, u[60]
+    mov r3, u[62]
+    mul r2, k.z, v5
+    call channel
+    mov r10.xyz, r14
+    mov r12, u[66]
+    mov r13, u[67]
+    mov r14, u[61]
+    mov r3, u[63]
+    mul r2, k.z, v6
+    call channel
+    mov r11.xyz, r14
+    mov r12, u[68]
+    mov r13, u[69]
+    mov r14, u[60]
+    mov r3, u[62]
+    mul r2, k.z, v5
+    call channel
+    mov r10.w, r14.w
+    mov r12, u[70]
+    mov r13, u[71]
+    mov r14, u[61]
+    mov r3, u[63]
+    mul r2, k.z, v6
+    call channel
+    mov r11.w, r14.w
+.end
+
+.proc passthrough
+    mov outtex0, v2
+    mov outtex0.z, k.y
+    mov outtex1, v3
+    mov outtex2, v4
+.end
+
+; r12.x affine source0..7, r12.y normalize. Preserve r0/r1/r10/r11.
+; Recompute the actual weighted normal rather than reusing normalized lighting.
+.proc normalInfluence
+    cmp r9.x, gt, gt, r15.x
+    ifc cmp.x
+        mova a0.x, r8.x
+        dp3 r2.x, u[a0.x+0], v1
+        dp3 r2.y, u[a0.x+1], v1
+        dp3 r2.z, u[a0.x+2], v1
+        mul r2.xyz, r2, r9.x
+        add r14.xyz, r14, r2
+    .end
+    mov r8, r8.yzwx
+    mov r9, r9.yzwx
+.end
+
+.proc texSource
+    mov r14.xy, v2
+    mov r14.zw, k.yyyy
+    cmp r12.x, gt, gt, r15.x
+    ifc cmp.x
+        mov r14.xy, v3
+    .end
+    mov r4.x, k.y
+    cmp r12.x, gt, gt, r4.x
+    ifc cmp.x
+        mov r14.xy, v4
+    .end
+    mov r4.x, t.y
+    cmp r12.x, ge, ge, r4.x
+    ifc cmp.x
+        mov r14.xyz, v0
+    .end
+    mov r4.x, t.z
+    cmp r12.x, eq, eq, r4.x
+    ifc cmp.x
+        mov r14.xyz, r0
+    .end
+    mov r4.x, f.z
+    cmp r12.x, ge, ge, r4.x
+    ifc cmp.x
+        mov r14.xyz, v1
+    .end
+    mov r4.x, f.w
+    cmp r12.x, ge, ge, r4.x
+    ifc cmp.x
+        mov r8, v7
+        cmp r12.x, eq, eq, r4.x
+        ifc cmp.x
+            ; Normal bank row offset12; linear normals instead use position0.
+            add r4.x, r4.x, r4.x
+            add r8, r8, r4.x
+        .end
+        mul r9, k.z, v8
+        mov r14.xyz, k.xxx
+        call normalInfluence
+        call normalInfluence
+        call normalInfluence
+        call normalInfluence
+    .end
+    cmp r12.y, gt, gt, r15.x
+    ifc cmp.x
+        dp3 r4.x, r14, r14
+        cmp r4.x, gt, gt, r15.x
+        ifc cmp.x
+            rsq r4.x, r4.x
+            mul r14.xyz, r14, r4.x
+        .end
+    .end
+    ; GX tex/post matrix dot4 uses implicit W1, including normal envmap bias.
+    mov r14.w, k.y
+.end
+
+.proc affineSource
+    add r12.x, -k.y, r12.x
+    mul r12.y, q.z, r12.x
+    flr r12.y, r12.y
+    mul r4.x, t.w, r12.y
+    add r12.x, r12.x, -r4.x
+    call texSource
+.end
+
+.proc affine
+    cmp u[79].x, gt, gt, r15.x
+    ifc cmp.x
+        mov r12.x, u[79].x
+        call affineSource
+        dp4 outtex0.x, u[73], r14
+        dp4 outtex0.y, u[74], r14
+    .end
+    cmp u[79].y, gt, gt, r15.x
+    ifc cmp.x
+        mov r12.x, u[79].y
+        call affineSource
+        dp4 outtex1.x, u[75], r14
+        dp4 outtex1.y, u[76], r14
+    .end
+    cmp u[79].z, gt, gt, r15.x
+    ifc cmp.x
+        mov r12.x, u[79].z
+        call affineSource
+        dp4 outtex2.x, u[77], r14
+        dp4 outtex2.y, u[78], r14
+    .end
+.end
+
+.proc projective
+    mov r4.x, t.y
+    add r12.x, u[83].x, r4.x
+    mov r12.y, u[83].w
+    call texSource
+    dp4 outtex0.x, u[80], r14
+    dp4 outtex0.y, u[81], r14
+    dp4 outtex0.z, u[82], r14
+.end
+
+; Original-vertex fog (not per-fragment depth LUT fog). Clip Y is logical X
+; after the native screen rotation; caller folds viewport/center into scale/bias.
+.proc fog
+    mov r9, k.xxxx
+    cmp u[85].y, gt, gt, r15.x
+    ifc cmp.x
+        dp4 r2.y, u[25], r0
+        dp4 r2.z, u[26], r0
+        dp4 r2.w, u[27], r0
+        cmp r2.w, gt, gt, r15.x
+        ifc cmp.x
+            rcp r9.w, r2.w
+            mul r9.x, r2.z, r9.w
+            add r9.x, k.y, r9.x
+            max r9.x, k.x, r9.x
+            min r9.x, k.y, r9.x
+        .end
+        cmp u[85].w, gt, gt, r15.x
+        ifc cmp.x
+            mul r9.y, u[84].x, r9.x
+        .else
+            add r4.x, u[84].y, -r9.x
+            cmp r4.x, ne, ne, r15.x
+            ifc cmp.x
+                rcp r4.x, r4.x
+                mul r9.y, u[84].x, r4.x
+            .else
+                cmp u[84].x, gt, gt, r15.x
+                ifc cmp.x
+                    ; Scalar reference's positive singular limit saturates.
+                    rcp r9.y, k.w
+                    mul r9.y, r9.y, r9.y
+                .end
+            .end
+        .end
+        cmp u[85].z, gt, gt, r15.x
+        ifc cmp.x
+            cmp r2.w, gt, gt, r15.x
+            ifc cmp.x
+                mul r4.x, r2.y, r9.w
+                mul r4.x, u[84].w, r4.x
+                add r4.x, u[85].x, r4.x
+                max r4.y, r4.x, -r4.x
+                mul r4.y, q.y, r4.y
+                add r4.y, q.y, -r4.y
+                max r4.y, k.x, r4.y
+                min r4.y, q.y, r4.y
+                flr r4.z, r4.y
+                add r4.w, r4.y, -r4.z
+                mul r5.x, q.x, r4.z
+                mul r5.x, q.x, r5.x
+                flr r5.x, r5.x
+                mova a0.x, r5.x
+                add r5.y, r5.x, r5.x
+                add r5.y, r5.y, r5.y
+                add r5.y, r4.z, -r5.y
+                mov r6, u[a0.x+86]
+                mov r7, u[a0.x+87]
+                cmp r5.y, gt, gt, r15.x
+                ifc cmp.x
+                    mov r6, r6.yzwx
+                .end
+                mov r5.z, k.y
+                cmp r5.y, gt, gt, r5.z
+                ifc cmp.x
+                    mov r6, r6.yzwx
+                .end
+                add r5.z, k.y, r5.z
+                cmp r5.y, gt, gt, r5.z
+                ifc cmp.x
+                    mov r6.x, r6.y
+                    mov r6.y, r7.x
+                .end
+                add r6.y, r6.y, -r6.x
+                mul r6.y, r6.y, r4.w
+                add r6.x, r6.x, r6.y
+                max r6.x, k.w, r6.x
+                rcp r6.x, r6.x
+                mul r4.x, r4.x, r6.x
+                mul r4.x, r4.x, r4.x
+                add r4.x, k.y, r4.x
+                rsq r4.x, r4.x
+                rcp r4.x, r4.x
+                mul r9.y, r9.y, r4.x
+            .end
+        .end
+        add r9.y, -u[84].z, r9.y
+        max r9.y, k.x, r9.y
+        min r9.y, k.y, r9.y
+        mov r4.x, k.y
+        cmp u[85].y, gt, gt, r4.x
+        ifc cmp.x
+            add r4.x, r4.x, r4.x
+            add r4.x, k.y, r4.x
+            cmp u[85].y, gt, gt, r4.x
+            ifc cmp.x
+                add r9.y, k.y, -r9.y
+            .end
+            cmp u[85].y, eq, eq, r4.x
+            ifc cmp.x
+                mul r9.y, r9.y, r9.y
+            .end
+            add r4.x, k.y, r4.x
+            cmp u[85].y, gt, gt, r4.x
+            ifc cmp.x
+                mul r9.y, r9.y, r9.y
+            .end
+            mul r9.y, q.w, r9.y
+            ex2 r9.y, r9.y
+            cmp u[85].y, lt, lt, r4.x
+            ifc cmp.x
+                add r9.y, k.y, -r9.y
+            .end
+        .end
+    .end
+    mov r4.x, k.y
+    cmp u[83].y, eq, eq, r4.x
+    ifc cmp.x
+        mov r10.w, r9.y
+    .end
+    add r4.x, k.y, r4.x
+    cmp u[83].y, eq, eq, r4.x
+    ifc cmp.x
+        mov r10.x, r9.y
+    .end
+    add r4.x, k.y, r4.x
+    cmp u[83].y, eq, eq, r4.x
+    ifc cmp.x
+        mov r11.w, r9.y
+    .end
+    add r4.x, k.y, r4.x
+    cmp u[83].y, eq, eq, r4.x
+    ifc cmp.x
+        mov r11.x, r9.y
+    .end
+    ; Synthetic fog image alpha is physicalY/255. Sample texel centers so
+    ; linear filtering returns the original factor without stealing RGBA.
+    mul r4.y, f.x, r9.y
+    add r4.y, f.y, r4.y
+    mov r4.x, q.x
+    mov r5.x, f.z
+    cmp u[83].y, eq, eq, r5.x
+    ifc cmp.x
+        mov outtex0.xy, r4
+        mov outtex0.z, k.y
+    .end
+    mov r5.x, f.w
+    cmp u[83].y, eq, eq, r5.x
+    ifc cmp.x
+        mov outtex1.xy, r4
+    .end
+    add r5.x, k.y, r5.x
+    cmp u[83].y, eq, eq, r5.x
+    ifc cmp.x
+        mov outtex2.xy, r4
+    .end
+.end
+
+.proc carrier
+    cmp u[79].w, gt, gt, r15.x
+    ifc cmp.x
+        add r4, q.x, r11
+        mul r4, q.z, r4
+        add r4.y, k.y, -r4.y
+        add r4.w, k.y, -r4.w
+        cmp u[83].z, gt, gt, r15.x
+        ifc cmp.x
+            mov outtex1.xy, r4.xy
+            mov outtex2.xy, r4.zw
+        .else
+            mov outtex0.xy, r4.xy
+            mov outtex1.xy, r4.zw
+        .end
+    .end
+    mov outcolor, r10
+.end

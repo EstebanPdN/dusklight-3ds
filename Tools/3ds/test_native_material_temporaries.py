@@ -58,11 +58,11 @@ def main():
         ceiling=[16,64,256,256][case%4]
         dynamic['registers']=[[rng.randrange(ceiling) for c in range(4)] for n in range(3)];dynamic['konst']=[[rng.randrange(ceiling) for c in range(4)] for n in range(4)]
         parameters=dynamic['registers']+dynamic['konst']+[[0]*4];resolved=wire(record,parameters)
-        samples={(b['image'],b['coordinate']):[rng.randrange(ceiling)/255 for c in range(4)] for b in receipt['bindings']};primary=[rng.randrange(256)/255 for c in range(4)]
-        a,b=source_eval(dynamic,samples,primary),native_eval(resolved,receipt['bindings'],samples,primary)
+        samples={(b['image'],b['coordinate']):[rng.randrange(ceiling)/255 for c in range(4)] for b in receipt['texture_bindings']};primary=[rng.randrange(256)/255 for c in range(4)]
+        a,b=source_eval(dynamic,samples,primary),native_eval(resolved,receipt['texture_bindings'],samples,primary)
         assert max(abs(x-y) for x,y in zip(a,b))<1e-12,(case,a,b);pixels+=1;distinct.add(tuple(round(c*255) for c in b))
         bad=copy.deepcopy(resolved);bad['buffer_rgb_mask']=2
-        mask_differences+=max(abs(x-y) for x,y in zip(a,native_eval(bad,receipt['bindings'],samples,primary)))>1e-10
+        mask_differences+=max(abs(x-y) for x,y in zip(a,native_eval(bad,receipt['texture_bindings'],samples,primary)))>1e-10
     assert len(distinct)>100 and mask_differences>100,'Saturated fixtures failed to observe buffer errors'
     # Independent expression families exercise color and scalar-alpha lanes,
     # subtraction order, three parameter inputs, shared subexpressions and

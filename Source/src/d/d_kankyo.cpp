@@ -118,6 +118,11 @@ dKankyo_HIO_c g_kankyoHIO;
 
 static LightStatus lightStatusData[8];
 
+#ifdef DUSK_PICA_GAME_DRAW
+static J3DLightInfo nativeGlobalLights[8];
+static bool nativeGlobalLightPublished[8];
+#endif
+
 static u16 lightMask = 0x0001;
 
 static LightStatus* lightStatusPt = lightStatusData;
@@ -8386,8 +8391,21 @@ void dKy_nativeInitializeSceneColor() {
 void dKy_setLight_init() {
     for (int i = 0; i < 8; i++) {
         lightStatusData[i] = lightStatusBase;
+#ifdef DUSK_PICA_GAME_DRAW
+        nativeGlobalLightPublished[i] = false;
+#endif
     }
 }
+
+#ifdef DUSK_PICA_GAME_DRAW
+bool dKy_getNativeGlobalLight(unsigned slot, J3DLightInfo& out) {
+    if (slot >= 8 || !nativeGlobalLightPublished[slot]) {
+        return false;
+    }
+    out = nativeGlobalLights[slot];
+    return true;
+}
+#endif
 
 void dKy_setLight() {
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
@@ -8417,6 +8435,18 @@ void dKy_GlobalLight_set() {
                             light_status->mDistFn);
         GXInitLightSpot(&light_obj, light_status->mCutoff, light_status->mSpotFn);
         GXLoadLightObjImm(&light_obj, (GXLightID)lightMaskData[i]);
+
+        #ifdef DUSK_PICA_GAME_DRAW
+        J3DLightInfo& light = nativeGlobalLights[i];
+        light.mLightPosition = light_pos;
+        // Already the effective view-space declaration; GX packs its negation.
+        light.mLightDirection = light_status->mLightDir;
+        light.mColor = light_status->color;
+        dKy_GXInitLightDistAttn(&light, light_status->mRefDist, light_status->mRefBrightness,
+                              light_status->mDistFn);
+        dKy_GXInitLightSpot(&light, light_status->mCutoff, light_status->mSpotFn);
+        nativeGlobalLightPublished[i] = true;
+        #endif
     }
 }
 

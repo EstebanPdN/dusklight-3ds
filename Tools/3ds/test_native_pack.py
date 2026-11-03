@@ -6,13 +6,14 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import struct
 import native_mesh_pack as pack
 
 ROOT=Path(__file__).resolve().parents[2]
 
 def fixture():
     vertices=[{'position':[float(i&1),float(i>>1),0]} for i in range(4)]
-    vertices[0].update(bones=[0,2,0,0],weights=[128,127,0,0])
+    vertices[0].update(color=[17,34,51,68],color1=[85,102,119,136],bones=[0,2,0,0],weights=[128,127,0,0])
     return {'schema':'dusklight-native-mesh/1','meshes':[{'id':17,'vertices':vertices[:3],'indices':[0,1,2]},
                                                       {'id':3,'vertices':vertices,'indices':[0,1,2,2,1,3]}]}
 
@@ -20,12 +21,19 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
     document=fixture();result=pack.compile_pack(document);assert result==pack.compile_pack(fixture())
+    assert result[:8]==b'DUSKPN01' and struct.unpack_from('<I',result,8)[0]==2
+    identifier,nv,ni,vo,io,vb,ib,crc=struct.unpack_from('<8I',result,32)
+    assert (identifier,nv,ni,vb,ib)==(3,4,6,256,12) and io==vo+256
+    assert result[vo+48:vo+64]==bytes([17,34,51,68,85,102,119,136,0,6,0,0,128,127,0,0])
+    assert result[vo+64+48:vo+64+56]==bytes([255]*8)
     (out/'fixture.json').write_text(json.dumps(document,indent=2)+'\n');(out/'fixture.pica').write_bytes(result)
     rejected=0
     for change in [lambda d:d.update(schema='bad'),lambda d:d['meshes'][0].update(id=3),lambda d:d['meshes'][0].update(id=0),
                    lambda d:d['meshes'][0].update(indices=[0,1,99]),lambda d:d['meshes'][0]['vertices'][0].update(position=[float('nan'),0,0]),
                    lambda d:d['meshes'][0]['vertices'][0].update(weights=[1,0,0,0]),lambda d:d['meshes'][0]['vertices'][0].update(bones=[8,0,0,0]),
-                   lambda d:d['meshes'][0]['vertices'][0].update(uv=[[0,0]]),lambda d:d['meshes'][0]['vertices'][0].update(color=[True,0,0,0])]:
+                   lambda d:d['meshes'][0]['vertices'][0].update(uv=[[0,0]]),lambda d:d['meshes'][0]['vertices'][0].update(color=[True,0,0,0]),
+                   lambda d:d['meshes'][0]['vertices'][0].update(color1=[True,0,0,0]),lambda d:d['meshes'][0]['vertices'][0].update(color1=[256,0,0,0]),
+                   lambda d:d['meshes'][0]['vertices'][0].update(color1=[-1,0,0,0]),lambda d:d['meshes'][0]['vertices'][0].update(color1=[0,0,0])]:
         mutated=copy.deepcopy(document);change(mutated)
         try:pack.compile_pack(mutated)
         except ValueError:rejected+=1

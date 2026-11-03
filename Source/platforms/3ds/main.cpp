@@ -4,6 +4,7 @@
 #include "scene_bootstrap.hpp"
 #if defined(DUSK_PICA_GAME_DRAW)
 #include "native/game_draw_api.hpp"
+#include "native/game_limits.hpp"
 #endif
 #include <3ds.h>
 #include <citro3d.h>
@@ -234,7 +235,7 @@ int main() {
     osSetSpeedupEnable(true); // libctru requests New3DS speed/L2; not a measured clock claim.
     logText("Native entry: Citro3D initialization\n");
 #if defined(DUSK_PICA_GAME_DRAW)
-    constexpr unsigned commandBytes=512*1024; // Native renderer admission contract.
+    constexpr unsigned commandBytes=dusk::pica::nativeGameLimits.commandBytes;
 #else
     constexpr unsigned commandBytes=C3D_DEFAULT_CMDBUF_SIZE;
 #endif

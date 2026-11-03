@@ -3,10 +3,11 @@
 #include "pack.hpp"
 #include "texture_pack.hpp"
 #include "material_pack.hpp"
+#include "storage.hpp"
 namespace dusk::pica {
 struct PartBinding {
     std::uint32_t mesh{},material{};
-    unsigned uniformSlot{}; // Native pose/environment parameter block,0..63.
+    unsigned uniformSlot{}; // Native pose/environment parameter block,0..maxModelParts-1.
     std::array<Sampler,3> samplers{}; // Explicit for each consumed material unit.
     std::uint8_t samplerMask{}; // Must exactly match consumed units, no inferred defaults.
 };
@@ -20,9 +21,13 @@ class Model {
 public:
     Model()=default;
     Model(const Model&)=delete;Model& operator=(const Model&)=delete;
+    // Preloads immutable image storage; capture roles retain their authored IDs
+    // without allocation and borrow the live provider only on submission.
     bool load(Renderer&,const MeshPack&,const MaterialPack&,const TexturePack&,
               std::span<const PartBinding>,const FogParameters* environment=nullptr);
     bool unload(); // Retires handles; renderer owns completion-dependent freeing.
+    // Image overrides name resident bank IDs; samplers merge by provided unit.
+    // Renderer submissions contain handles only, never unresolved bank IDs.
     Submission draw(std::span<const DrawUniforms>);
     // Explicit native visibility/order. Repeated indices are separate draws.
     Submission drawParts(std::span<const unsigned> indices,std::span<const DrawUniforms>);
@@ -30,6 +35,8 @@ public:
     Submission drawPart(unsigned index,const DrawUniforms&);
     unsigned parts()const{return loaded?partCount:0;}
     ModelResources resources()const{return {meshCount,materialCount,imageCount};}
+    std::size_t metadataBytes()const{return metadataBytesForParts(partCount);}
+    static std::size_t metadataBytesForParts(unsigned count);
     Error error()const{return failure;}
 private:
     friend class Scene;
@@ -40,19 +47,22 @@ private:
         if(count==64)return -1;
         resources[count].id=id;return int(count++);
     }
-    struct Part {std::uint8_t mesh{},material{},uniform{},textureMask{};std::array<std::uint8_t,3> images{255,255,255};std::array<Sampler,3> samplers{};std::uint8_t highestBone{},parameters{};bool depth{};};
+    struct MeshResource {std::uint32_t id{};std::uint8_t highestBone{};};
+    struct Part {std::uint16_t mesh{},uniform{};std::uint8_t material{},textureMask{},lookupMask{},fogMask{};std::array<std::uint8_t,3> images{255,255,255};std::array<Sampler,3> samplers{};std::uint8_t highestBone{},parameters{};bool depth{},fogCarrier{};};
     Error preflightPart(unsigned,const DrawUniforms&)const;
     bool submitPart(unsigned,const DrawUniforms&);
+    int selectedImage(const Part&,unsigned,const DrawUniforms&)const;
     bool fail(Error e){failure=e;return false;}
     bool cancel(Error);
     Renderer* renderer{};
-    std::array<Resource<MeshHandle>,64> meshes{};
+    MeshBankHandle meshBank{};
+    Storage<MeshResource> meshes{};
     std::array<Resource<MaterialHandle>,64> materials{};
     std::array<Resource<TextureHandle>,64> images{};
-    std::array<Part,64> sequence{};
-    std::array<std::uint8_t,64> uniformBones{},uniformParameters{},uniformTextures{};
-    std::array<bool,64> uniformUsed{};
+    Storage<Part> sequence{};
+    std::array<std::uint8_t,64> imageLevels{};
+    std::array<bool,64> framebufferImages{};
     unsigned partCount{},meshCount{},materialCount{},imageCount{};
-    bool loaded{},needsDepth{};Error failure=Error::none;std::uint64_t revision{};
+    bool loaded{};Error failure=Error::none;std::uint64_t revision{};
 };
 }

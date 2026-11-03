@@ -1,25 +1,26 @@
-# Native asset envelope v1
+# Native asset envelope v2
 
-`DUSKNA01` is a private authoring/runtime container for exactly one source-model
+`DUSKNA02` is a private authoring/runtime container for exactly one source-model
 identity and its already-native banks. It contains no source commands or
 runtime source-material expressions. It does not make a model rendering-ready.
 `Tools/3ds/native_asset_pack.py` writes it on the Mac; AssetPack validates it
 before native resource admission. All integer fields are little-endian.
 
-The fixed128-byte header is:
+The fixed160-byte header is:
 
 | Offset | Bytes | Field |
 | --- | --- | --- |
-| 0 | 8 | ASCII DUSKNA01 |
-| 8 | 4 | Version1 |
-| 12 | 4 | Exact total file length,128..16MiB |
+| 0 | 8 | ASCII DUSKNA02 |
+| 8 | 4 | Version2 |
+| 12 | 4 | Exact total file length,160..16MiB |
 | 16 | 4 | Exact original expanded model length |
-| 20 | 4 | Part count1..64 |
+| 20 | 4 | Part count1..1024 |
 | 24 | 32 | SHA256 of all original model bytes before J3D mutation |
 | 56 | 40 | Five pairs of section offset/length |
 | 96 | 4 | External-image context required:0 or1 |
-| 100 | 24 | Reserved, zero |
-| 124 | 4 | CRC32 of header[0,124) followed by all bytes[128,end) |
+| 100 | 32 | Ordered image-context SHA256 |
+| 132 | 24 | Reserved, zero |
+| 156 | 4 | CRC32 of header[0,156) followed by all bytes[160,end) |
 
 Sections occur in this exact order: MeshPack, TexturePack, MaterialPack,
 ModelPlan, source-shape ownership. They are contiguous apart from zero16-byte
@@ -52,15 +53,18 @@ Only fully known expanded files32B..16MiB can be identified. Unsupported loader
 routes retain an empty identity and refuse native dispatch.
 
 Source identity alone cannot distinguish identical BMDs whose external images
-resolve differently in another stage/archive. Such converted banks MUST set
-the context-required field. GameAssets currently refuses them even when all
-uniform inputs are declared available. A verified live dependency/variant key
-is a later integration requirement; clearing the flag to bypass it is forbidden.
+resolve differently. Every envelope must match the runtime image context:
+`SHA256("DUSKCTX1" + LE32(count) + ordered image digests)`. Immutable images
+use `DUSKIMG1`; the registered framebuffer-color role uses
+`SHA256("DUSKROLE1framebuffer-color")`, never mutable pixel data or addresses.
+Source and context hashes both participate in the lookup filename. Unknown
+mutable providers and depth images still refuse; clearing the external-context
+flag does not bypass the identity check.
 
-The development factory looks up lowercase SHA256 filenames under a native
-authoring directory. This is not a delivered installation layout. Embedding the
-native index/payloads into a newly prepared single zelda.twilight, while keeping
-the original bundle intact, remains separate extractor/packaging work.
+The development factory looks up `<source-sha256>-<image-context-sha256>.dna`
+under a native authoring directory. This is not a delivered installation layout.
+Embedding the native index/payloads into a newly prepared single zelda.twilight,
+while keeping the original bundle intact, remains separate packaging work.
 
 The envelope has no source/GPU compatibility acceptance bit. Input availability,
 current camera/pose/material/environment producers, memory admission and all

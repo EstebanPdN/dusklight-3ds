@@ -10,13 +10,13 @@ from pathlib import Path
 import struct
 import subprocess
 import zlib
-from native_texture_pack import compile_images,extent,FORMATS,MAX_FILE
+from native_texture_pack import compile_images,extent,FORMATS,MAX_FILE,VERSION,FRAMEBUFFER_COLOR
 import texture_lab_formats as codec
 
 def images_from_pack(data):
     if not isinstance(data,bytes) or not 32<=len(data)<=MAX_FILE:raise ValueError('Native image bank extent')
     magic,version,size,count,table,tableBytes,checksum=struct.unpack('<8s6I',data[:32])
-    if magic!=b'DUSKTX01' or version!=1 or size!=len(data) or not 1<=count<=64 or table!=32 or tableBytes!=count*32 or len(data)<32+tableBytes:raise ValueError('Native image bank header')
+    if magic!=b'DUSKTX01' or version!=VERSION or size!=len(data) or not 1<=count<=64 or table!=32 or tableBytes!=count*32 or len(data)<32+tableBytes:raise ValueError('Native image bank header')
     if zlib.crc32(data[:28]+data[32:32+tableBytes])!=checksum:raise ValueError('Native image directory CRC')
     images=[];names=list(FORMATS)
     for n in range(count):
@@ -25,7 +25,7 @@ def images_from_pack(data):
         sizes=extent(width,height,levels,names[kind])
         if sum(sizes)!=size or offset>len(data) or size>len(data)-offset:raise ValueError('Native image payload extent')
         payload=data[offset:offset+size]
-        if zlib.crc32(payload)!=checksum:raise ValueError('Native image payload CRC')
+        if (checksum!=0 if names[kind]==FRAMEBUFFER_COLOR else zlib.crc32(payload)!=checksum):raise ValueError('Native image payload CRC')
         chunks=[];at=0
         for size in sizes:chunks.append(payload[at:at+size]);at+=size
         images.append({'id':identifier,'width':width,'height':height,'format':names[kind],'levels':chunks})
@@ -52,9 +52,10 @@ def compile_profile(data,encoder,scratch,allowed_ids,expected_sha256,*,max_rgb_e
     compiled=[];rows=[];encoder_used=False
     for image in images:
         output=image;identifier=image['id'];row={'id':identifier,'source_format':image['format'],'source_bytes':sum(map(len,image['levels'])),'status':'not_admitted'}
-        if identifier in allowed_ids and image['format'] in ('rgba8','rgb565'):
+        if image['format']==FRAMEBUFFER_COLOR:row['status']='runtime_role'
+        if identifier in allowed_ids and image['format'] in ('rgba8','rgb565','rgba5551'):
             reference=[(untile_rgba8(level,image['width']>>n,image['height']>>n) if image['format']=='rgba8' else
-                codec.decode16(level,image['width']>>n,image['height']>>n,'RGB565')) for n,level in enumerate(image['levels'])]
+                codec.decode16(level,image['width']>>n,image['height']>>n,'RGB565' if image['format']=='rgb565' else 'RGB5A1')) for n,level in enumerate(image['levels'])]
             alpha={a for rgba in reference for a in rgba[3::4]}
             if any(a%17 for a in alpha):row['status']='retained_alpha_precision'
             else:

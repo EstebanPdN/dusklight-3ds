@@ -14,6 +14,42 @@
 #include <gf/GFLight.h>
 #include "m_Do/m_Do_lib.h"
 
+#if defined(DUSK_PICA_GAME_DRAW)
+#include "../../../platforms/3ds/native/game_draw_api.hpp"
+#include "../../../platforms/3ds/runtime/gx_framebuffer.hpp"
+
+static bool publishNativeMirrorCamera(const Mtx44 projection, const f32* savedProjection,
+                                      const f32* viewport, const u32* scissor) {
+    using namespace dusk::pica;
+    if (!projection || !savedProjection || !viewport || !scissor) {
+        game::invalidateCamera();
+        return false;
+    }
+    // mainDraw keeps the scene perspective. The GX query proves that no other
+    // projection replaced the game-authored matrix before this pass.
+    const f32 expected[4][4] = {
+        {savedProjection[1], 0, savedProjection[2], 0},
+        {0, savedProjection[3], savedProjection[4], 0},
+        {0, 0, savedProjection[5], savedProjection[6]},
+        {0, 0, -1, 0},
+    };
+    Matrix clip;
+    if (savedProjection[0] != 0) { game::invalidateCamera(); return false; }
+    for (unsigned row = 0; row < 4; ++row)
+        for (unsigned column = 0; column < 4; ++column) {
+            if (projection[row][column] != expected[row][column]) {
+                game::invalidateCamera();
+                return false;
+            }
+            clip[row][column] = projection[row][column];
+        }
+    const CameraRegion region{float(FB_WIDTH), float(FB_HEIGHT),
+        viewport[0], viewport[1], viewport[2], viewport[3], viewport[4], viewport[5]};
+    const CameraScissor bounds{scissor[0], scissor[1], scissor[2], scissor[3]};
+    return game::publishCamera(dusk::native::activeFramebuffer(), clip, region, bounds);
+}
+#endif
+
 static BOOL daMirror_c_createHeap(fopAc_ac_c* i_this) {
     return ((daMirror_c*)i_this)->createHeap();
 }
@@ -237,9 +273,27 @@ void dMirror_packet_c::modelDraw(J3DModel* i_model, Mtx param_1) {
     for (u16 i = 0; i < materialNum; i++) {
         J3DMatPacket* matPacket = i_model->getMatPacket(i);
         J3DShapePacket* shapePacket = matPacket->getShapePacket();
+#if defined(DUSK_PICA_GAME_DRAW)
+        if (!shapePacket || !shapePacket->getShape())
+            OSPanic(__FILE__, __LINE__, "Native mirror material has no shape packet");
+#endif
         J3DShape* shape = shapePacket->getShape();
 
         if (!shape->checkFlag(1)) {
+#if defined(DUSK_PICA_GAME_DRAW)
+            const unsigned shapeIndex = shape->getIndex();
+            if (shapeIndex >= modelData->getShapeNum() ||
+                i_model->getShapePacket(shapeIndex) != shapePacket || shapePacket->getModel() != i_model)
+                OSPanic(__FILE__, __LINE__, "Native mirror shape packet/model mismatch");
+            if (!dusk::pica::game::beginMirrorDraw(i_model, shapeIndex, unsigned(i) + 1,
+                                                    {color.r, color.g, color.b, color.a}))
+                OSPanic(__FILE__, __LINE__, "Native mirror draw override could not be bound");
+            shapePacket->setBaseMtxPtr((Mtx*)param_1);
+            shapePacket->drawFast();
+            shapePacket->setBaseMtxPtr((Mtx*)j3dSys.getViewMtx());
+            if (!dusk::pica::game::endMirrorDraw())
+                OSPanic(__FILE__, __LINE__, "Native mirror draw override could not be cleared");
+#else
             J3DMaterial* material = modelData->getMaterialNodePointer(i);
             u32 texGenNum = material->getTexGenBlock()->getTexGenNum();
             u8 colorChanNum = material->getColorBlock()->getColorChanNum();
@@ -259,6 +313,7 @@ void dMirror_packet_c::modelDraw(J3DModel* i_model, Mtx param_1) {
             shapePacket->setBaseMtxPtr((Mtx*)param_1);
             shapePacket->drawFast();
             shapePacket->setBaseMtxPtr((Mtx*)j3dSys.getViewMtx());
+#endif
         }
         shape->resetVcdVatCache();
     }
@@ -414,8 +469,16 @@ void dMirror_packet_c::mainDraw() {
             return;
         }
 
+#if defined(DUSK_PICA_GAME_DRAW)
+        const u32 mirrorScissor[4] = {(u32)var_f31, (u32)var_f30,
+                                     (u32)(var_f29 - var_f31), (u32)(var_f28 - var_f30)};
+        GXSetScissor(mirrorScissor[0], mirrorScissor[1], mirrorScissor[2], mirrorScissor[3]);
+        if (!publishNativeMirrorCamera(view->projMtx, sp150, sp138, mirrorScissor))
+            OSPanic(__FILE__, __LINE__, "Native mirror camera/scissor publication refused");
+#else
         GXSetScissor((u32)var_f31, (u32)var_f30, (u32)(var_f29 - var_f31),
                      (u32)(var_f28 - var_f30));
+#endif
 
         cXyz sp110 = mQuad[1] - mQuad[0];
         cXyz sp104 = mQuad[2] - mQuad[1];
@@ -456,6 +519,10 @@ void dMirror_packet_c::mainDraw() {
         j3dSys.reinitGX();
         GXSetScissor(scissor[0], scissor[1], scissor[2], scissor[3]);
         mirrorZdraw(sp150, sp138, view->far_, var_f31, var_f30, var_f29, var_f28, var_f27);
+#if defined(DUSK_PICA_GAME_DRAW)
+        if (!publishNativeMirrorCamera(view->projMtx, sp150, sp138, scissor))
+            OSPanic(__FILE__, __LINE__, "Native mirror original camera/scissor restoration refused");
+#endif
     }
 }
 

@@ -13,7 +13,7 @@ extern "C" {
 #include <cstring>
 #include <cstdio>
 using namespace dusk::native;
-static C3D_TexEnv envs[6];static unsigned resetMask,bufferRgb;static u32 bufferColor;
+static C3D_TexEnv envs[6];static unsigned resetMask,bufferRgb,bufferAlpha;static u32 bufferColor;
 static std::array<unsigned,6> blendRegisters;
 void C3D_AlphaBlend(GPU_BLENDEQUATION rgb,GPU_BLENDEQUATION alpha,GPU_BLENDFACTOR src,GPU_BLENDFACTOR dst,GPU_BLENDFACTOR srcAlpha,GPU_BLENDFACTOR dstAlpha){
     blendRegisters={unsigned(rgb),unsigned(alpha),unsigned(src),unsigned(dst),unsigned(srcAlpha),unsigned(dstAlpha)};
@@ -21,8 +21,9 @@ void C3D_AlphaBlend(GPU_BLENDEQUATION rgb,GPU_BLENDEQUATION alpha,GPU_BLENDFACTO
 C3D_TexEnv* C3D_GetTexEnv(int id){assert(id>=0&&id<6);return &envs[id];}
 void C3D_TexEnvBufUpdate(int mode,int mask){
     assert(mask>=0&&mask<16);
-    if(mode==C3D_Both){assert(mask==0);++resetMask;bufferRgb=0;}
-    else {assert(mode==C3D_RGB);bufferRgb=mask;}
+    if(mode==C3D_Both){assert(mask==0);++resetMask;bufferRgb=bufferAlpha=0;}
+    else if(mode==C3D_RGB)bufferRgb=mask;
+    else {assert(mode==C3D_Alpha);bufferAlpha=mask;}
 }
 void C3D_TexEnvBufColor(u32 color){bufferColor=color;}
 static gx::MaterialSource decodeSource(unsigned n){
@@ -37,7 +38,7 @@ static gx::MaterialFunction decodeFunction(unsigned n){
     assert(false);return {};
 }
 static gx::PicaMaterialPlan decode(const gx::PicaMaterialPlan& original){
-    auto p=original;p.bufferUpdateRgb=bufferRgb;for(unsigned c=0;c<4;++c)p.bufferConstant[c]=bufferColor>>(8*c);
+    auto p=original;p.bufferUpdateRgb=bufferRgb;p.bufferUpdateAlpha=bufferAlpha;for(unsigned c=0;c<4;++c)p.bufferConstant[c]=bufferColor>>(8*c);
     for(unsigned t=0;t<p.stageCount;++t){const auto& e=envs[t];auto& stage=p.stages[t];
         for(unsigned c=0;c<4;++c)stage.constant[c]=e.color>>(8*c);
         for(unsigned a=0;a<2;++a){auto& ch=a?stage.alpha:stage.rgb;
@@ -85,6 +86,7 @@ int main(){
     for(unsigned n=0;n<4096;++n){gx::PicaMaterialPlan p{};p.stageCount=1+n%6;p.textureCount=3;p.textures={{{0,0},{1,1},{2,2}}};
         for(auto& c:p.bufferConstant)c=randomWord(seed)>>16;
         p.bufferUpdateRgb=(randomWord(seed)>>16)&15;
+        p.bufferUpdateAlpha=(randomWord(seed)>>16)&15;
         for(unsigned t=0;t<p.stageCount;++t){auto& stage=p.stages[t];for(auto& c:stage.constant)c=randomWord(seed)>>16;
             for(unsigned a=0;a<2;++a){auto& ch=a?stage.alpha:stage.rgb;ch.function=static_cast<gx::MaterialFunction>((randomWord(seed)>>16)%7);ch.scale=(randomWord(seed)>>16)%3;
                 for(auto& in:ch.inputs){in.source=static_cast<gx::MaterialSource>((randomWord(seed)>>16)%7);in.operand=static_cast<gx::MaterialOperand>(a?1+(randomWord(seed)>>16)%4:(randomWord(seed)>>16)%5);in.inverse=randomWord(seed)&1;}}
@@ -94,10 +96,10 @@ int main(){
         // material overwrites live state, including unused stages/buffer state.
         const auto prepared=preparePicaMaterial(p);
         C3D_TexEnv packedExpected[6];memcpy(packedExpected,envs,sizeof(envs));
-        const auto rgbExpected=bufferRgb,colorExpected=bufferColor;
-        memset(envs,0x5a,sizeof(envs));bufferRgb=15;bufferColor=0x12345678;
+        const auto rgbExpected=bufferRgb,alphaExpected=bufferAlpha,colorExpected=bufferColor;
+        memset(envs,0x5a,sizeof(envs));bufferRgb=bufferAlpha=15;bufferColor=0x12345678;
         applyPreparedPicaMaterial(prepared);
-        assert(!memcmp(packedExpected,envs,sizeof(envs))&&bufferRgb==rgbExpected&&bufferColor==colorExpected);
+        assert(!memcmp(packedExpected,envs,sizeof(envs))&&bufferRgb==rgbExpected&&bufferAlpha==alphaExpected&&bufferColor==colorExpected);
         Samples samples{};for(auto& c:samples.raster)c=double(randomWord(seed)&255)/255;
         for(auto& map:samples.texture)for(auto& uv:map)for(auto& c:uv)c=double(randomWord(seed)&255)/255;
         const auto expected=picaEvaluate(p,samples),result=picaEvaluate(actual,samples);

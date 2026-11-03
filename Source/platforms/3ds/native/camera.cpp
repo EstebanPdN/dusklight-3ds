@@ -40,4 +40,26 @@ bool prepareCamera(const Matrix& projection,const CameraRegion& r,unsigned physi
     if(result.left>=result.right||result.top>=result.bottom||result.right>physicalWidth||result.bottom>physicalHeight)return false;
     out=result;return true;
 }
+bool restrictCameraScissor(CameraProjection& camera,const CameraRegion& r,const CameraScissor& s,
+                           unsigned physicalWidth,unsigned physicalHeight){
+    if(!physicalWidth||!physicalHeight||physicalWidth>1024||physicalHeight>1024||
+       !scalar(r.canvasWidth,32768)||!scalar(r.canvasHeight,32768)||
+       r.canvasWidth<1||r.canvasHeight<1||!s.width||!s.height||
+       camera.left>=camera.right||camera.top>=camera.bottom||
+       camera.right>physicalWidth||camera.bottom>physicalHeight)return false;
+    const double cw=r.canvasWidth,ch=r.canvasHeight;
+    const double left=std::min(double(s.x),cw),top=std::min(double(s.y),ch);
+    const double right=std::min(double(std::uint64_t(s.x)+s.width),cw);
+    const double bottom=std::min(double(std::uint64_t(s.y)+s.height),ch);
+    if(left>=right||top>=bottom)return false;
+    const unsigned x0=unsigned(std::floor((ch-bottom)*physicalWidth/ch));
+    const unsigned x1=unsigned(std::ceil((ch-top)*physicalWidth/ch));
+    const unsigned y0=unsigned(std::floor((cw-right)*physicalHeight/cw));
+    const unsigned y1=unsigned(std::ceil((cw-left)*physicalHeight/cw));
+    const unsigned clippedLeft=std::max(camera.left,x0),clippedRight=std::min(camera.right,x1);
+    const unsigned clippedTop=std::max(camera.top,y0),clippedBottom=std::min(camera.bottom,y1);
+    if(clippedLeft>=clippedRight||clippedTop>=clippedBottom)return false;
+    camera.left=clippedLeft;camera.right=clippedRight;camera.top=clippedTop;camera.bottom=clippedBottom;
+    return true;
+}
 }

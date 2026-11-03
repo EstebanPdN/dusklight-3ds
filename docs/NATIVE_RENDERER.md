@@ -32,7 +32,8 @@ game data and captures belong outside tracked source directories.
 - Immutable native mesh/image resources, generation-checked handles, bounded
   budgets, explicit owner-thread submission and completion-dependent retirement.
 - Weighted/rigid GPU vertex processing, position/normal palettes, projection,
-  basic directional lighting, affine UVs and an experimental projective variant.
+  eight point/directional lights with four independent color channels,
+  diffuse/attenuation controls, affine UVs and a projective variant.
 - Native combiner, alpha, blend, depth and sampler contracts; dynamic material
   parameters, ordered parts, shared resources and explicit partial-draw errors.
 - Offline source parsers and native binary writers/readers, including original
@@ -42,7 +43,9 @@ game data and captures belong outside tracked source directories.
 - Main-target camera orientation, viewport/depth mapping, invalid-input refusal
   and invalidation lifecycle. Physical pixel-edge precision is unverified.
 
-These are implementation and host/compile claims. They do not establish a
+Asset-free GPU comparisons additionally exercise bounded lighting, fog,
+dual-raster and state-restoration cases; see [Testing](TESTING.md) and the
+labelled [verification status](STATUS.md). These results do not establish a
 rendered original scene, animation fidelity, complete materials or playability
 through the new renderer.
 
@@ -57,12 +60,12 @@ profile can compile while stopping at an unsupported model draw.
 The live source producer currently supplies prepared pose palettes and ordering,
 plus an explicitly published main-target camera. Texture generation, animated
 material colors, complete lighting/fog, billboards and some deformation modes
-remain unsupported. External-image variants lack a verified context key and
-are refused. Admission of a previously unseen asset after native draws have
-already been emitted is also restricted; a preloading/streaming policy is needed.
+remain incomplete. Image-context keys distinguish external variants; only the
+registered framebuffer-color capture is admitted as mutable, while depth and
+unknown mutable providers refuse. Broader pass and asset coverage remains incomplete.
 
 The temporary development asset lookup is
-`sdmc:/3ds/DuskLight/native/<source-sha256>.dna`. This is not a supported SD
+`sdmc:/3ds/DuskLight/native/<source-sha256>-<image-context-sha256>.dna`. This is not a supported SD
 installation contract. Embedding native resources in the single user-prepared
 `zelda.twilight` remains pending; the existing bundle does not supply all these
 native assets. No generated game bank is included in Git.

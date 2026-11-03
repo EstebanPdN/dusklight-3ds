@@ -10,7 +10,7 @@ unsigned byte(std::span<const std::byte> data,unsigned at){return std::to_intege
 bool zero(std::span<const std::byte> data){for(auto b:data)if(b!=std::byte{})return false;return true;}
 }
 PackError MaterialPack::open(std::span<const std::byte> data,MaterialPack& out){
-    out={};if(data.size()<32||data.size()>32+64*(32+1248)||std::memcmp(data.data(),"DUSKMT01",8)||(word(data,8)!=1&&word(data,8)!=2))return PackError::header;
+    out={};if(data.size()<32||data.size()>32+64*(32+1248)||std::memcmp(data.data(),"DUSKMT01",8)||word(data,8)!=3)return PackError::header;
     const auto count=word(data,16),tableBytes=word(data,24);
     if(word(data,12)!=data.size()||!count||count>64||word(data,20)!=32||tableBytes!=count*32||data.size()<32+tableBytes)return PackError::bounds;
     if(crc32(data.first(28),data.subspan(32,tableBytes))!=word(data,28))return PackError::checksum;
@@ -27,14 +27,14 @@ PackError MaterialPack::open(std::span<const std::byte> data,MaterialPack& out){
     out.bytes=data;out.count=count;out.version=word(data,8);return PackError::none;
 }
 PackError MaterialPack::material(std::uint32_t id,MaterialView& out)const{
-    out={};if(!count)return PackError::header;
+    out={};if(!count||version!=3)return PackError::header;
     unsigned lo=0,hi=count;
     while(lo<hi){const auto mid=lo+(hi-lo)/2;if(entries[mid].id<id)lo=mid+1;else hi=mid;}
     if(lo==count||entries[lo].id!=id)return PackError::missing;
     const auto& e=entries[lo];auto data=bytes.subspan(e.offset,e.size);
     if(crc32(data)!=e.checksum)return PackError::checksum;
     const unsigned stages=byte(data,0),flags=byte(data,6);
-    if(!stages||stages>6||flags>63||!zero(data.subspan(10,2))||!zero(data.subspan(26,6)))return PackError::layout;
+    if(!stages||stages>6||flags>63||byte(data,10)>1||byte(data,11)>1||byte(data,26)>7||!zero(data.subspan(27,5)))return PackError::layout;
     const bool fog=flags&16;
     if(data.size()!=32+stages*32+(fog?1024:0))return PackError::layout;
     // Read into a local validated native object; never cast file bytes into
@@ -43,10 +43,11 @@ PackError MaterialPack::material(std::uint32_t id,MaterialView& out)const{
     m.depth=Compare(byte(data,4));m.alpha=Compare(byte(data,5));m.alphaReference=byte(data,7);
     m.depthTest=flags&1;m.depthWrite=flags&2;m.colorWrite=flags&4;m.alphaWrite=flags&8;m.fog=fog;m.fogDepthFlip=flags&32;
     m.bufferRgbMask=byte(data,8);m.bufferAlphaMask=byte(data,9);m.bufferColor=word(data,12);m.fogColor=word(data,16);
+    m.rasterLookup=byte(data,10);m.lookupBase=byte(data,11);m.fogCarrier=FogCarrier(byte(data,26));
     m.customBlend={BlendEquation(byte(data,20)),BlendEquation(byte(data,21)),BlendFactor(byte(data,22)),BlendFactor(byte(data,23)),BlendFactor(byte(data,24)),BlendFactor(byte(data,25))};
     for(unsigned n=0;n<stages;++n){const auto at=32+n*32;auto& s=m.stages[n];
-        if(!zero(data.subspan(at+(version==1?20:24),version==1?12:8)))return PackError::layout;
-        if(version==2)for(unsigned c=0;c<4;++c)s.constantBindings[c]=std::uint8_t(byte(data,at+20+c));
+        if(!zero(data.subspan(at+24,8)))return PackError::layout;
+        for(unsigned c=0;c<4;++c)s.constantBindings[c]=std::uint8_t(byte(data,at+20+c));
         for(unsigned c=0;c<3;++c){s.rgb[c]=Source(byte(data,at+c));s.alpha[c]=Source(byte(data,at+3+c));s.rgbOperand[c]=ColorOperand(byte(data,at+6+c));s.alphaOperand[c]=AlphaOperand(byte(data,at+9+c));}
         s.rgbFunction=Combine(byte(data,at+12));s.alphaFunction=Combine(byte(data,at+13));s.rgbScale=byte(data,at+14);s.alphaScale=byte(data,at+15);s.constant=word(data,at+16);
     }
@@ -56,7 +57,8 @@ PackError MaterialPack::material(std::uint32_t id,MaterialView& out)const{
     out={id,m,e.images,e.requiresFog,e.initialSnapshot};return PackError::none;
 }
 bool instantiateMaterial(const MaterialView& view,const FogParameters* fog,Material& out,bool allowInitialSnapshot){
-    out={};if(!view.id||(view.requiresFog&&!fog)||(view.initialSnapshotOnly&&!allowInitialSnapshot))return false;
+    out={};if(!view.id||(view.requiresFog&&view.state.fogCarrier==FogCarrier::none&&!fog)||(view.initialSnapshotOnly&&!allowInitialSnapshot))return false;
+    if(fog&&view.state.fogCarrier!=FogCarrier::none)return false; // A shader carrier is bound by DrawUniforms, never a depth LUT.
     auto m=view.state;
     for(unsigned n=0;n<3;++n)if(bool(m.textureMask&(1u<<n))!=bool(view.imageIds[n]))return false;
     if(fog){m.fog=fog->enabled;m.fogDepthFlip=fog->depthFlip;m.fogColor=fog->color;m.fogValues=fog->values;}

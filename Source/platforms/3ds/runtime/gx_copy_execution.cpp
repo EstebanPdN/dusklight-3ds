@@ -28,10 +28,25 @@ struct CopyImage {const void* identity{};std::uint8_t* bti{};std::size_t bytes{}
 };
 std::array<CopyImage,16> images{};
 std::size_t used{};
+struct PendingCapture {bool active{};void* identity{};gx::CopySurface setup{};FramebufferHandle framebuffer{};};
+PendingCapture pendingCapture;
 constexpr std::size_t budget=4*1024*1024;
+bool resolveFramebufferCapture(const void* identity,gx::TextureHandle handle,gx::Texture& source){
+    if(!identity||!handle)return false;
+    const CopyImage* image=nullptr;
+    for(const auto& value:images)if(value.identity==identity&&value.handle==handle){image=&value;break;}
+    std::uint32_t token{};
+    return image&&image->bti&&image->bytes>=32&&!image->lastDepth&&image->palette.empty()&&
+        gx::textureCommandToken(identity,token)&&(token&0x7fffffu)==handle&&
+        gx::textureFromCommandToken(token,source)&&source.handle==handle&&!source.immutablePixels&&
+        source.format==6&&source.mipCount==1&&gx::textureAliasImage(handle)==identity&&
+        source.bti.data()==image->bti&&source.bti.size()==image->bytes&&
+        source.image.data()==image->bti+32&&source.image.size()==image->bytes-32;
+}
 [[noreturn]] void fail(const char* reason){OSPanic(__FILE__,__LINE__,"Native EFB transfer: %s",reason);}
 const gx::CommandRegisters& registers(){auto* stream=gx::commandStream();if(!stream||!stream->finish())fail("command boundary");return stream->registers();}
 void discard(CopyImage& image){
+    if(pendingCapture.active&&pendingCapture.identity==image.identity)pendingCapture.active=false;
     if(!releaseGxTexture(image.handle)||!gx::unregisterTexture(image.handle))fail("texture release");
     if(copyprobe::enabled)copyprobe::destroy(image.handle);
     used-=image.bytes;std::free(image.bti);image={};
@@ -260,8 +275,6 @@ void executeTextureCopy(void* identity,GXBool doClear,const gx::CopySurface& s,c
         s.depth?"depth":"color",unsigned(plan.width),unsigned(plan.height),static_cast<unsigned long>(plan.bytes));
     if(doClear&&r)clear(*r);
 }
-struct PendingCapture {bool active{};void* identity{};gx::CopySurface setup{};FramebufferHandle framebuffer{};};
-PendingCapture pendingCapture;
 std::uint64_t deferredMaterialized{};
 void materializePendingCapture(){
     if(!pendingCapture.active)return;
@@ -270,6 +283,40 @@ void materializePendingCapture(){
 }
 }
 void dropPendingCapture(){pendingCapture.active=false;}
+bool registeredFramebufferCapture(const void* identity,std::uint64_t handle){
+    gx::Texture source{};return resolveFramebufferCapture(identity,handle,source);
+}
+bool acquireFramebufferCapture(const void* identity,void*& texture,unsigned& logicalWidth,unsigned& logicalHeight){
+    texture=nullptr;logicalWidth=logicalHeight=0;
+    if(!identity||!platformGpuOwner()||platformGpuOwner()!=OSGetCurrentThread())return false;
+    const CopyImage* image=nullptr;
+    for(const auto& value:images)if(value.identity==identity&&value.handle){image=&value;break;}
+    std::uint32_t token{};
+    if(!image||!gx::textureCommandToken(identity,token)||(token&0x7fffffu)!=image->handle)return false;
+    const auto handle=image->handle;
+    if(token==gx::watchedCaptureToken){
+        gx::watchedCaptureLastUse=gx::textureFrameCounter;
+        if(gx::watchedCaptureMaterialize)gx::watchedCaptureMaterialize();
+    }
+    // The callback may replace or destroy the copy; never retain its old view.
+    gx::Texture source{};
+    if(!resolveFramebufferCapture(identity,handle,source))return false;
+    // Sampler settings belong to the eventual draw; this bind only makes the
+    // shared pixels current, including a dirty CPU-encoded copy.
+    source.wrapS=source.wrapT=source.minFilter=source.magFilter=source.minLod=source.maxLod=0;
+    source.lodBias=0;
+    {
+        GxTextureDrawScope scope({&source,1});
+        if(!scope)return false;
+        float scaleU{},scaleV{};
+        const bool bound=bindGxTexture(source,scaleU,scaleV,0);
+        invalidateGxTextureBindings();
+        if(!bound)return false;
+    }
+    unsigned width{},height{};void* resident=gpuCaptureTexture(handle,width,height);
+    if(!resident||width!=source.width||height!=source.height)return false;
+    texture=resident;logicalWidth=width;logicalHeight=height;return true;
+}
 }
 // The game marks its unconditional per-frame screen capture as optional.
 extern "C" void GXNativeOptionalCopy(){optionalNextCopy=true;}

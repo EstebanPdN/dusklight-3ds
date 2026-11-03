@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Offline J3D geometry -> native meshes. Never used by the 3DS renderer."""
+"""Offline J3D geometry -> native meshes. Never used by the 3DS renderer.
+
+Each manifest mesh's source_attributes lists the actual GX descriptor IDs,
+including CLR0=11 and CLR1=12 only when present. Native white defaults do not
+prove source availability; material preparation must check this metadata.
+Triangles are partitioned in source order into at most four draw matrices per
+native mesh; each chunk keeps its original shape/group and descriptor metadata.
+"""
 import argparse
 import hashlib
 import json
@@ -7,7 +14,7 @@ import math
 import os
 from pathlib import Path
 import struct
-from native_mesh_pack import compile_pack,VERTEX
+from native_mesh_pack import compile_pack,VERTEX,MAX_MODEL_PARTS
 
 class Unsupported(ValueError):pass
 
@@ -57,7 +64,7 @@ class Arrays:
             if count!=0:raise Unsupported('NBT/three-index normal encoding needs native tangent support')
             if kind not in (1,3,4):raise Unsupported('Unsigned source normal encoding')
             components=3
-        elif attr==11:
+        elif attr in (11,12):
             need(count in (0,1) and kind<=5,'Color format/count')
             if count!=int(kind>=3):raise Unsupported('Source color component/encoding mismatch')
             return (2,3,4,2,3,4)[kind]
@@ -68,7 +75,7 @@ class Arrays:
 
     def decode(self,attr,raw):
         count,kind,fraction=self.formats[attr]
-        if attr==11:
+        if attr in (11,12):
             if kind==0:
                 word=int.from_bytes(raw,'big');r=(word>>11)&31;g=(word>>5)&63;b=word&31;return [(r<<3)|(r>>2),(g<<2)|(g>>4),(b<<3)|(b>>2),255]
             if kind in (1,2):return list(raw[:3])+[255]
@@ -121,7 +128,7 @@ def packets(data,desc,arrays,matrixSlots):
         if op&7:raise Unsupported('Nonzero source vertex format slot')
         count=u16(data,at);at+=2;triangles=topology(op,count);remap=[]
         for _ in range(count):
-            value={'position':[0,0,0],'normal':[0,0,1],'uv':[[0,0] for _ in range(3)],'color':[255]*4};selector=0
+            value={'position':[0,0,0],'normal':[0,0,1],'uv':[[0,0] for _ in range(3)],'color':[255]*4,'color1':[255]*4};selector=0
             for attr,kind in desc:
                 if attr==0:selector=span(data,at,1)[0];at+=1;continue
                 if kind==1:
@@ -131,19 +138,39 @@ def packets(data,desc,arrays,matrixSlots):
                 if attr==9:value['position']=decoded
                 elif attr==10:value['normal']=decoded
                 elif attr==11:value['color']=decoded
+                elif attr==12:value['color1']=decoded
                 else:value['uv'][attr-13]=decoded
             need(selector%3==0 and selector//3<len(matrixSlots),'Invalid position matrix selector')
             sourceMatrix=matrixSlots[selector//3];need(sourceMatrix is not None,'Unresolved inherited matrix slot')
             if sourceMatrix not in palette:palette.append(sourceMatrix)
-            if len(palette)>8:raise Unsupported('Group needs more than eight native matrices')
             local=palette.index(sourceMatrix);value['bones']=[local,0,0,0];value['weights']=[255,0,0,0]
             uv=[x for pair in value['uv'] for x in pair]
-            key=VERTEX.pack(*value['position'],*value['normal'],*uv,*value['color'],local*3,0,0,0,255,0,0,0)
+            key=VERTEX.pack(*value['position'],*value['normal'],*uv,*value['color'],*value['color1'],local*3,0,0,0,255,0,0,0)
             if key not in lookup:lookup[key]=len(vertices);vertices.append(value)
             remap.append(lookup[key])
         indices.extend(remap[i] for triangle in triangles for i in triangle);packetCount+=1
-        need(len(vertices)<=65536 and len(indices)<=65535,'Native mesh chunk exceeds bounds')
+        need(len(vertices)<=512000 and len(indices)<=3*512000,'Source geometry work bound')
     return vertices,indices,palette,packetCount
+
+def partition(vertices,indices,palette):
+    """Split only between triangles; never bucket or sort by matrix identity."""
+    chunks=[];v=[];ix=[];matrices=[];lookup={}
+    for at in range(0,len(indices),3):
+        triangle=[vertices[i] for i in indices[at:at+3]]
+        sources=[palette[value['bones'][0]] for value in triangle]
+        needed=list(dict.fromkeys(sources))
+        if ix and (len(set(matrices).union(needed))>4 or len(ix)+3>65535):
+            chunks.append((v,ix,matrices));v=[];ix=[];matrices=[];lookup={}
+        for value,source in zip(triangle,sources):
+            if source not in matrices:matrices.append(source)
+            local=matrices.index(source)
+            uv=[x for pair in value['uv'] for x in pair]
+            key=VERTEX.pack(*value['position'],*value['normal'],*uv,*value['color'],*value['color1'],local*3,0,0,0,255,0,0,0)
+            if key not in lookup:
+                lookup[key]=len(v);v.append({**value,'bones':[local,0,0,0]})
+            ix.append(lookup[key])
+    if ix:chunks.append((v,ix,matrices))
+    return chunks
 
 def convert(data):
     blocks=sections(data);arrays=Arrays(blocks['VTX1']);shape=blocks['SHP1'];draw=blocks['DRW1']
@@ -159,12 +186,12 @@ def convert(data):
     for sourceShape in range(nShape):
         index=u16(shape,remap+sourceShape*2);need(index<nShape,'Shape remap bound');record=init+index*40
         mode=span(shape,record,1)[0]
-        if mode not in (0,3):raise Unsupported(f'Shape {sourceShape}: billboard mode {mode} requires native billboard pipeline')
+        if mode not in (0,1,2,3):raise Unsupported(f'Shape {sourceShape}: unsupported matrix mode {mode}')
         groups=u16(shape,record+2);totalGroups+=groups;need(0<groups<=4096 and totalGroups<=4096,'Matrix group count/work bound');desc=descriptor(shape,descBase+u16(shape,record+4),arrays)
         matrixFirst,drawFirst=u16(shape,record+6),u16(shape,record+8);slots=[None]*10
         for group in range(groups):
             m=mtxInit+(matrixFirst+group)*8;use,count,first=u16(shape,m),u16(shape,m+2),u32(shape,m+4)
-            if mode==0:slots[0]=use
+            if mode in (0,1,2):slots[0]=use
             else:
                 need(1<=count<=10,'Source matrix group count')
                 for slot in range(count):
@@ -175,12 +202,15 @@ def convert(data):
             try:v,ix,palette,packetCount=packets(span(shape,display+offset,size),desc,arrays,slots)
             except (ValueError,struct.error) as error:raise type(error)(f'Shape {sourceShape} group {group}: {error}') from error
             need(all(i<nDraw for i in palette),'Position matrix outside DRW1')
-            totalVertices+=len(v);need(totalVertices<=512000,'Converted native vertex work bound')
             totalPackets+=packetCount
             if not ix:empty.append({'shape':sourceShape,'group':group,'reason':'empty source geometry'});continue
-            identifier=len(meshes)+1;need(identifier<=64,'Native pack has more than64mesh chunks')
-            meshes.append({'id':identifier,'vertices':v,'indices':ix})
-            bindings.append({'mesh':identifier,'source_shape':sourceShape,'source_group':group,'source_mode':mode,'draw_matrix_palette':palette})
+            for v,ix,palette in partition(v,ix,palette):
+                totalVertices+=len(v);need(totalVertices<=512000,'Converted native vertex work bound')
+                identifier=len(meshes)+1;need(identifier<=MAX_MODEL_PARTS,f'Native pack has more than{MAX_MODEL_PARTS}mesh chunks')
+                meshes.append({'id':identifier,'vertices':v,'indices':ix})
+                # Actual descriptor attributes, not the library defaults in vertices.
+                bindings.append({'mesh':identifier,'source_shape':sourceShape,'source_group':group,'source_mode':mode,
+                                 'source_attributes':[attr for attr,_ in desc],'draw_matrix_palette':palette})
     need(meshes,'No triangle geometry')
     document={'schema':'dusklight-native-mesh/1','meshes':meshes}
     packed=compile_pack(document) # Native numeric domains and all attribute contracts.

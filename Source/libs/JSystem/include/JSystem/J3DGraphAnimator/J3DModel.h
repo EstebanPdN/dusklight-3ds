@@ -59,6 +59,9 @@ public:
 #if defined(DUSK_PICA_GAME_DRAW)
     bool drawNativeShape(unsigned shape);
     bool copyNativePalette(const dusk::pica::UniformBinding&, dusk::pica::Palette&);
+    bool copyNativeParameters(const dusk::pica::UniformBinding&, dusk::pica::DrawUniforms&);
+    static bool copyNativeMaterial(J3DMaterial&, const dusk::pica::UniformBinding&,
+                                   dusk::pica::DrawUniforms&);
 #endif
     s32 createShapePacket(J3DModelData*);
     s32 createMatPacket(J3DModelData*, u32);

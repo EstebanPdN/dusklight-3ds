@@ -1103,4 +1103,9 @@ void dKy_nativeInitializeSceneColor();
 void dKy_GlobalLight_set();
 #endif
 
+#ifdef DUSK_PICA_GAME_DRAW
+// Last published effective view-space declaration; false leaves out unchanged.
+bool dKy_getNativeGlobalLight(unsigned slot, J3DLightInfo& out);
+#endif
+
 #endif /* D_KANKYO_D_KANKYO_H */

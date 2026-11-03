@@ -10,6 +10,7 @@
 #include <3ds/result.h>
 extern "C" {
 #include <3ds/services/gspgpu.h>
+#include <3ds/allocator/linear.h>
 }
 extern "C" OSThread* OSGetCurrentThread();
 #include <3ds/gpu/enums.h>
@@ -226,8 +227,11 @@ bool bindGxTexture(const gx::Texture& input, float& scaleU, float& scaleV,unsign
         if(!makeRoom(e.outputBytes))return false;
         for (auto& item : activeCache()) if (!item.handle) { entry = &item; break; }
         if(!entry)return reject("GX texture eviction did not provide a slot");
-        if (!C3D_TexInitWithParams(&entry->texture,nullptr,{u16(e.paddedWidth),u16(e.paddedHeight),u8(e.mipCount-1),gpuFormat(e.format),GPU_TEX_2D,false}))
+        if (!C3D_TexInitWithParams(&entry->texture,nullptr,{u16(e.paddedWidth),u16(e.paddedHeight),u8(e.mipCount-1),gpuFormat(e.format),GPU_TEX_2D,false})){
+            OSReport("Native GX texture allocation: request=%lu %ux%u cache=%lu linear_free=%lu\n",static_cast<unsigned long>(e.outputBytes),
+                unsigned(e.paddedWidth),unsigned(e.paddedHeight),static_cast<unsigned long>(allocated),static_cast<unsigned long>(linearSpaceFree()));
             return reject("GX texture GPU allocation failed");
+        }
         auto& gpu = entry->texture;
         auto bytes = std::span(static_cast<std::uint8_t*>(gpu.data), std::size_t(C3D_TexCalcTotalSize(gpu.size,gpu.maxLevel)));
         bool decoded;

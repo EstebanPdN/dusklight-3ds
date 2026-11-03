@@ -7,6 +7,7 @@
 #include <dolphin/gd.h>
 #include "../runtime/texture_gx.hpp"
 #include "../runtime/texture_resources.hpp"
+#include "../native/game_source.hpp"
 #include "../runtime/gx_copy_images.hpp"
 #include "../runtime/gx_framebuffer.hpp"
 #include <dolphin/gx/GXExtra.h>
@@ -17,6 +18,8 @@
 #include <JSystem/J3DGraphBase/J3DShapeDraw.h>
 #include <JSystem/J3DGraphBase/J3DSys.h>
 #include <JSystem/J3DGraphBase/J3DTevs.h>
+#include <m_Do/m_Do_graphic.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cassert>
@@ -26,9 +29,25 @@
 #include <cstring>
 #include <span>
 #include <vector>
+extern "C" void GXNativeOptionalCopy();
+// These two game globals are the only m_Do_graphic.cpp boundary substituted
+// by this host harness; registration and J3D assignment are production code.
+ResTIMG* mDoGph_gInf_c::mFrameBufferTimg{};
+void* mDoGph_gInf_c::mFrameBufferTex{};
 namespace dusk::native {
+bool captureReport{};
+char lastReport[256]{};
 void setHostFramebufferImages(std::span<const std::byte>,std::span<const std::byte>);
-void logText(const char* text) { std::fputs(text, stderr); }
+void optionalCopyStatistics(std::uint64_t&,std::uint64_t&,std::uint64_t&);
+void resetHostCaptureObservations();
+std::span<const std::uint8_t> hostCapturePixels(gx::TextureHandle);
+bool hostCaptureDirty(gx::TextureHandle);
+extern unsigned hostCaptureReads,hostCaptureBinds,hostCaptureDecodes,hostCaptureAllocations,hostCaptureInvalidations;
+extern unsigned hostBindingInvalidations,hostReadEvent,hostInvalidateEvent,hostBindEvent;
+void logText(const char* text) {
+    if(captureReport)std::snprintf(lastReport,sizeof(lastReport),"%s",text);
+    std::fputs(text, stderr);
+}
 [[noreturn]] void fatal(const char* text) { logText(text); std::abort(); }
 void waitForRetrace() { std::atomic_thread_fence(std::memory_order_seq_cst); }
 void invalidateCache(void*, std::uint32_t) { std::atomic_thread_fence(std::memory_order_seq_cst); }
@@ -73,6 +92,11 @@ static void ownedLifetimeTests(){
     {
         J3DTexture a(1,firstHeader),b(1,firstHeader);
         assert(textureResourceBytes()==64);
+        std::array<std::uint8_t,32> firstContext{},copyContext{},secondContext{};
+        assert(a.getNativeImageContext(firstContext)&&b.getNativeImageContext(copyContext)&&copyContext==firstContext);
+        std::array<std::uint8_t,32> imageDigest{},expectedContext{};
+        assert(dusk::pica::identifyImage({first.data()+192,32},{first.data()+224,32},{},imageDigest));
+        assert(dusk::pica::identifyImageContext({&imageDigest,1},expectedContext)&&expectedContext==firstContext);
         a.loadGX(0,GX_TEXMAP0);assert(gx::textureBinding(0,retained));
         assert(retained.image.data()!=first.data()+224&&retained.image.front()==0x31);
         assert(gx::textureCommandToken(first.data()+224,oldToken));
@@ -80,10 +104,24 @@ static void ownedLifetimeTests(){
         b.addResTIMG(1,reinterpret_cast<ResTIMG*>(second.data()+128));
         assert(b.getNum()==3 && b.getImgDataPtr(0)==first.data()+224 &&
                b.getImgDataPtr(1)==second.data()+224 && b.getImgDataPtr(2)==second.data()+224);
+        assert(b.getNativeImageContext(copyContext)&&copyContext!=firstContext);
         // Original named/external assignment uses the source header, even
         // though the destination's header is copied into another allocation.
         a.entryNum(1);a.setResTIMG(0,*secondHeader);a.loadGX(0,GX_TEXMAP0);
         assert(gx::textureBinding(0,retained)&&retained.image.front()==0x73);
+        assert(a.getNativeImageContext(secondContext)&&secondContext!=firstContext);
+        unregisterTextureArchive(&secondOwner);second.clear();second.shrink_to_fit();
+        // The source archive may disappear; identity uses the retained original
+        // provenance, not the copied header's now-unrelated relative offset.
+        assert(a.getNativeImageContext(copyContext)&&copyContext==secondContext);
+        a.entryNum(1);captureReport=true;assert(!a.getNativeImageContext(copyContext));
+        assert(!std::strcmp(lastReport,"Native image context rejected slot=0 count=1 reason=unassigned-slot\n"));
+        captureReport=false;
+        a.setResTIMG(0,*firstHeader);assert(a.getNativeImageContext(copyContext)&&copyContext==firstContext);
+        // Sampler-only variants of a shared original image remain distinct.
+        firstHeader->wrapS=1;
+        a.setResTIMG(0,*firstHeader);assert(a.getNativeImageContext(copyContext)&&copyContext!=firstContext);
+        firstHeader->wrapS=0;
         assert(textureResourceBytes()==128);
         assert(gx::textureFromCommandToken(oldToken,retained));
     }
@@ -124,6 +162,24 @@ static void ownedLifetimeTests(){
     JKRFreeToHeap(JKRGetRootHeap(),allocation);assert(collectTextureResources()&&textureResourceBytes()==0);
     gx::resetState();
     std::puts("PASS native J3D ownership: shared images, source-header assignment/repeated growth, retained tokens, actual solid-heap disposal and bounded interior EXP allocation");
+}
+static void imageIdentityDiagnosticTests(){
+    gx::resetState();
+    alignas(32) std::array<u8,64> retained{},altered{};
+    retained[0]=3;retained[3]=retained[5]=4;retained[20]=retained[21]=retained[24]=1;retained[31]=32;
+    altered=retained;altered[24]=2;
+    gx::TextureHandle handle{};assert(gx::registerTexture(retained,handle,true));
+    assert(gx::aliasTextureImage(handle,altered.data()+32));
+    {
+        J3DTexture texture(1,reinterpret_cast<ResTIMG*>(altered.data()));
+        std::array<std::uint8_t,32> context{};captureReport=true;
+        assert(!texture.getNativeImageContext(context));
+        assert(!std::strcmp(lastReport,"Native image context rejected slot=0 count=1 reason=invalid-image-identity\n"));
+        texture.setResTIMG(0,*reinterpret_cast<ResTIMG*>(retained.data()));
+        lastReport[0]=0;assert(texture.getNativeImageContext(context)&&!lastReport[0]);
+        captureReport=false;
+    }
+    assert(gx::unregisterTexture(handle));gx::resetState();
 }
 static void originalShapeStorageTests(){
     // Model archives outlive their shape objects. A fixed resource heap must
@@ -168,8 +224,13 @@ static void deferredTextureListTests(){
     alignas(32) std::array<ResTIMG,2> named{};
     std::memcpy(&named[0],ci,32);std::memcpy(&named[1],direct,32);
     named[0].imageOffset=0;named[1].imageOffset=0;
+    const ResTIMG unresolved=named[0];
     {
         J3DTexture texture(2,named.data());j3dSys.setTexture(&texture);
+        std::array<std::uint8_t,32> context{};
+        captureReport=true;context.fill(0xff);assert(!texture.getNativeImageContext(context));
+        assert((context==std::array<std::uint8_t,32>{}));
+        assert(!std::strcmp(lastReport,"Native image context rejected slot=0 count=2 reason=unresolved-image\n"));
         gx::CommandMemory memory;gx::CommandProcessor processor(memory);
         alignas(32) std::array<u8,96> bytes;bytes.fill(0xa5);GDLObj gd;
         GDInitGDLObj(&gd,bytes.data(),bytes.size());GDSetCurrent(&gd);
@@ -180,7 +241,22 @@ static void deferredTextureListTests(){
         assert(!gx::resolveCommandTexture(processor.registers(),1,bound,failure));
         assert(textureResourceBytes()==0);
         texture.setResTIMG(0,*reinterpret_cast<ResTIMG*>(ci));
+        assert(!texture.getNativeImageContext(context)); // One unresolved original slot still refuses.
+        assert(!std::strcmp(lastReport,"Native image context rejected slot=1 count=2 reason=unresolved-image\n"));
         texture.setResTIMG(1,*reinterpret_cast<ResTIMG*>(direct));
+        lastReport[0]=0;assert(texture.getNativeImageContext(context)&&!lastReport[0]);
+        captureReport=false;
+        std::array<std::array<std::uint8_t,32>,2> images{};
+        std::array<std::uint8_t,32> expected{};
+        assert(dusk::pica::identifyImage({ci,32},{ci+32,32},{ci+64,32},images[0]));
+        assert(dusk::pica::identifyImage({direct,32},{direct+32,32},{},images[1]));
+        assert(dusk::pica::identifyImageContext(images,expected)&&context==expected);
+        texture.setResTIMG(0,unresolved);captureReport=true;
+        assert(!texture.getNativeImageContext(context));
+        assert(!std::strcmp(lastReport,"Native image context rejected slot=0 count=2 reason=unresolved-image\n"));
+        texture.setResTIMG(0,*reinterpret_cast<ResTIMG*>(ci));
+        lastReport[0]=0;assert(texture.getNativeImageContext(context)&&context==expected&&!lastReport[0]);
+        captureReport=false;
         GDSetCurrent(&gd);GDSetCurrOffset(0);loadTexNo(0,first);assert(GDGetCurrOffset()==55);
         loadTexNo(1,second);assert(GDGetCurrOffset()==75);GDSetCurrent(nullptr);
         for(unsigned n=75;n<bytes.size();++n)assert(bytes[n]==0xa5);
@@ -246,6 +322,12 @@ static void captureLifetimeTests(){
     {
         J3DTexture a(1,reinterpret_cast<ResTIMG*>(color.data())),b(1,reinterpret_cast<ResTIMG*>(depth.data()));
         assert(textureResourceBytes()==0); // Already owned by the live copy provider.
+        std::array<std::uint8_t,32> context{};context.fill(0xff);captureReport=true;
+        assert(!a.getNativeImageContext(context)&&(context==std::array<std::uint8_t,32>{}));
+        assert(!std::strcmp(lastReport,"Native image context rejected slot=0 count=1 reason=mutable-pixels\n"));
+        assert(!b.getNativeImageContext(context));
+        assert(!std::strcmp(lastReport,"Native image context rejected slot=0 count=1 reason=mutable-pixels\n"));
+        captureReport=false;
         gx::Texture image;assert(gx::textureFromCommandToken(colorToken,image)&&image.image.front()==0x4b);
         a.loadGX(0,GX_TEXMAP0);assert(gx::textureBinding(0,image)&&image.image.front()==0x4b);
         assert(gx::setCommandStream(&stream));
@@ -260,6 +342,9 @@ static void captureLifetimeTests(){
             setHostFramebufferImages(rgba,z);
             GXSetTexCopySrc(0,0,8,8);GXSetTexCopyDst(4,4,GX_TF_RGBA8,GX_TRUE);GXCopyTex(color.data()+32,GX_FALSE);
             GXSetTexCopyDst(4,4,GX_TF_Z16,GX_TRUE);GXCopyTex(depth.data()+32,GX_FALSE);
+            captureReport=true;assert(!a.getNativeImageContext(context));
+            assert(!std::strcmp(lastReport,"Native image context rejected slot=0 count=1 reason=mutable-pixels\n"));
+            captureReport=false;
             unsigned token{};assert(gx::textureCommandToken(color.data()+32,token)&&token==colorToken);
             assert(gx::textureCommandToken(depth.data()+32,token)&&token==depthToken);
             assert(gx::textureFromCommandToken(colorToken,image));
@@ -280,6 +365,204 @@ static void captureLifetimeTests(){
     assert(collectTextureResources()&&textureResourceBytes()==0&&copyImageBytes()==0);
     good();assert(endFramebufferFrame());releaseFramebufferRecords();gx::resetState();
     std::puts("PASS native capture lifecycle: original allocation bytes, J3D external assignment, stable color/Z16 command tokens, refresh and exact retirement; synthetic GPU snapshots only");
+}
+static void framebufferImageIdentityTests(){
+    gx::resetState();
+    assert(initializeFramebuffers(reinterpret_cast<void*>(1),8,8)&&beginFramebufferFrame());
+    gx::CommandMemory memory;gx::CommandProcessor commands(memory);
+    std::array<u8,128> scratch{};gx::CommandStream stream(commands,scratch);
+    assert(gx::setCommandStream(&stream));
+
+    // Distinct headers address the same image: pointer equality of the image
+    // alone is not enough to identify the original game framebuffer TIMG.
+    alignas(32) std::array<u8,128> allocation{};
+    auto* impostor=allocation.data();auto* original=impostor+32;auto* pixels=original+32;
+    for(auto* header:{impostor,original}){
+        header[0]=6;header[3]=header[5]=4;header[20]=header[21]=header[24]=1;
+    }
+    impostor[31]=64;original[31]=32;
+    assert(registerCopyImage({original,96},pixels));
+    auto* timg=reinterpret_cast<ResTIMG*>(original);
+    mDoGph_gInf_c::mFrameBufferTimg=timg;mDoGph_gInf_c::mFrameBufferTex=pixels;
+    constexpr std::array<std::uint8_t,32> role{
+        0xf0,0x50,0x3c,0x86,0xef,0x37,0xca,0xb3,0x2a,0xe1,0x4f,0x76,0xea,0x47,0x8b,0xa7,
+        0x6c,0xcd,0x3e,0x8d,0x1f,0x03,0x7d,0xe0,0xaa,0x9c,0xc8,0x52,0xa7,0x71,0x7c,0x7c};
+    constexpr std::array<std::uint8_t,32> expectedContext{
+        0xeb,0x9d,0x3e,0x62,0x27,0xc5,0x09,0xd4,0x21,0x31,0x20,0xf4,0x65,0xde,0x60,0xa5,
+        0xe1,0x6b,0x31,0xe6,0xb7,0x79,0xf5,0x52,0xa0,0xd6,0x4d,0x17,0xc4,0xd3,0x46,0x49};
+    assert(dusk::pica::identifyFramebufferColor()==role);
+    std::array<std::uint8_t,32> composed{};
+    assert(dusk::pica::identifyImageContext({&role,1},composed)&&composed==expectedContext);
+    {
+        ResTIMG slot{};J3DTexture texture(1,&slot);
+        std::array<std::uint8_t,32> context{};
+        auto rejected=[&]{
+            context.fill(0xff);captureReport=true;assert(!texture.getNativeImageContext(context));captureReport=false;
+            assert((context==std::array<std::uint8_t,32>{}));
+            assert(!std::strcmp(lastReport,"Native image context rejected slot=0 count=1 reason=mutable-pixels\n"));
+        };
+        texture.setResTIMG(0,*reinterpret_cast<ResTIMG*>(impostor));rejected();
+        texture.setResTIMG(0,*timg);
+        assert(texture.getNativeImageContext(context)&&context==expectedContext);
+        mDoGph_gInf_c::mFrameBufferTex=impostor;
+        texture.setResTIMG(0,*timg);rejected();
+        mDoGph_gInf_c::mFrameBufferTex=pixels;
+
+        unsigned token{};assert(gx::textureCommandToken(pixels,token));
+        assert(registeredFramebufferCapture(pixels,token&0x7fffff));
+        std::array<std::byte,256> rgba{};
+        for(unsigned pass=0;pass<2;++pass){
+            for(unsigned i=0;i<64;++i){
+                rgba[4*i]=std::byte(16+pass);rgba[4*i+1]=std::byte(32+pass);
+                rgba[4*i+2]=std::byte(64+pass);rgba[4*i+3]=std::byte(128+pass);
+            }
+            setHostFramebufferImages(rgba,{});
+            GXSetTexCopySrc(0,0,8,8);GXSetTexCopyDst(4,4,GX_TF_RGBA8,GX_TRUE);GXCopyTex(pixels,GX_FALSE);
+            gx::Texture image;unsigned refreshed{};
+            assert(gx::textureCommandToken(pixels,refreshed)&&refreshed==token);
+            assert(gx::textureFromCommandToken(token,image)&&image.image[0]==16+pass);
+            texture.setResTIMG(0,*timg);
+            assert(texture.getNativeImageContext(context)&&context==expectedContext);
+        }
+        GXDestroyCopyTex(pixels);
+        assert(!registeredFramebufferCapture(pixels,token&0x7fffff));
+
+        // Neither a direct registration nor an explicitly matching alias
+        // proves that the live framebuffer copy provider owns the image.
+        gx::TextureHandle direct{};assert(gx::registerTexture({original,96},direct));
+        texture.setResTIMG(0,*timg);rejected();
+        assert(gx::aliasTextureImage(direct,impostor));
+        texture.setResTIMG(0,*timg);rejected();
+        assert(gx::aliasTextureImage(direct,pixels));
+        assert(!registeredFramebufferCapture(pixels,direct));
+        texture.setResTIMG(0,*timg);rejected();
+        assert(gx::unregisterTexture(direct));
+
+        // A token can resolve an alias before a different matching GX object
+        // registration. It must refer to the object's registration, not merely
+        // some RGBA8 alias with the right original pointer.
+        alignas(32) std::array<u8,288> otherExtent{};
+        otherExtent[0]=6;otherExtent[3]=otherExtent[5]=8;
+        otherExtent[20]=otherExtent[21]=otherExtent[24]=1;otherExtent[31]=32;
+        assert(registerCopyImage(otherExtent,pixels));
+        gx::Texture image;unsigned aliased{};
+        assert(gx::textureCommandToken(pixels,aliased)&&gx::textureFromCommandToken(aliased,image));
+        const auto other=image.handle;
+        assert(registeredFramebufferCapture(pixels,other));
+        assert(gx::registerTexture({original,96},direct));
+        texture.setResTIMG(0,*timg);rejected();
+        assert(gx::textureCommandToken(pixels,aliased)&&gx::textureFromCommandToken(aliased,image)&&image.handle==other);
+        texture.loadGX(0,GX_TEXMAP0);assert(gx::textureBinding(0,image)&&image.handle==direct);
+        GXDestroyCopyTex(pixels);assert(gx::unregisterTexture(direct));
+
+        alignas(32) std::array<u8,64> nonRgba{};
+        nonRgba[0]=3;nonRgba[3]=nonRgba[5]=4;
+        nonRgba[20]=nonRgba[21]=nonRgba[24]=1;nonRgba[31]=32;
+        assert(registerCopyImage(nonRgba,nonRgba.data()+32));
+        mDoGph_gInf_c::mFrameBufferTimg=reinterpret_cast<ResTIMG*>(nonRgba.data());
+        mDoGph_gInf_c::mFrameBufferTex=nonRgba.data()+32;
+        texture.setResTIMG(0,*mDoGph_gInf_c::mFrameBufferTimg);rejected();
+        GXDestroyCopyTex(nonRgba.data()+32);
+
+        alignas(32) std::array<u8,1312> mipmapped{};
+        mipmapped[0]=6;mipmapped[3]=mipmapped[5]=16;mipmapped[16]=1;
+        mipmapped[20]=mipmapped[21]=1;mipmapped[24]=2;mipmapped[31]=32;
+        assert(gx::registerTexture(mipmapped,direct)&&gx::aliasTextureImage(direct,mipmapped.data()+32));
+        mDoGph_gInf_c::mFrameBufferTimg=reinterpret_cast<ResTIMG*>(mipmapped.data());
+        mDoGph_gInf_c::mFrameBufferTex=mipmapped.data()+32;
+        texture.setResTIMG(0,*mDoGph_gInf_c::mFrameBufferTimg);rejected();
+        assert(gx::unregisterTexture(direct));
+    }
+    mDoGph_gInf_c::mFrameBufferTimg=nullptr;mDoGph_gInf_c::mFrameBufferTex=nullptr;
+    assert(gx::setCommandStream(nullptr)&&collectTextureResources()&&textureResourceBytes()==0&&copyImageBytes()==0);
+    good();assert(endFramebufferFrame());releaseFramebufferRecords();gx::resetState();
+    std::puts("PASS framebuffer role SHA256 and original J3D/GX identity: mutable capture accepted, refreshed and guarded by source, alias, registration, format and mip count");
+}
+static void framebufferCaptureAcquisitionTests(){
+    // Real copy/registration/encode/decoder code with a substituted cache and
+    // framebuffer readback; this does not claim Citro3D or GPU execution.
+    gx::resetState();gx::watchedCaptureToken=0;gx::watchedCaptureLastUse=0;
+    gx::textureFrameCounter=100;gx::watchedCaptureMaterialize=nullptr;
+    assert(initializeFramebuffers(reinterpret_cast<void*>(1),8,8)&&beginFramebufferFrame());
+    alignas(32) std::array<u8,96> color{},other{};
+    for(auto* image:{color.data(),other.data()}){
+        image[0]=6;image[3]=image[5]=4;image[20]=image[21]=image[24]=1;image[31]=32;
+        std::fill(image+32,image+96,0x4b);
+        assert(registerCopyImage({image,96},image+32));
+    }
+    gx::CommandMemory memory;gx::CommandProcessor commands(memory);
+    std::array<u8,128> scratch{};gx::CommandStream stream(commands,scratch);
+    assert(gx::setCommandStream(&stream));
+    unsigned token{};assert(gx::textureCommandToken(color.data()+32,token));
+    const gx::TextureHandle handle=token&0x7fffff;
+    assert(registeredFramebufferCapture(color.data()+32,handle));
+    auto checkPixel=[&](unsigned a,unsigned b,unsigned g,unsigned r){
+        const auto pixels=hostCapturePixels(handle);assert(pixels.size()>=4);
+        assert(pixels[0]==a&&pixels[1]==b&&pixels[2]==g&&pixels[3]==r);
+    };
+    void* texture{};unsigned width{},height{};
+    resetHostCaptureObservations();
+    assert(acquireFramebufferCapture(color.data()+32,texture,width,height)&&texture&&width==4&&height==4);
+    assert(hostCaptureAllocations==1&&hostCaptureDecodes==1);checkPixel(0x4b,0x4b,0x4b,0x4b);
+    void* const resident=texture;
+
+    std::array<std::byte,256> framebuffer{};
+    auto fill=[&](unsigned a,unsigned b,unsigned g,unsigned r){
+        for(unsigned i=0;i<64;++i){framebuffer[4*i]=std::byte(a);framebuffer[4*i+1]=std::byte(b);
+            framebuffer[4*i+2]=std::byte(g);framebuffer[4*i+3]=std::byte(r);}
+        setHostFramebufferImages(framebuffer,{});
+    };
+    fill(11,22,33,44);
+    GXSetTexCopySrc(0,0,8,8);GXSetTexCopyDst(4,4,GX_TF_RGBA8,GX_FALSE);
+    GXCopyTex(color.data()+32,GX_FALSE);
+    assert(hostCaptureDirty(handle));checkPixel(0x4b,0x4b,0x4b,0x4b);
+    resetHostCaptureObservations();
+    assert(acquireFramebufferCapture(color.data()+32,texture,width,height)&&texture==resident&&width==4&&height==4);
+    assert(!hostCaptureDirty(handle)&&hostCaptureReads==0&&hostCaptureBinds==1&&hostCaptureDecodes==1&&
+           hostCaptureAllocations==0&&hostBindingInvalidations==1);
+    checkPixel(11,22,33,44);
+
+    std::uint64_t skipped{},done{},materialized{};
+    optionalCopyStatistics(skipped,done,materialized);
+    const auto priorSkipped=skipped,priorDone=done,priorMaterialized=materialized;
+    fill(55,66,77,88);resetHostCaptureObservations();
+    GXNativeOptionalCopy();GXCopyTex(color.data()+32,GX_FALSE);
+    optionalCopyStatistics(skipped,done,materialized);
+    assert(skipped==priorSkipped+1&&done==priorDone&&materialized==priorMaterialized);
+    assert(gx::watchedCaptureToken==token&&gx::watchedCaptureLastUse==0&&hostCaptureReads==0);
+    checkPixel(11,22,33,44);
+    void* otherTexture{};unsigned otherWidth{},otherHeight{};
+    assert(acquireFramebufferCapture(other.data()+32,otherTexture,otherWidth,otherHeight));
+    assert(otherTexture!=resident&&otherWidth==4&&otherHeight==4&&hostCaptureReads==0&&gx::watchedCaptureLastUse==0);
+    optionalCopyStatistics(skipped,done,materialized);assert(materialized==priorMaterialized);
+
+    resetHostCaptureObservations();
+    assert(acquireFramebufferCapture(color.data()+32,texture,width,height)&&texture==resident&&width==4&&height==4);
+    optionalCopyStatistics(skipped,done,materialized);
+    assert(materialized==priorMaterialized+1&&gx::watchedCaptureLastUse==gx::textureFrameCounter);
+    assert(hostCaptureReads==1&&hostCaptureInvalidations==1&&hostCaptureBinds==1&&hostCaptureDecodes==1&&
+           hostCaptureAllocations==0&&hostBindingInvalidations==1&&!hostCaptureDirty(handle));
+    assert(hostReadEvent<hostInvalidateEvent&&hostInvalidateEvent<hostBindEvent);
+    checkPixel(55,66,77,88);
+    resetHostCaptureObservations();
+    assert(acquireFramebufferCapture(color.data()+32,texture,width,height)&&texture==resident);
+    assert(hostCaptureReads==0&&hostCaptureBinds==1&&hostCaptureDecodes==0&&hostCaptureAllocations==0);
+
+    // Destroying the copy cancels its outstanding deferred capture; neither
+    // a later callback nor an acquisition may revive the retired identity.
+    gx::textureFrameCounter=101;gx::watchedCaptureLastUse=0;
+    resetHostCaptureObservations();GXNativeOptionalCopy();GXCopyTex(color.data()+32,GX_FALSE);
+    optionalCopyStatistics(skipped,done,materialized);assert(skipped==priorSkipped+2&&materialized==priorMaterialized+1);
+    GXDestroyCopyTex(color.data()+32);assert(gx::watchedCaptureMaterialize);
+    gx::watchedCaptureMaterialize();optionalCopyStatistics(skipped,done,materialized);
+    assert(materialized==priorMaterialized+1&&hostCaptureReads==0);
+    texture=reinterpret_cast<void*>(1);width=height=1;
+    assert(!acquireFramebufferCapture(color.data()+32,texture,width,height)&&!texture&&!width&&!height);
+    GXDestroyCopyTex(other.data()+32);
+    gx::watchedCaptureToken=gx::watchedCaptureLastUse=gx::textureFrameCounter=0;gx::watchedCaptureMaterialize=nullptr;
+    setHostFramebufferImages({},{});assert(gx::setCommandStream(nullptr)&&copyImageBytes()==0);
+    good();assert(endFramebufferFrame());releaseFramebufferRecords();gx::resetState();
+    std::puts("PASS capture acquisition ordering, dirty refresh, identity and destruction with mocked cache/readback; no GPU execution");
 }
 static void indexedCaptureTests(){
     gx::resetState();assert(initializeFramebuffers(reinterpret_cast<void*>(1),8,8)&&beginFramebufferFrame());
@@ -434,7 +717,7 @@ static void privateTitle(const char* path){
 }
 int main(int argc,char** argv){
     static_assert(sizeof(ResTIMG)==32);alignas(32) static std::array<unsigned char,8*1024*1024> arena;
-    assert(initializeKernel(arena.data(),arena.size()));const auto before=kernelStats();syntheticTests();originalShapeStorageTests();ownedLifetimeTests();deferredTextureListTests();paletteLifetimeTests();captureLifetimeTests();indexedCaptureTests();
+    assert(initializeKernel(arena.data(),arena.size()));const auto before=kernelStats();syntheticTests();originalShapeStorageTests();ownedLifetimeTests();imageIdentityDiagnosticTests();deferredTextureListTests();paletteLifetimeTests();captureLifetimeTests();framebufferImageIdentityTests();framebufferCaptureAcquisitionTests();indexedCaptureTests();
     if(argc==3&&!std::strcmp(argv[1],"--private-disc"))privateTitle(argv[2]);else assert(argc==1);
     assert(kernelStats().free==before.free&&kernelStats().healthy);
 }

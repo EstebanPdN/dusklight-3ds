@@ -27,9 +27,11 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     compiler = shutil.which('clang++')
     flags = ['-std=c++20', '-O1', '-g', '-fno-omit-frame-pointer', '-ffunction-sections',
-             '-fdata-sections', '-fsanitize=address,undefined', '-Wl,-dead_strip']
+             '-fdata-sections', '-fsanitize=address,undefined',
+             '-Wl,-dead_strip' if sys.platform == 'darwin' else '-Wl,--gc-sections']
     definitions = ['TARGET_PC=1', 'DUSK_TARGET_3DS=1', 'DUSK_BUILDING_GAME=1', 'VERSION=0',
-                   'PARTIAL_DEBUG=1', 'AVOID_UB=1', 'MTX_USE_PS=1', 'DUSK_TEST_KERNEL=1']
+                   'PARTIAL_DEBUG=1', 'AVOID_UB=1', 'MTX_USE_PS=1', 'DUSK_TEST_KERNEL=1',
+                   'DUSK_NATIVE_THREAD_RUNTIME=1']
     includes = ['include', 'libs/JSystem/include', 'extern/aurora/include',
                 'extern/aurora/include/dolphin', 'sdk/include', 'src']
     flags += ['-D' + value for value in definitions] + ['-I' + str(SOURCE / p) for p in includes]
@@ -37,6 +39,8 @@ def main():
     for header in ['extern/aurora/include/dolphin/types.h', 'include/global.h']:
         flags += ['-include', str(SOURCE / header)]
     sources = ['platforms/3ds/tests/native_archive_test.cpp', 'platforms/3ds/tests/host_primitives.cpp',
+               'platforms/3ds/tests/host_thread_backend.cpp', 'platforms/3ds/runtime/os_thread.cpp',
+               'platforms/3ds/runtime/aram.cpp',
                'platforms/3ds/runtime/bootstrap.cpp', 'platforms/3ds/runtime/os_sync.cpp',
                'platforms/3ds/runtime/os_arena.cpp', 'platforms/3ds/runtime/os_time.cpp',
                'platforms/3ds/runtime/archive_bootstrap.cpp', 'platforms/3ds/runtime/dvd_provider.cpp',
@@ -44,7 +48,7 @@ def main():
                'src/helpers/string.cpp','src/dusk/version.cpp', 'libs/JSystem/src/JSupport/JSUList.cpp']
     sources += ['libs/JSystem/src/JKernel/' + name + '.cpp' for name in
                 ['JKRHeap', 'JKRExpHeap', 'JKRSolidHeap', 'JKRDisposer', 'JKRArchivePri',
-                 'JKRArchivePub', 'JKRMemArchive', 'JKRFileLoader', 'JKRFileCache', 'JKRFileFinder', 'JKRDecomp', 'JKRFile', 'JKRDvdFile']]
+                 'JKRArchivePub', 'JKRMemArchive', 'JKRFileLoader', 'JKRFileCache', 'JKRFileFinder', 'JKRDecomp', 'JKRFile', 'JKRDvdFile', 'JKRThread', 'JKRAramPiece']]
     sources += ['platforms/3ds/runtime/'+name+'.cpp' for name in
                 ['texture_resources','texture_gx','gx_state']]
     sources += ['platforms/3ds/tests/host_archive_boundaries.cpp']

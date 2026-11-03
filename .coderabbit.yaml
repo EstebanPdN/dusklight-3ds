@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://www.coderabbit.ai/integrations/schema.v2.json
+language: en-GB
+tone_instructions: Be concise and pragmatic. Prioritize correctness, security, ownership and resource lifetime bugs over stylistic preferences.
+reviews:
+  profile: chill
+  high_level_summary_in_walkthrough: true
+  sequence_diagrams: false
+  review_progress: true
+  commit_status: true
+  fail_commit_status: true
+  auto_approvals:
+    enabled: false
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 0
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+  path_instructions:
+    - path: "**/*"
+      instructions: |
+        Read CONTRIBUTING.md and docs/TESTING.md for project constraints.
+        This is an experimental New3DS port with reconstructed upstream code.
+        Review relevant shared engine and Aurora changes as well as the 3DS port.
+        Do not propose blanket reformatting, no-op fallbacks or skipped draws.
+        Keep game assets, saves, dumps and private receipts out of Git and CI.
+        Compilation and host tests do not establish GPU correctness, hardware
+        performance or playability. Keep source-only publication intact.

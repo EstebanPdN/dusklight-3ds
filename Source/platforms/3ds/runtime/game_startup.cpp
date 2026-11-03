@@ -288,6 +288,11 @@ void onGameApt(APT_HookType type,void*){
 }
 const BootStage* requestedBootStage(){return hasBootStage?&bootStage:nullptr;}
 int runOriginalGame(){
+#if defined(DUSK_PICA_GAME_DRAW)
+    if(!dusk::pica::game::setFramebufferProvider(+[](void*& texture,unsigned& width,unsigned& height){
+        return acquireFramebufferCapture(mDoGph_gInf_c::getFrameBufferTex(),texture,width,height);
+    }))fatal("Native framebuffer capture provider setup failed");
+#endif
     logText("Original native startup: GX stream\n");
     bool rgb565Reference=false;
     if(auto* file=std::fopen("sdmc:/3ds/dusklight/rgb565-rgba8-reference.txt","rb")){
@@ -624,9 +629,12 @@ int runOriginalGame(){
                     ordinaryLoopTicks*1000.0/(nativeTickFrequency*ordinaryFrames),gxProfileEveryFrame?"all":"sparse");
                 ordinaryFrames=ordinaryExecutionTicks=ordinaryLoopTicks=0;
                 auto* measuredGameHeap=mDoExt_getGameHeap();
-                OSReport("Native renderer memory: game_free=%lu linear_free=%lu gpu_textures=%lu archive_bti=%lu font_bti=%lu copy_bti=%lu offscreen=%lu geometry=%lu bytes\n",
+                const auto heapInfo=mallinfo(); // arena: sbrk high-water of the ctru heap.
+                OSReport("Native renderer memory: game_free=%lu linear_free=%lu vram_free=%lu malloc_used=%lu malloc_arena=%lu gpu_textures=%lu archive_bti=%lu font_bti=%lu copy_bti=%lu offscreen=%lu geometry=%lu bytes\n",
                     static_cast<unsigned long>(measuredGameHeap?measuredGameHeap->getTotalFreeSize():0),
-                    static_cast<unsigned long>(linearSpaceFree()),static_cast<unsigned long>(gxTextureBytes()),
+                    static_cast<unsigned long>(linearSpaceFree()),static_cast<unsigned long>(vramSpaceFree()),
+                    static_cast<unsigned long>(heapInfo.uordblks),static_cast<unsigned long>(heapInfo.arena),
+                    static_cast<unsigned long>(gxTextureBytes()),
                     static_cast<unsigned long>(textureResourceBytes()),static_cast<unsigned long>(fontPageBytes()),
                     static_cast<unsigned long>(copyImageBytes()),static_cast<unsigned long>(offscreenFramebufferBytes()),
                     static_cast<unsigned long>(gxGeometryBytes()));

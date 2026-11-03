@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(dusklight_native_3ds LANGUAGES C CXX)
+project(dusklight_native_3ds LANGUAGES C CXX ASM)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -14,15 +14,17 @@ find_program(PICASSO picasso HINTS "${DEVKITPRO}/tools/bin" REQUIRED)
 # this library and redirects real packet entrypoints; asset/input migration is
 # incomplete. Building this target alone never creates a game executable.
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin"
-    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin" "${CMAKE_CURRENT_SOURCE_DIR}/native/scene.v.pica"
-    DEPENDS native/scene.v.pica VERBATIM)
+    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin"
+        "${CMAKE_CURRENT_SOURCE_DIR}/native/scene.v.pica" "${CMAKE_CURRENT_SOURCE_DIR}/native/scene_shared.pica"
+    DEPENDS native/scene.v.pica native/scene_shared.pica VERBATIM)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_shader.cpp"
     COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin"
         "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_shader.cpp" -DSYMBOL=native_scene_shader -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
     DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin" embed_shader.cmake VERBATIM)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin"
-    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin" "${CMAKE_CURRENT_SOURCE_DIR}/native/scene_rigid.v.pica"
-    DEPENDS native/scene_rigid.v.pica VERBATIM)
+    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin"
+        "${CMAKE_CURRENT_SOURCE_DIR}/native/scene_rigid.v.pica" "${CMAKE_CURRENT_SOURCE_DIR}/native/scene_shared.pica"
+    DEPENDS native/scene_rigid.v.pica native/scene_shared.pica VERBATIM)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid_shader.cpp"
     COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin"
         "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid_shader.cpp" -DSYMBOL=native_scene_rigid_shader -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
@@ -31,21 +33,26 @@ foreach(native_variant IN ITEMS uv rigid_uv projective rigid_projective)
     add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin"
         COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin"
             "${CMAKE_CURRENT_SOURCE_DIR}/native/scene_${native_variant}.v.pica"
-        DEPENDS "native/scene_${native_variant}.v.pica" VERBATIM)
+            "${CMAKE_CURRENT_SOURCE_DIR}/native/scene_shared.pica"
+        DEPENDS "native/scene_${native_variant}.v.pica" native/scene_shared.pica VERBATIM)
     add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}_shader.cpp"
         COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin"
             "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}_shader.cpp"
             "-DSYMBOL=native_scene_${native_variant}_shader" -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
         DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin" embed_shader.cmake VERBATIM)
 endforeach()
+add_library(dusk_native_identity STATIC native/game_source.cpp)
+target_compile_options(dusk_native_identity PRIVATE -O2 -ffunction-sections -fdata-sections
+    -Wall -Wextra -Werror -fno-exceptions -fno-rtti)
 add_library(dusk_pica_engine STATIC EXCLUDE_FROM_ALL
-    native/contracts.cpp native/renderer.cpp native/quad_batch.cpp native/pack.cpp native/texture_pack.cpp native/material_pack.cpp native/model.cpp native/model_plan.cpp native/scene.cpp native/pose.cpp native/game_draw.cpp native/game_source.cpp native/asset_pack.cpp native/game_assets.cpp native/camera.cpp
+    native/contracts.cpp native/renderer.cpp native/quad_batch.cpp native/pack.cpp native/texture_pack.cpp native/material_pack.cpp native/model.cpp native/model_plan.cpp native/scene.cpp native/pose.cpp native/game_draw.cpp native/asset_pack.cpp native/game_assets.cpp native/camera.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/native_scene_shader.cpp" "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid_shader.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/native_scene_uv_shader.cpp" "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid_uv_shader.cpp"
     "${CMAKE_CURRENT_BINARY_DIR}/native_scene_projective_shader.cpp" "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid_projective_shader.cpp")
 target_include_directories(dusk_pica_engine PRIVATE "${DEVKITPRO}/libctru/include")
 target_compile_options(dusk_pica_engine PRIVATE -O2 -ffunction-sections -fdata-sections
     -Wall -Wextra -Werror -fno-exceptions -fno-rtti -fstack-usage)
+target_link_libraries(dusk_pica_engine PUBLIC dusk_native_identity)
 
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/preview.shbin"
     COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/preview.shbin" "${CMAKE_CURRENT_SOURCE_DIR}/preview.v.pica"
@@ -113,6 +120,7 @@ add_library(dusk_native_kernel OBJECT
     "${DUSK_ROOT}/libs/JSystem/src/JKernel/JKRFileFinder.cpp"
     "${DUSK_ROOT}/libs/JSystem/src/JKernel/JKRDvdFile.cpp"
     "${DUSK_ROOT}/libs/JSystem/src/JKernel/JKRDecomp.cpp"
+    "${DUSK_ROOT}/libs/JSystem/src/JKernel/JKRThread.cpp"
     "${DUSK_ROOT}/libs/JSystem/src/JKernel/JKRDisposer.cpp")
 target_include_directories(dusk_native_kernel PRIVATE
     "${DUSK_ROOT}/include" "${DUSK_ROOT}/libs/JSystem/include"
@@ -151,6 +159,7 @@ if(DUSK_GROUND_CREATE_PROBE)
 endif()
 
 add_library(dusk_native_math OBJECT
+    runtime/mtx_concat_arm11.S
     "${DUSK_ROOT}/extern/aurora/lib/dolphin/mtx/mtx.c"
     "${DUSK_ROOT}/extern/aurora/lib/dolphin/mtx/mtx44.c"
     "${DUSK_ROOT}/extern/aurora/lib/dolphin/mtx/mtxvec.c"
@@ -236,7 +245,7 @@ target_link_options(dusklight-native PRIVATE -specs=3dsx.specs
 set_source_files_properties(runtime/ctru_gxqueue.c PROPERTIES
     COMPILE_DEFINITIONS "gxCmdQueueInterrupt=duskOriginalGxCmdQueueInterrupt")
 target_sources(dusklight-native PRIVATE runtime/ctru_gxqueue.c)
-target_link_libraries(dusklight-native PRIVATE citro3d ctru m)
+target_link_libraries(dusklight-native PRIVATE dusk_native_identity citro3d ctru m)
 # Packaging consumes only the owner-supplied icon. No ISO, cache or ROMFS content.
 set(ICON "${WORKSPACE}/assets/3ds/icon-48.png" CACHE FILEPATH "Owner-supplied icon")
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/dusklight-native.smdh"

@@ -1,4 +1,4 @@
-# Native model plan version1
+# Native model plan version 4
 
 DUSKML01 contains native resource associations, uniform-slot requirements and
 samplers. No original hierarchy commands, source material enums, texture
@@ -8,12 +8,13 @@ render-ready scene or a substitute for native pose/texgen/lighting producers.
 
 ## File structure
 
-All integers are little-endian. Maximum size7,216B;1..64 parts and1..64 uniform
-slots. The48-byte header consists of magic[8], version1, total file size, part
-count, uniform count, required-input mask, part offset48, uniform-table offset,
-uniform-table bytes, zero reserved word and CRC32. CRC is IEEE reflected with
-initial/final XOR0xffffffff, covering header bytes0..43 followed by all bytes
-from48 to EOF. CRC is an integrity check, not authentication.
+All integers are little-endian. The maximum size is 147,504 bytes: 1–1024
+parts and 1–1024 uniform slots. The 48-byte header contains magic[8], version 4,
+total file size, part count, uniform count, required-input mask, part offset 48,
+uniform-table offset, uniform-table bytes, a zero reserved word and CRC32.
+CRC is IEEE reflected with initial/final XOR 0xffffffff, covering header bytes
+0–43 followed by all bytes from 48 to EOF. Earlier versions are rejected; native
+banks must be regenerated. CRC is an integrity check, not authentication.
 
 Parts immediately follow,64B each. Each has six32-bit words: mesh ID, material
 ID, uniform slot, sampler mask, pass and entry ordinal. IDs are nonzero; slot
@@ -24,12 +25,16 @@ first/last mip levels, zero byte, signed16-bit LOD bias and two zero bytes.
 Enum domains match contracts.hpp. Actual resident mip validation occurs when
 Model loads the corresponding image, not in this metadata-only decoder.
 
-Uniform records follow all parts,48B each: material ID, anchor node ID1..4096,
-palette count1..8, eight native pose-matrix IDs and a zero word. Used matrix IDs
-are1..65535; unused palette words must be zero. Every slot must be referenced;
-its material must match each referring part. Matrix IDs are opaque native table
-references, not hardware matrix slots. This file contains no pose matrices or
-animation. Native producers populate DrawUniforms from those bindings.
+Uniform records are 80 bytes each. They contain material ID, anchor node ID,
+up to four native pose-matrix IDs, texture-slot and generator mappings, source
+attribute and channel masks, parameter read/wrap/signed masks, source shape,
+billboard mode, and source TEV-stage and texgen counts. Bytes 72 and 73 hold
+those counts; 0/0 denotes a library-authored binding without source proof.
+Source-derived game bindings require the counts and reject a live count mismatch
+before submitting the affected shape. This catches warp-stage activation but
+does not establish equivalence of program changes with unchanged counts.
+Every slot must be referenced and its material must match each referring part.
+Pose IDs are opaque native table references; animation remains a producer input.
 
 No gaps, noncanonical offsets, trailing data, unknown versions/reserved fields
 or invalid native sampler values are accepted. ModelPlan copies all validated

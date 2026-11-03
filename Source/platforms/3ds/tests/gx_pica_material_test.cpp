@@ -1,6 +1,8 @@
 #include "material_equivalence.hpp"
 #include "../runtime/gx_material_liveness.hpp"
 #include "../runtime/gx_fog.hpp"
+#include "raster_carrier_fixture.hpp"
+#include "color_lookup_test.hpp"
 #include <cstdio>
 using namespace material_test;
 static MaterialState baseline(){
@@ -19,7 +21,32 @@ static void reject(MaterialState s,MaterialPlanError expected){
     assert(!okay&&e==expected&&p.stageCount==0&&p.textureCount==0);
     for(const auto& stage:p.stages)assert((stage.constant==std::array<std::uint8_t,4>{}));
 }
+static void fullRasterCases(){
+    colorLookupInterpolationCases();
+    auto state=carrier_test::capturedMaterial();
+    PicaMaterialPlan plan;MaterialPlanError error;
+    assert(planRasterLookupMaterial(state,plan,&error));
+    compare(state,plan,32768);
+    // Independently varying RGB and alpha, both raster selectors, component
+    // broadcasts and texture alpha must survive the delayed RGBA buffer.
+    for(unsigned selected=0;selected<2;++selected)for(unsigned component=0;component<4;++component){
+        auto sample=state;sample.stages[0].raster=selected;sample.stages[1].raster=1-selected;
+        sample.swaps[0]={std::uint8_t(component),std::uint8_t(component),std::uint8_t(component),std::uint8_t(3-component)};
+        sample.stages[0].alpha={7,7,7,5};sample.stages[1].alpha={7,0,5,7};
+        sample.stages[2].alpha={7,0,4,7};
+        assert(planRasterLookupMaterial(sample,plan,&error));compare(sample,plan,8192);
+    }
+    auto untextured=state;untextured.stages[2].textureEnabled=false;
+    untextured.stages[2].color={15,12,0,2};untextured.stages[2].alpha={7,7,7,0};
+    assert(planRasterLookupMaterial(untextured,plan,&error));compare(untextured,plan,8192);
+    auto tooMany=state;tooMany.stages[1].textureEnabled=true;tooMany.stages[1].texture=1;tooMany.stages[1].coordinate=0;tooMany.stages[1].color={8,0,10,15};
+    assert(!planRasterLookupMaterial(tooMany,plan,&error)&&error==MaterialPlanError::textureUnits&&!plan.stageCount);
+    auto indirect=state;indirect.indirectCount=1;
+    assert(!planRasterLookupMaterial(indirect,plan,&error)&&error==MaterialPlanError::indirect&&!plan.stageCount);
+    std::puts("PASS two-raster RGBA fragment equations, independent interpolation, alpha/swaps and bounded refusal");
+}
 int main(){
+    fullRasterCases();
     unsigned accepted=0;std::uint32_t seed=919;
     // Independent equations exercise all source IDs, unused inputs, constants,
     // complementary factors, scale, and simultaneous RGB/alpha previous values.

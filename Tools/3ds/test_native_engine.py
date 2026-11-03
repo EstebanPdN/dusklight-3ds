@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import subprocess
 import shutil
+import sys
+import tempfile
 
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -15,12 +17,17 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--negative-controls',action='store_true')
     args=parser.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
-    sdk=Path(os.environ.get('DEVKITPRO',Path.home()/'devkitpro'))
+    sdk=Path(os.environ.get('DEVKITPRO','/opt/devkitpro'))
+    if not (sdk/'libctru/include/3ds/gpu/enums.h').is_file():
+        parser.error('Set DEVKITPRO to an installed SDK containing libctru/include/3ds/gpu/enums.h')
+    picasso=sdk/'tools/bin/picasso'
+    if not picasso.is_file():parser.error('DEVKITPRO must contain tools/bin/picasso')
     native=ROOT/'Source/platforms/3ds'
     sources=[native/'native/contracts.cpp',native/'native/renderer.cpp',native/'native/quad_batch.cpp',native/'native/pack.cpp',native/'native/texture_pack.cpp',native/'native/material_pack.cpp',native/'native/model.cpp',native/'native/model_plan.cpp',native/'native/scene.cpp',native/'native/pose.cpp',native/'native/game_draw.cpp',native/'native/game_source.cpp',native/'native/asset_pack.cpp',native/'native/game_assets.cpp',native/'native/camera.cpp',native/'tests/native_engine_test.cpp']
     files=sources+[native/'native/contracts.hpp',native/'native/renderer.hpp',native/'native/quad_batch.hpp',native/'native/pack.hpp',native/'native/texture_pack.hpp',native/'native/scene.v.pica',native/'native/scene_rigid.v.pica',native/'tests/native_engine_stubs/citro3d.h',Path(__file__).resolve(),ROOT/'Tools/3ds/native_mesh_pack.py',ROOT/'Tools/3ds/test_native_pack.py',ROOT/'Tools/3ds/native_texture_pack.py',ROOT/'Tools/3ds/test_native_texture_pack.py']
     files.extend([native/'native/scene_uv.v.pica',native/'native/scene_rigid_uv.v.pica'])
     files.extend([native/'native/scene_projective.v.pica',native/'native/scene_rigid_projective.v.pica'])
+    files.extend([native/'native/scene_shared.pica',ROOT/'Tools/3ds/test_native_shader.py',native/'tests/native_engine_stubs/game_source_types.hpp'])
     files.extend([native/'native/material_pack.hpp',ROOT/'Tools/3ds/native_material_pack.py',ROOT/'Tools/3ds/test_native_material_pack.py'])
     files.extend([ROOT/'Tools/3ds'/name for name in ['j3d_native_materials.py','j3d_material_source.py','test_j3d_native_materials.py','j3d_native_geometry.py']])
     files.append(ROOT/'Tools/3ds/test_native_material_parameters.py')
@@ -28,16 +35,40 @@ def main():
     files.extend([native/'native/game_draw.hpp',native/'native/game_draw_api.hpp',ROOT/'Tools/3ds/native_game_packet_fixture.py',ROOT/'Source/libs/JSystem/src/J3DGraphBase/J3DPacket.cpp',native/'native/model.hpp',native/'native/scene.hpp',native/'native/pose.hpp',ROOT/'Tools/3ds/native_pose_pack.py',ROOT/'Tools/3ds/test_native_pose.py'])
     files.extend([native/'native'/p for p in ['game_source.hpp','asset_pack.hpp','game_assets.hpp','model_plan.hpp']])
     files.extend([ROOT/'Tools/3ds'/p for p in ['native_asset_pack.py','native_model_plan.py']])
+    files.append(ROOT/'Tools/3ds/test_native_image_identity.py')
     files.extend([ROOT/'Tools/3ds/native_game_source_fixture.py',native/'tests/native_game_assets_cases.hpp',ROOT/'Source/src/d/d_resorce.cpp',ROOT/'Source/libs/JSystem/src/J3DGraphAnimator/J3DModel.cpp'])
+    files.extend([native/'tests/native_model_overrides_cases.hpp',
+        ROOT/'Source/libs/dolphin/src/mtx/mtx.c',ROOT/'Source/libs/dolphin/src/mtx/vec.c',
+        ROOT/'Source/libs/JSystem/src/J3DGraphBase/J3DTransform.cpp'])
     files.extend([native/'native/camera.hpp',ROOT/'Tools/3ds/native_camera_fixture.py',native/'tests/native_camera_cases.hpp',ROOT/'Source/libs/dolphin/src/mtx/mtx44.c',ROOT/'Source/src/m_Do/m_Do_graphic.cpp'])
+    files.append(ROOT/'Source/src/d/actor/d_a_mirror.cpp')
+    files.extend([native/'native/storage.hpp',native/'native/game_limits.hpp',
+        native/'tests/native_mesh_bank_cases.hpp',native/'tests/native_model_large_cases.hpp'])
+    files.extend([native/'runtime/gpu_sync_ctru.cpp',native/'runtime/gpu_sync.hpp',native/'runtime/clock.hpp',
+        native/'runtime/ctru_gxqueue.c',native/'tests/gpu_queue_lifecycle_test.cpp',ROOT/'Tools/3ds/test_gpu_queue_lifecycle.py'])
     files.extend(p for p in [ROOT/'Upstream/extracted/citro3d-1.7.1/source/maths'/n for n in ['mtx_persptilt.c','mtx_orthotilt.c']] if p.is_file())
     before={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
+    from test_native_shader import binary_abi
+    shader_commands=[];shader_header=['#pragma once\n']
+    for index,variant in enumerate(['','_rigid','_uv','_rigid_uv','_projective','_rigid_projective']):
+        binary=out/f'native_scene{variant}.shbin'
+        assemble=[str(picasso),'-o',str(binary),str(native/f'native/scene{variant}.v.pica'),str(native/'native/scene_shared.pica')]
+        shader_commands.append(assemble)
+        assembled=subprocess.run(assemble,text=True,capture_output=True)
+        (out/f'native_scene{variant}-assemble.log').write_text(assembled.stdout+assembled.stderr)
+        assembled.check_returncode();binary_abi(binary)
+        symbol=f'native_scene{variant}_shader'
+        shader_header.append(f'alignas(4) extern const unsigned char {symbol}[]={{'+','.join(map(str,binary.read_bytes()))+'};\n')
+        shader_header.append(f'extern const unsigned int {symbol}_size=sizeof({symbol});\n')
+        shader_header.append(f'inline const bool register_shader{index}=[]{{nativeMock::shaderKinds.emplace({symbol},{index});return true;}}();\n')
+    (out/'native_shader_fixture.hpp').write_text(''.join(shader_header))
     from test_native_pack import fixture
     from native_mesh_pack import compile_pack
     fixture_path=out/'native-fixture.pica';fixture_path.write_bytes(compile_pack(fixture()))
     from test_native_texture_pack import fixture as texture_fixture
     from native_texture_pack import compile_images
-    texture_path=out/'native-texture-fixture.dnt';texture_path.write_bytes(compile_images(texture_fixture()))
+    texture_bytes=compile_images(texture_fixture());assert texture_bytes[:12]==b'DUSKTX01\x03\x00\x00\x00'
+    texture_path=out/'native-texture-fixture.dnt';texture_path.write_bytes(texture_bytes)
     from test_native_material_pack import fixture as material_fixture
     from native_material_pack import compile_materials
     from test_native_material_parameters import fixture as parameters_fixture
@@ -46,7 +77,16 @@ def main():
         {'id':37,'images':[1,0,0],'stages':[model_stage],'initial_snapshot_only':True},
         {'id':41,'images':[1,0,0],'stages':[model_stage],'requires_fog':True},
         {'id':43,'images':[99,0,0],'stages':[model_stage]},
-        {'id':47,'stages':[{}],'depth_test':False,'depth_write':False}]
+        {'id':47,'stages':[{}],'depth_test':False,'depth_write':False},
+        {'id':53,'images':[1,2,3],'raster_lookup':True,'lookup_base':1,'stages':[{}]},
+        {'id':59,'fog_carrier':'primaryAlpha','requires_fog':True,'stages':[
+            {'alpha':['constant','primary','primary']},
+            {'rgb':['constant','previous','primary'],'rgb_operand':['color','color','alpha'],
+             'rgb_function':'interpolate','alpha':['previous','primary','primary'],'constant_bindings':[29,30,31,32]}]}]
+    model_records.append({'id':61,'images':[1,1018,0],'fog_carrier':'texture1','stages':[
+        {'rgb':['texture0','primary','primary'],'alpha':['texture0','primary','primary']},
+        {'rgb':['constant','previous','texture1'],'rgb_operand':['color','color','alpha'],
+         'rgb_function':'interpolate','alpha':['previous','primary','primary'],'constant_bindings':[29,30,31,32]}]})
     material_path=out/'native-material-fixture.dnm';material_path.write_bytes(compile_materials(material_fixture()+parameters_fixture()+model_records))
     from test_j3d_native_materials import source_fixture
     from j3d_native_materials import convert as compile_source_materials
@@ -62,7 +102,7 @@ def main():
     (out/'native_game_source_fixture.hpp').write_text(source_fixture_header())
     from native_camera_fixture import generate as camera_header
     camera_text,camera_sdk=camera_header();(out/'native_camera_fixture.hpp').write_text(camera_text)
-    from native_asset_pack import compile_asset,identity
+    from native_asset_pack import compile_asset,identity,filename
     from native_model_plan import compile_plan
     asset_dir=out/'asset-fixture';asset_dir.mkdir(exist_ok=True)
     for size in [32,55,56,63,64,65,97,128,1024,4096]:
@@ -74,26 +114,44 @@ def main():
           'uniforms':[{'material':23,'anchor':1,'palette':[1,2,3]},{'material':23,'anchor':1,'palette':[1,2,3]}]}
     # The untextured third part uses a distinct slot/material, matching offline ownership.
     plan['parts'][2]['uniform_slot']=2;plan['uniforms'].append({'material':29,'anchor':1,'palette':[1,2,3]})
-    packed=compile_asset(source,fixture_path.read_bytes(),texture_path.read_bytes(),material_path.read_bytes(),compile_plan(plan),[5,5,8])
-    (asset_dir/(identity(source).hex()+'.dna')).write_bytes(packed)
-    command=['clang++','-std=c++20','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-omit-frame-pointer',
+    context=hashlib.sha256(b'DUSKCTX1'+bytes(4)).digest()
+    # This source model authors image1 only. Keep its complete bank small enough
+    # to reach the independent 16-asset metadata limit without exhausting slots.
+    asset_images=compile_images([image for image in texture_fixture() if image['id']==1])
+    assert asset_images[:12]==b'DUSKTX01\x03\x00\x00\x00'
+    packed=compile_asset(source,fixture_path.read_bytes(),asset_images,material_path.read_bytes(),compile_plan(plan),[5,5,8],image_context=context)
+    (asset_dir/filename(source,context)).write_bytes(packed)
+    from test_native_image_identity import vectors,external_names,framebuffer_roles
+    external_names();framebuffer_roles()
+    for index,(bti,digest) in enumerate(vectors()):
+        (asset_dir/f'image-{index}.bti').write_bytes(bti)
+        (asset_dir/f'image-{index}.sha256').write_bytes(digest)
+    image_digests=b''.join(digest for _,digest in vectors())
+    (asset_dir/'images.context').write_bytes(hashlib.sha256(b'DUSKCTX1'+(5).to_bytes(4,'little')+image_digests).digest())
+    command=['clang++','-std=c++20','-O1','-g','-Wall','-Wextra','-Werror','-DDUSK_NATIVE_GAME_DIAGNOSTIC_TEST=1','-fsanitize=address,undefined','-fno-omit-frame-pointer',
              '-I'+str(out),'-I'+str(native/'tests/native_engine_stubs'),'-I'+str(native),'-I'+str(sdk/'libctru/include'),*map(str,sources),'-o',str(out/'native-engine-test')]
-    receipt={'scope':'Host SDK substitutes, not PICA execution, hardware correctness or performance','status':'running','command':command,'camera_sdk_source_oracle':camera_sdk}
+    receipt={'scope':'Host SDK substitutes and assembled shader ABI, not PICA execution, hardware correctness or performance','status':'running','command':command,'shader_commands':shader_commands,'camera_sdk_source_oracle':camera_sdk}
     try:
         built=subprocess.run(command,text=True,capture_output=True,timeout=90)
         (out/'host-build.log').write_text(built.stdout+built.stderr);built.check_returncode()
         run=subprocess.run([str(out/'native-engine-test'),str(fixture_path),str(texture_path),str(material_path),str(source_material_path),str(buffered_path),str(pose_path),str(asset_dir)],text=True,capture_output=True,timeout=30,
             env={**os.environ,'ASAN_OPTIONS':'halt_on_error=1:abort_on_error=1','UBSAN_OPTIONS':'halt_on_error=1:print_stacktrace=1'})
         (out/'host-run.log').write_text(run.stdout+run.stderr);run.check_returncode();print(run.stdout,end='')
+        queue_output=Path(tempfile.mkdtemp(prefix='queue-lifecycle-',dir=out))/'results'
+        queue_command=[sys.executable,str(ROOT/'Tools/3ds/test_gpu_queue_lifecycle.py'),'--output',str(queue_output)]
+        queue_run=subprocess.run(queue_command,text=True,capture_output=True,timeout=120)
+        (out/'queue-lifecycle.log').write_text(queue_run.stdout+queue_run.stderr)
+        queue_run.check_returncode();print(queue_run.stdout,end='')
+        receipt['queue_lifecycle_receipt']=str(queue_output/'results.json')
         if args.negative_controls:
             controls=[('early-retirement','renderer.cpp','    if(!C3D_FrameBegin(C3D_FRAME_NONBLOCK))','    collect();\n    if(!C3D_FrameBegin(C3D_FRAME_NONBLOCK))'),
                       ('stale-generation','renderer.hpp','++s.generation;','(void)0;'),
                       ('clear-reordering','renderer.cpp','    if(emitted)C3D_FrameSplit(GX_CMDLIST_FLUSH);','    (void)emitted;'),
                       ('projective-owned-mutation','renderer.cpp','            sampler=&view;','            *sampler=view;'),
-                      ('missing-material-parameters','renderer.cpp','    if((u.material.suppliedMask&p.parameterMask)!=p.parameterMask)return fail(Error::invalidAsset);','    (void)p.parameterMask;'),
+                      ('missing-material-parameters','renderer.cpp','if((u.material.suppliedMask&p.parameterMask)!=p.parameterMask)','if(false)'),
                       ('parameter-channel-alias','renderer.cpp','>>(8*(source%4))','>>(8*(source/4%4))'),
                       ('sampler-resident-levels','renderer.cpp','        if((u.samplerMask&(1u<<n))&&!validateSampler(u.samplers[n],bound[n]->maxLevel+1))return fail(Error::invalidAsset);','        (void)n;'),
-                      ('model-parameter-preflight','model.cpp','        if(u.samplerMask||!validateUniforms(u,uniformBones[n])||(u.material.suppliedMask&uniformParameters[n])!=uniformParameters[n])return reject(Error::invalidAsset);','        (void)u;'),
+                      ('model-parameter-preflight','model.cpp','(u.material.suppliedMask&p.parameters)!=p.parameters','false'),
                       ('scene-preflight','scene.cpp','        if(error!=Error::none)return {0,error};','        (void)error;'),
                       ('scene-tie-order','scene.cpp','        return a<b;','        return a>b;'),
                       ('scene-partial-result','scene.cpp','return {submitted,item.model->error()};','return {unsigned(items.size()),Error::none};'),
@@ -109,7 +167,7 @@ def main():
                       ('asset-shape-ownership','game_assets.cpp','asset->shapes=pack.shapes;','asset->shapes={};'),
                       ('asset-shared-lifetime','game_assets.cpp','if(!asset->references){','if(asset->references<=1){'),
                       ('asset-environment-alias','game_assets.cpp','||!sameEnvironment(*asset)',''),
-                      ('asset-external-context','game_assets.cpp','if(pack.requiresTextureContext)return fail(GameAssetError::textureContext);','(void)pack.requiresTextureContext;'),
+                      ('asset-external-context','asset_pack.cpp','||std::memcmp(b.data()+100,expected.imageContext.data(),32)',''),
                       ('source-single-matrix-mode','native_game_source_fixture.hpp','mModelData->checkFlag(0x110) ||','false ||'),
                       ('model-resource-sharing','model.hpp','        for(unsigned n=0;n<count;++n)if(resources[n].id==id)return int(n);','        (void)resources;'),
                       ('model-partial-result','model.cpp','return reject(r.error(),submitted);','return {partCount,Error::none};')]

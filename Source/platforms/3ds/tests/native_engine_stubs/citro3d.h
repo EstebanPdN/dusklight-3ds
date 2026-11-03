@@ -7,24 +7,26 @@
 #include <cstring>
 #include <map>
 #include <vector>
+#include <string>
 using u8=std::uint8_t;using u16=std::uint16_t;using u32=std::uint32_t;using Result=int;
 #define BIT(n) (1u<<(n))
 #define R_FAILED(r) ((r)<0)
 #include <3ds/gpu/enums.h>
-struct DVLE_s{unsigned type{};};struct DVLB_s{DVLE_s DVLE[1];};
-struct shaderInstance_s{unsigned type{};};struct shaderProgram_s{shaderInstance_s* vertexShader{};};
-struct C3D_Tex{void* data{};std::size_t size{};unsigned maxLevel{},width{},height{},param{},minLevel{},lodBias{};};
+struct DVLE_s{unsigned type{};std::map<std::string,int> uniforms;};struct DVLB_s{DVLE_s DVLE[1];};
+struct shaderInstance_s{DVLE_s* dvle{};};struct shaderProgram_s{shaderInstance_s* vertexShader{};};
+struct C3D_Tex{void* data{};std::size_t size{};GPU_TEXCOLOR fmt{};unsigned maxLevel{},width{},height{},param{},minLevel{},lodBias{};};
 struct C3D_TexInitParams{unsigned width,height,maxLevel;GPU_TEXCOLOR format;GPU_TEXTURE_MODE_PARAM type;bool onVram;};
 struct C3D_FrameBuf{void* colorBuf{};unsigned width{},height{};void* depthBuf{};};
 struct C3D_RenderTarget{C3D_FrameBuf frameBuf;};
-struct C3D_FogLut{u32 data[128];};
+struct C3D_FogLut{std::array<float,256> values{};};
 struct C3D_TexEnv{u16 srcRgb{},srcAlpha{};u32 rgbOp{},alphaOp{},color{};GPU_COMBINEFUNC rgb=GPU_REPLACE,alpha=GPU_REPLACE;unsigned rgbScale{},alphaScale{};};
 enum {C3D_RGB=1,C3D_Alpha=2,C3D_FRAME_NONBLOCK=2,C3D_UNSIGNED_SHORT=1,GX_CMDLIST_FLUSH=1};
 enum C3D_ClearBits {C3D_CLEAR_COLOR=1,C3D_CLEAR_DEPTH=2};
-struct C3D_AttrInfo{unsigned count{};std::array<unsigned,8> reg{},type{},size{};};
-struct C3D_BufInfo{const void* data{};unsigned stride{};};
+struct C3D_AttrInfo{unsigned count{};std::uint64_t permutation{};std::array<unsigned,9> reg{},type{},size{};};
+struct C3D_BufInfo{const void* data{};unsigned stride{},attributeCount{};std::uint64_t order{};};
 namespace nativeMock {
 inline std::map<void*,std::size_t> allocations;
+inline std::map<void*,std::size_t> vramAllocations;
 inline std::map<void*,std::size_t> published;
 inline std::vector<const void*> held;
 inline std::array<C3D_Tex*,3> textures{};
@@ -32,11 +34,21 @@ inline std::array<C3D_TexEnv,6> env{};
 inline std::array<unsigned,2> bufferMasks{};
 inline u32 bufferColor{};
 inline std::array<std::array<float,4>,96> uniforms{};
+inline std::array<std::array<unsigned,4>,4> integerUniforms{};
+inline std::map<const void*,unsigned> shaderKinds;
+inline GPU_FOGMODE fogMode{};inline GPU_GASMODE gasMode{};inline bool fogDepthFlip{};inline u32 fogColor{};
+inline std::array<u32,3> depthState{},alphaState{};
+inline GPU_CULLMODE cullMode{};
 inline std::array<u32,6> blendState{};
 inline C3D_AttrInfo attributes;inline C3D_BufInfo buffer;
 inline C3D_FogLut* fog{};
 inline unsigned draws{},begins{},frees{},allocationCalls{},failAllocationAt{};
 inline unsigned bufferCalls{},failBufferAt{},publicationCalls{},failPublicationAt{};
+inline unsigned vramFrees{},vramAllocationCalls{},transferCalls{},transferCompletions{};
+inline bool failVramAllocation=true;
+struct TextureTransfer {void* destination{};const void* source{};std::size_t size{};};
+inline std::vector<TextureTransfer> transfers;
+inline TextureTransfer lastTransfer{};
 struct DrawRecord {unsigned count{};std::array<const void*,3> images{};std::array<u32,3> sampling{};u32 constant{};float projectionX{};};
 inline std::array<DrawRecord,16> drawTrace{};inline unsigned traceSize{};inline bool traceDraws{};
 inline unsigned pendingDraws{};
@@ -55,7 +67,14 @@ inline bool visible(const void* p){
     const auto x=reinterpret_cast<std::uintptr_t>(p);
     for(auto [a,n]:published){auto y=reinterpret_cast<std::uintptr_t>(a);if(x>=y&&x-y<n)return true;}return false;
 }
-inline void complete(){assert(!inFrame);inFlight=false;held.clear();}
+inline void completeTransfers(){
+    for(const auto& transfer:transfers){
+        assert(allocations.count(const_cast<void*>(transfer.source))&&vramAllocations.count(transfer.destination));
+        std::memcpy(transfer.destination,transfer.source,transfer.size);++transferCompletions;
+    }
+    transfers.clear();held.clear();
+}
+inline void complete(){assert(!inFrame);inFlight=false;completeTransfers();}
 }
 inline void* getThreadLocalStorage(){return nativeMock::tls;}
 inline void* linearMemAlign(std::size_t n,std::size_t align){
@@ -70,19 +89,59 @@ inline void linearFree(void* p){
 inline Result GSPGPU_FlushDataCache(const void* p,std::size_t n){
     ++nativeMock::publicationCalls;if(nativeMock::failPublication||nativeMock::publicationCalls==nativeMock::failPublicationAt)return -1;assert(nativeMock::contains(p));nativeMock::published[const_cast<void*>(p)]=n;return 0;
 }
-inline DVLB_s* DVLB_ParseFile(u32* bytes,unsigned){++nativeMock::parseCalls;if(nativeMock::parseCalls==nativeMock::failParseAt)return nullptr;auto* b=new DVLB_s;b->DVLE[0].type=reinterpret_cast<u8*>(bytes)[0];++nativeMock::liveBinaries;return b;}
+inline DVLB_s* DVLB_ParseFile(u32* bytes,unsigned size){
+    using namespace nativeMock;++parseCalls;if(parseCalls==failParseAt)return nullptr;
+    const auto* data=reinterpret_cast<const u8*>(bytes);
+    const auto read=[&](std::size_t at,unsigned n){assert(at<=size&&n<=size-at);u32 value=0;for(unsigned j=0;j<n;++j)value|=u32(data[at+j])<<(8*j);return value;};
+    assert(size>=12&&std::memcmp(data,"DVLB",4)==0&&read(4,4)==1);
+    const auto offset=read(8,4);assert(offset<=size&&size-offset>=64&&std::memcmp(data+offset,"DVLE",4)==0);
+    auto* binary=new DVLB_s;assert(shaderKinds.count(bytes));binary->DVLE[0].type=shaderKinds.at(bytes);
+    const auto table=read(offset+48,4),count=read(offset+52,4),symbols=read(offset+56,4);
+    for(unsigned n=0;n<count;++n){
+        const auto row=std::size_t(offset)+table+8*n,at=std::size_t(offset)+symbols+read(row,4);
+        assert(at<size);std::size_t end=at;while(end<size&&data[end])++end;assert(end<size);
+        binary->DVLE[0].uniforms.emplace(std::string(reinterpret_cast<const char*>(data+at),end-at),int(read(row+4,2))-0x10);
+    }
+    ++liveBinaries;return binary;
+}
 inline void DVLB_Free(DVLB_s* p){if(p)--nativeMock::liveBinaries;delete p;}
 inline Result shaderProgramInit(shaderProgram_s* p){p->vertexShader=nullptr;return 0;}
-inline Result shaderProgramSetVsh(shaderProgram_s* p,DVLE_s* v){++nativeMock::setShaderCalls;if(nativeMock::setShaderCalls==nativeMock::failSetShaderAt)return -1;p->vertexShader=new shaderInstance_s{v->type};++nativeMock::liveShaders;return 0;}
+inline Result shaderProgramSetVsh(shaderProgram_s* p,DVLE_s* v){++nativeMock::setShaderCalls;if(nativeMock::setShaderCalls==nativeMock::failSetShaderAt)return -1;p->vertexShader=new shaderInstance_s{v};++nativeMock::liveShaders;return 0;}
 inline Result shaderProgramFree(shaderProgram_s* p){if(p->vertexShader)--nativeMock::liveShaders;delete p->vertexShader;p->vertexShader=nullptr;return 0;}
-inline int shaderInstanceGetUniformLocation(shaderInstance_s*,const char*){return 0;}
+inline int shaderInstanceGetUniformLocation(shaderInstance_s* instance,const char* name){const auto& values=instance->dvle->uniforms;auto it=values.find(name);return it==values.end()?-1:it->second;}
 inline unsigned C3D_TexCalcTotalSize(unsigned n,unsigned level){unsigned total=0;for(unsigned i=0;i<=level;++i){total+=n;n>>=2;}return total;}
 inline bool C3D_TexInitWithParams(C3D_Tex* t,void*,C3D_TexInitParams p){
-    unsigned pixels=p.width*p.height;t->size=p.format==GPU_RGBA8?pixels*4:p.format==GPU_RGB565?pixels*2:p.format==GPU_ETC1?pixels/2:pixels;
-    t->maxLevel=p.maxLevel;t->width=p.width;t->height=p.height;t->data=linearMemAlign(C3D_TexCalcTotalSize(t->size,t->maxLevel),16);return t->data;
+    assert(p.type==GPU_TEX_2D);
+    unsigned pixels=p.width*p.height;
+    switch(p.format){case GPU_RGBA8:t->size=pixels*4;break;case GPU_RGB565:case GPU_RGBA5551:t->size=pixels*2;break;case GPU_ETC1:t->size=pixels/2;break;case GPU_ETC1A4:t->size=pixels;break;default:std::abort();}
+    t->fmt=p.format;t->maxLevel=p.maxLevel;t->width=p.width;t->height=p.height;
+    const auto total=C3D_TexCalcTotalSize(t->size,t->maxLevel);
+    if(p.onVram){
+        ++nativeMock::vramAllocationCalls;if(nativeMock::failVramAllocation)return false;
+        if(posix_memalign(&t->data,128,total))return false;
+        std::memset(t->data,0xcd,total);nativeMock::vramAllocations[t->data]=total;return true;
+    }
+    t->data=linearMemAlign(total,16);return t->data;
 }
 inline bool C3D_TexInit(C3D_Tex* t,unsigned w,unsigned h,GPU_TEXCOLOR f){return C3D_TexInitWithParams(t,nullptr,{w,h,0,f,GPU_TEX_2D,false});}
-inline void C3D_TexDelete(C3D_Tex* t){linearFree(t->data);t->data=nullptr;}
+inline void C3D_TexLoadImage(C3D_Tex* t,const void* data,GPU_TEXFACE face,int level){
+    using namespace nativeMock;
+    assert(face==GPU_TEXFACE_2D&&level==-1&&vramAllocations.count(t->data));
+    const auto size=C3D_TexCalcTotalSize(t->size,t->maxLevel);
+    assert(!(reinterpret_cast<std::uintptr_t>(data)&15)&&allocations.count(const_cast<void*>(data)));
+    assert(allocations.at(const_cast<void*>(data))>=size&&published.at(const_cast<void*>(data))>=size);
+    lastTransfer={t->data,data,size};++transferCalls;
+    if(inFrame){transfers.push_back(lastTransfer);held.push_back(data);held.push_back(t->data);}
+    else {std::memcpy(t->data,data,size);++transferCompletions;}
+}
+inline void C3D_TexDelete(C3D_Tex* t){
+    using namespace nativeMock;
+    if(vramAllocations.count(t->data)){
+        for(auto p:held)assert(p!=t->data);
+        ++vramFrees;++frees;vramAllocations.erase(t->data);std::free(t->data);
+    }else linearFree(t->data);
+    t->data=nullptr;
+}
 inline void C3D_TexSetFilter(C3D_Tex* t,GPU_TEXTURE_FILTER_PARAM a,GPU_TEXTURE_FILTER_PARAM b){t->param&=~(GPU_TEXTURE_MAG_FILTER(GPU_LINEAR)|GPU_TEXTURE_MIN_FILTER(GPU_LINEAR));t->param|=GPU_TEXTURE_MAG_FILTER(a)|GPU_TEXTURE_MIN_FILTER(b);}
 inline void C3D_TexSetFilterMipmap(C3D_Tex* t,GPU_TEXTURE_FILTER_PARAM a){t->param&=~GPU_TEXTURE_MIP_FILTER(GPU_LINEAR);t->param|=GPU_TEXTURE_MIP_FILTER(a);}
 inline void C3D_TexSetWrap(C3D_Tex* t,GPU_TEXTURE_WRAP_PARAM a,GPU_TEXTURE_WRAP_PARAM b){t->param&=~(GPU_TEXTURE_WRAP_S(3)|GPU_TEXTURE_WRAP_T(3));t->param|=GPU_TEXTURE_WRAP_S(a)|GPU_TEXTURE_WRAP_T(b);}
@@ -96,12 +155,13 @@ inline float C3D_GetProcessingTime(){return 2;}
 inline void C3D_SetScissor(GPU_SCISSORMODE mode,unsigned left,unsigned top,unsigned right,unsigned bottom){nativeMock::scissor={unsigned(mode),left,top,right,bottom};}
 inline C3D_AttrInfo* C3D_GetAttrInfo(){return &nativeMock::attributes;}
 inline void AttrInfo_Init(C3D_AttrInfo* a){*a={};}
-inline void AttrInfo_AddLoader(C3D_AttrInfo* a,unsigned r,unsigned t,unsigned n){assert(a->count<8);auto i=a->count++;a->reg[i]=r;a->type[i]=t;a->size[i]=n;}
+inline void AttrInfo_AddLoader(C3D_AttrInfo* a,unsigned r,unsigned t,unsigned n){assert(a->count<a->reg.size());auto i=a->count++;a->reg[i]=r;a->type[i]=t;a->size[i]=n;a->permutation|=std::uint64_t(r)<<(4*i);}
 inline C3D_BufInfo* C3D_GetBufInfo(){return &nativeMock::buffer;}
 inline void BufInfo_Init(C3D_BufInfo* b){*b={};}
-inline int BufInfo_Add(C3D_BufInfo* b,const void* p,unsigned stride,unsigned n,std::uint64_t order){assert(n==8&&order==0x76543210);b->data=p;b->stride=stride;++nativeMock::bufferCalls;return nativeMock::failBuffer||nativeMock::bufferCalls==nativeMock::failBufferAt?-1:0;}
-inline void C3D_BindProgram(shaderProgram_s* p){assert(p&&p->vertexShader);nativeMock::selectedShader=p->vertexShader->type;}
-inline void C3D_FVUnifSet(GPU_SHADER_TYPE,unsigned r,float x,float y,float z,float w){assert(r<96);nativeMock::uniforms[r]={x,y,z,w};}
+inline int BufInfo_Add(C3D_BufInfo* b,const void* p,unsigned stride,unsigned n,std::uint64_t order){b->data=p;b->stride=stride;b->attributeCount=n;b->order=order;++nativeMock::bufferCalls;return nativeMock::failBuffer||nativeMock::bufferCalls==nativeMock::failBufferAt?-1:0;}
+inline void C3D_BindProgram(shaderProgram_s* p){assert(p&&p->vertexShader);nativeMock::selectedShader=p->vertexShader->dvle->type;}
+inline void C3D_FVUnifSet(GPU_SHADER_TYPE stage,unsigned r,float x,float y,float z,float w){assert(stage==GPU_VERTEX_SHADER&&r<96);nativeMock::uniforms[r]={x,y,z,w};}
+inline void C3D_IVUnifSet(GPU_SHADER_TYPE stage,unsigned r,unsigned x,unsigned y,unsigned z,unsigned w){assert(stage==GPU_VERTEX_SHADER&&r>=0x60&&r<=0x63);nativeMock::integerUniforms[r-0x60]={x,y,z,w};}
 inline void C3D_TexBind(unsigned n,C3D_Tex* p){assert(n<3&&p&&p->data);if(n>0&&((p->param>>28)&7)!=GPU_TEX_2D){++nativeMock::unsupportedUnitBindings;return;}nativeMock::textures[n]=p;}
 inline void C3D_TexEnvInit(C3D_TexEnv* e){*e={};e->srcRgb=e->srcAlpha=GPU_PREVIOUS;e->color=0xffffffff;}
 inline void C3D_TexEnvSrc(C3D_TexEnv* e,unsigned mode,GPU_TEVSRC a,GPU_TEVSRC b,GPU_TEVSRC c){(mode==C3D_RGB?e->srcRgb:e->srcAlpha)=u16(GPU_TEVSOURCES(a,b,c));}
@@ -113,26 +173,26 @@ inline void C3D_TexEnvColor(C3D_TexEnv* e,u32 c){e->color=c;}
 inline void C3D_SetTexEnv(unsigned n,C3D_TexEnv* e){assert(n<6);nativeMock::env[n]=*e;}
 inline void C3D_TexEnvBufUpdate(unsigned mode,unsigned mask){if(mode&C3D_RGB)nativeMock::bufferMasks[0]=mask;if(mode&C3D_Alpha)nativeMock::bufferMasks[1]=mask;}
 inline void C3D_TexEnvBufColor(u32 color){nativeMock::bufferColor=color;}
-inline void C3D_LightEnvBind(void*){}
-inline void C3D_FragOpMode(GPU_FRAGOPMODE){}
-inline void C3D_EarlyDepthTest(bool,GPU_EARLYDEPTHFUNC,u32){}
-inline void C3D_DepthMap(bool,float,float){}
-inline void C3D_CullFace(GPU_CULLMODE){}
-inline void C3D_StencilTest(bool,GPU_TESTFUNC,int,int,int){}
-inline void C3D_StencilOp(GPU_STENCILOP,GPU_STENCILOP,GPU_STENCILOP){}
-inline void C3D_DepthTest(bool,GPU_TESTFUNC,GPU_WRITEMASK){}
-inline void C3D_AlphaTest(bool,GPU_TESTFUNC,int){}
+inline void C3D_LightEnvBind(void* p){assert(!p);}
+inline void C3D_FragOpMode(GPU_FRAGOPMODE mode){assert(mode==GPU_FRAGOPMODE_GL);}
+inline void C3D_EarlyDepthTest(bool enabled,GPU_EARLYDEPTHFUNC,u32){assert(!enabled);}
+inline void C3D_DepthMap(bool enabled,float scale,float offset){assert(enabled&&scale==-1&&offset==0);}
+inline void C3D_CullFace(GPU_CULLMODE mode){nativeMock::cullMode=mode;}
+inline void C3D_StencilTest(bool enabled,GPU_TESTFUNC,int,int,int){assert(!enabled);}
+inline void C3D_StencilOp(GPU_STENCILOP a,GPU_STENCILOP b,GPU_STENCILOP c){assert(a==GPU_STENCIL_KEEP&&b==GPU_STENCIL_KEEP&&c==GPU_STENCIL_KEEP);}
+inline void C3D_DepthTest(bool enabled,GPU_TESTFUNC comparison,GPU_WRITEMASK mask){nativeMock::depthState={u32(enabled),u32(comparison),u32(mask)};}
+inline void C3D_AlphaTest(bool enabled,GPU_TESTFUNC comparison,int reference){nativeMock::alphaState={u32(enabled),u32(comparison),u32(reference)};}
 inline void C3D_AlphaBlend(GPU_BLENDEQUATION c,GPU_BLENDEQUATION a,GPU_BLENDFACTOR cs,GPU_BLENDFACTOR cd,GPU_BLENDFACTOR as,GPU_BLENDFACTOR ad){nativeMock::blendState={u32(c),u32(a),u32(cs),u32(cd),u32(as),u32(ad)};}
-inline void C3D_FogGasMode(GPU_FOGMODE,GPU_GASMODE,bool){}
-inline void C3D_FogColor(u32){}
+inline void C3D_FogGasMode(GPU_FOGMODE mode,GPU_GASMODE gas,bool flip){nativeMock::fogMode=mode;nativeMock::gasMode=gas;nativeMock::fogDepthFlip=flip;}
+inline void C3D_FogColor(u32 value){nativeMock::fogColor=value;}
 inline void C3D_FogLutBind(C3D_FogLut* p){nativeMock::fog=p;}
-inline void FogLut_FromArray(C3D_FogLut* p,const float*){std::memset(p,0xa5,sizeof(*p));}
+inline void FogLut_FromArray(C3D_FogLut* p,const float* values){std::memcpy(p->values.data(),values,sizeof(p->values));}
 inline void C3D_DrawElements(GPU_Primitive_t mode,int count,int type,const void* ix){
     using namespace nativeMock;assert(inFrame&&mode==GPU_TRIANGLES&&count>0&&type==C3D_UNSIGNED_SHORT);
     assert(unsupportedUnitBindings==0&&"Citro3D rejected a non2D sampler outside unit0");
     assert(contains(buffer.data)&&visible(buffer.data)&&contains(ix)&&visible(ix));
     held.push_back(buffer.data);held.push_back(ix);
-    for(auto* t:textures){assert(t&&contains(t->data)&&visible(t->data));held.push_back(t->data);}
-    if(traceDraws){assert(traceSize<drawTrace.size());auto& row=drawTrace[traceSize++];row.count=unsigned(count);row.constant=env[0].color;row.projectionX=uniforms[48][0];for(unsigned n=0;n<3;++n){row.images[n]=textures[n]->data;row.sampling[n]=textures[n]->param;}}
+    for(auto* t:textures){assert(t&&((contains(t->data)&&visible(t->data))||vramAllocations.count(t->data)));held.push_back(t->data);}
+    if(traceDraws){assert(traceSize<drawTrace.size());auto& row=drawTrace[traceSize++];row.count=unsigned(count);row.constant=env[0].color;row.projectionX=uniforms[24][0];for(unsigned n=0;n<3;++n){row.images[n]=textures[n]->data;row.sampling[n]=textures[n]->param;}}
     ++draws;++pendingDraws;
 }

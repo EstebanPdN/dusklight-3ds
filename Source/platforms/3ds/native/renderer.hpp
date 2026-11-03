@@ -3,11 +3,14 @@
 #include <citro3d.h>
 
 namespace dusk::pica {
+struct MeshView;
 struct Limits {
     std::size_t meshBytes=4<<20,textureBytes=4<<20,transientBytes=256<<10;
     unsigned drawsPerFrame=64;
     // Caller must initialize Citro3D with at least this command-buffer size.
     std::size_t commandBytes=512<<10;
+    // Shared CPU draw workspace, independently bounded from GPU transient data.
+    std::size_t uniformBytes=256<<10;
 };
 struct Statistics {
     std::uint64_t frames{},draws{},triangles{},rigidDraws{},weightedDraws{},uvDraws{},projectiveDraws{};
@@ -27,7 +30,9 @@ public:
     Renderer()=default;
     Renderer(const Renderer&)=delete;
     Renderer& operator=(const Renderer&)=delete;
-    bool initialize(const Limits&);
+    // Optional shared-queue owner guarantees 32 KiB available before each draw,
+    // waiting for GPU completion before recycling command storage when needed.
+    bool initialize(const Limits&,bool(*prepareCommandDraw)()=nullptr);
     bool begin(C3D_RenderTarget*); // NONBLOCK: busy returns without recycling.
     bool target(C3D_RenderTarget*); // Full target viewport/scissor, no implicit clear.
     bool clear(std::uint32_t color,std::uint32_t depth,bool colorBuffer=true,bool depthBuffer=true);
@@ -36,14 +41,25 @@ public:
     bool releaseAfterContextDestroyed(); // Does not wait or destroy Citro3D.
     MeshHandle createMesh(std::span<const Vertex>,std::span<const std::uint16_t>);
     MeshHandle createMeshBytes(std::span<const std::byte> nativeVertices,std::span<const std::byte> nativeIndices);
+    // Range ordinals preserve input order; each range retains local u16 indices.
+    MeshBankHandle createMeshBank(std::span<const MeshView> distinctMeshes);
     TextureHandle createTexture(const TextureInfo&,std::span<const std::byte> nativeTiledMipChain);
+    // Optional shared-queue barrier: completes prior work and reserves two GX
+    // entries before an in-frame upload. It runs only when creating textures.
+    bool setTextureUploadBarrier(bool(*barrier)());
+    // Render-owner callback resolves a current borrowed RGBA8 capture only at submission.
+    using FramebufferProvider=bool(*)(void*&,unsigned&,unsigned&);
+    bool setFramebufferProvider(FramebufferProvider);
     MaterialHandle createMaterial(const Material&);
     bool release(MeshHandle);
+    bool release(MeshBankHandle);
     bool release(TextureHandle);
     bool release(MaterialHandle);
     bool draw(MeshHandle,MaterialHandle,const std::array<TextureHandle,3>&,const DrawUniforms&);
+    bool draw(MeshBankHandle,unsigned range,MaterialHandle,const std::array<TextureHandle,3>&,const DrawUniforms&);
     bool drawTransient(std::span<const Vertex>,std::span<const std::uint16_t>,MaterialHandle,const std::array<TextureHandle,3>&,const DrawUniforms&);
     Error error()const{return failure;}
+    const char* errorDetail()const{return failure==Error::none?nullptr:failureDetail;}
     bool frameActive()const{return open;}
     std::uint64_t stateVersion()const{return stateSerial;}
     const Statistics& statistics()const{return stats;}
@@ -52,8 +68,9 @@ private:
     friend class Scene;
     friend class GameDraw;
     friend class GameAssets;
-    struct Mesh {void* data{};GeometryInfo info{};};
-    struct Texture {C3D_Tex value{};std::size_t bytes{};};
+    struct MeshRange {GeometryInfo info{};std::size_t vertexOffset{},indexOffset{};};
+    struct Mesh {void* data{};GeometryInfo info{};std::size_t bytes{};unsigned rangeCount{};};
+    struct Texture {C3D_Tex value{};std::size_t bytes{};bool borrowed{};void* staging{};};
     struct Prepared {Material state{};std::array<C3D_TexEnv,6> env{};C3D_FogLut fog{};std::uint8_t parameterMask{},parameterStages{};};
     template<class T> struct Slot {T payload{};std::uint32_t generation=1;bool live{},retired{};};
     std::array<Slot<Mesh>,resourceSlots> meshes{};
@@ -75,16 +92,24 @@ private:
         auto* s=lookup(pool,handle);if(!s)return fail(Error::invalidHandle);
         s->live=false;s->retired=true;return true;
     }
-    bool owner();bool writable();bool fail(Error e){failure=e;return false;}
+    bool owner();bool writable();bool fail(Error e,const char* detail=nullptr){failure=e;failureDetail=detail;return false;}
     void collect();
+    void collectTextureStaging();
     void discardShaders();
     MeshHandle uploadMesh(std::span<const std::byte>,std::span<const std::byte>,const GeometryInfo&);
+    bool borrowFramebuffer(TextureHandle&,float& scaleS,float& scaleT);
     bool emit(const Vertex*,const std::uint16_t*,const GeometryInfo&,Prepared&,const std::array<TextureHandle,3>&,const DrawUniforms&);
     Limits limits{};Statistics stats{};Error failure=Error::none;
+    const char* failureDetail=nullptr;
     const void* ownerTls{};
     bool ready{},open{},emitted{},hasDepth{},passEmitted{};
     C3D_RenderTarget* activeTarget{};
     unsigned width{},height{};
+    GPU_SCISSORMODE scissorMode=GPU_SCISSOR_DISABLE;
+    unsigned scissorLeft{},scissorTop{},scissorRight{},scissorBottom{};
+    FramebufferProvider framebufferProvider{};
+    bool(*textureUploadBarrier)(){};
+    bool(*prepareCommandDraw)(){};
     std::uint64_t stateSerial{};
     std::byte* transient{};
     C3D_Tex unusedSampler{}; // Real native white image; never replaces missing consumed textures.
@@ -94,5 +119,6 @@ private:
     std::array<shaderProgram_s,programCount> programs{};
     std::array<bool,programCount> programInitialized{};
     std::array<int,programCount> uniformLocations{-1,-1,-1,-1,-1,-1};
+    std::array<int,programCount> loopLocations{-1,-1,-1,-1,-1,-1};
 };
 }

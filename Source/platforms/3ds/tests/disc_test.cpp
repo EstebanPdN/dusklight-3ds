@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
         Disc d; assert(d.open(path.c_str()) == expected);
         if (expected == DiscStatus::ready) {
             std::array<unsigned char, 4> out;
-            assert(d.read(0, out.data(), 4) && !std::memcmp(out.data(), "GZ2E", 4));
+            assert(d.read(0, out.data(), 4) && !std::memcmp(out.data(), image.data(), 4));
             assert(!d.read(UINT64_MAX, out.data(), 4));
             assert(!d.read(0xfff, out.data(), 4));
             assert(!d.read(0, nullptr, 1));
@@ -35,7 +35,10 @@ int main(int argc, char** argv) {
     check(DiscStatus::ready);
     check(DiscStatus::malformed, 12);
     image[7] = 1; check(DiscStatus::unsupported); image[7] = 0;
-    image[3] = 'P'; check(DiscStatus::unsupported); image[3] = 'E';
+    image[3] = 'P'; check(DiscStatus::ready);
+    image[7] = 1; check(DiscStatus::unsupported); image[7] = 0;
+    image[6] = 1; check(DiscStatus::unsupported); image[6] = 0;
+    image[3] = 'J'; check(DiscStatus::unsupported); image[3] = 'E';
     word(0x428, 0xffffffff); check(DiscStatus::malformed); word(0x428, 64);
     word(0x808, 0xffffffff); check(DiscStatus::malformed); word(0x808, 2);
     word(0x810, 0xfffffffe); check(DiscStatus::malformed); word(0x810, 0xf00);

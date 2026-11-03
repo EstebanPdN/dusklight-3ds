@@ -30,8 +30,24 @@ int main(int argc,char** argv){
             output[n*4]=alpha;output[n*4+1]=output[n*4+2]=output[n*4+3]=intensity;
         }
     }
+    std::uint32_t kind=packed?1u:0u;
+    if(plan.gxFormat==14){
+        bool opaque=true;
+        for(std::size_t n=0;n<output.size();n+=4)opaque&=output[n]==255;
+        kind=opaque?1u:2u;
+        std::vector<std::uint8_t> words(output.size()/2);
+        for(std::size_t n=0;n<output.size()/4;++n){
+            const auto* p=&output[n*4]; // Native RGBA8 bytes are A, B, G, R.
+            const unsigned r=(unsigned(p[3])*31+127)/255;
+            const unsigned g=(unsigned(p[2])*(opaque?63:31)+127)/255;
+            const unsigned b=(unsigned(p[1])*31+127)/255;
+            const unsigned value=opaque?(r<<11)|(g<<5)|b:(r<<11)|(g<<6)|(b<<1)|(p[0]!=0);
+            words[n*2]=value&255;words[n*2+1]=value>>8;
+        }
+        output=std::move(words);
+    }
     // Little-endian host is explicit, including this private intermediate.
-    const std::uint32_t header[]={0x31474d49,plan.width,plan.height,packed?1u:0u,plan.mipCount,std::uint32_t(output.size())};
+    const std::uint32_t header[]={0x31474d49,plan.width,plan.height,kind,plan.mipCount,std::uint32_t(output.size())};
     FILE* target=std::fopen(argv[2],"wbx");if(!target)return 8;
     const bool written=std::fwrite(header,1,sizeof(header),target)==sizeof(header)&&std::fwrite(output.data(),1,output.size(),target)==output.size();
     return std::fclose(target)||!written?9:0;

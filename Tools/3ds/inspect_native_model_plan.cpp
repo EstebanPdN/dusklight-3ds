@@ -20,14 +20,14 @@ int main(int argc,char** argv){
     auto plan=std::make_unique<ModelPlan>();MeshPack geometry;MaterialPack fragments;TexturePack pixels;
     if(ModelPlan::open(planBytes,*plan)!=PackError::none||MeshPack::open(meshBytes,geometry)!=PackError::none||MaterialPack::open(materialBytes,fragments)!=PackError::none||(!imageBytes.empty()&&TexturePack::open(imageBytes,pixels)!=PackError::none))return 3;
     if(!plan->requiredInputs()||!plan->bindings(0).empty())return 4;
-    std::array<PartBinding,64> parts{};unsigned opaque=0,alpha=0;
+    auto parts=allocateStorage<PartBinding>(plan->size());if(!parts)return 5;unsigned opaque=0,alpha=0;
     for(unsigned n=0;n<plan->size();++n){unsigned pass;if(!plan->entry(n,parts[n],pass))return 5;opaque+=pass==0;alpha+=pass==1;
         MeshView mesh;GeometryInfo g;const auto* u=plan->uniform(parts[n].uniformSlot);
         if(!u||geometry.mesh(parts[n].mesh,mesh)!=PackError::none||!inspectPackedGeometry(mesh.vertices,mesh.indices,g)||u->paletteCount<=g.highestBone)return 6;
     }
     auto renderer=std::make_unique<Renderer>();auto model=std::make_unique<Model>();if(!renderer->initialize({}))return 7;
     FogParameters disabledFog; // Resource inspection only; never renders this context.
-    const bool loaded=model->load(*renderer,geometry,fragments,pixels,{parts.data(),plan->size()},&disabledFog);
+    const bool loaded=model->load(*renderer,geometry,fragments,pixels,{parts.get(),plan->size()},&disabledFog);
     const auto resources=model->resources();const auto stats=renderer->statistics();const auto error=model->error();
     if(!model->unload()||!renderer->releaseAfterContextDestroyed()||!nativeMock::allocations.empty())return 8;
     std::printf("{\"loaded\":%s,\"error\":%u,\"parts\":%u,\"uniform_slots\":%u,\"required_inputs\":%u,\"opaque_entries\":%u,\"alpha_entries\":%u,\"meshes\":%u,\"materials\":%u,\"images\":%u,\"mesh_bytes\":%zu,\"texture_bytes_including_white\":%zu,\"draws\":%llu,\"gpu_executed\":false}\n",

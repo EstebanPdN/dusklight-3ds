@@ -14,7 +14,7 @@ inline bool resolveConstantEarlyAlpha(const PicaMaterialPlan& material,RasterPla
         const auto& input=channel.inputs[0];
         if(input.source==MaterialSource::constant||input.source==MaterialSource::buffer){
             const unsigned component=input.operand==MaterialOperand::red?0:input.operand==MaterialOperand::green?1:input.operand==MaterialOperand::blue?2:3;
-            if(input.source==MaterialSource::buffer&&component<3&&material.bufferUpdateRgb){known=false;continue;}
+            if(input.source==MaterialSource::buffer&&(component<3?material.bufferUpdateRgb:material.bufferUpdateAlpha)){known=false;continue;}
             alpha=input.source==MaterialSource::buffer?(n?material.bufferConstant[component]:0):stage.constant[component];known=true;
         }else if(input.source!=MaterialSource::previous||(input.operand!=MaterialOperand::alpha&&input.operand!=MaterialOperand::color))known=false;
         if(known){if(input.inverse)alpha=255-alpha;alpha=std::min(255u,alpha<<channel.scale);}

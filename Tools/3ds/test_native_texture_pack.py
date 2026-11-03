@@ -12,12 +12,13 @@ ROOT=Path(__file__).resolve().parents[2]
 
 def fixture():
     return [{'id':i+1,'width':16,'height':16,'format':fmt,'levels':[bytes((j*17+i)&255 for j in range(size)) for size in pack.extent(16,16,2,fmt)]}
-        for i,fmt in reversed(list(enumerate(pack.FORMATS)))]
+        for i,fmt in reversed(list(enumerate(pack.FORMATS))) if fmt!=pack.FRAMEBUFFER_COLOR]
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--output',type=Path,required=True);args=parser.parse_args()
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
-    images=fixture();packed=pack.compile_images(images);assert packed==pack.compile_images(fixture());(out/'fixture.dnt').write_bytes(packed)
+    images=fixture();packed=pack.compile_images(images);assert packed==pack.compile_images(fixture())
+    assert packed[:12]==b'DUSKTX01\x03\x00\x00\x00';(out/'fixture.dnt').write_bytes(packed)
     rejected=0
     for change in [lambda x:x[0].update(id=1),lambda x:x[0].update(id=True),lambda x:x[0].update(width=4),lambda x:x[0].update(height=9),
         lambda x:x[0].update(format='source'),lambda x:x[0].update(levels=[b'']),lambda x:x[0].update(levels=[]),lambda x:x[0].update(unknown=1)]:

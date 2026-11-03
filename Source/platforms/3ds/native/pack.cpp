@@ -13,23 +13,24 @@ std::uint32_t crc32(std::span<const std::byte> first,std::span<const std::byte> 
 }
 PackError MeshPack::open(std::span<const std::byte> data,MeshPack& output){
     output={};
-    if(data.size()<32||data.size()>64u<<20||std::memcmp(data.data(),"DUSKPN01",8)||word(data,8)!=1)return PackError::header;
+    if(data.size()<32||data.size()>64u<<20||std::memcmp(data.data(),"DUSKPN01",8)||word(data,8)!=2)return PackError::header;
     const auto count=word(data,16),tableBytes=word(data,24);
-    if(word(data,12)!=data.size()||!count||count>64||word(data,20)!=32||tableBytes!=count*32||data.size()<32+tableBytes)return PackError::bounds;
+    if(word(data,12)!=data.size()||!count||count>maxModelParts||word(data,20)!=32||tableBytes!=count*32||data.size()<32+tableBytes)return PackError::bounds;
     if(crc32(data.first(28),data.subspan(32,tableBytes))!=word(data,28))return PackError::checksum;
+    auto entries=allocateStorage<Entry>(count);if(!entries)return PackError::allocation;
     std::size_t cursor=32+tableBytes;std::uint32_t previous=0;
     for(unsigned i=0;i<count;++i){const unsigned entry=32+i*32;
         const auto id=word(data,entry),vertices=word(data,entry+4),indices=word(data,entry+8);
         const auto vOffset=word(data,entry+12),iOffset=word(data,entry+16),vBytes=word(data,entry+20),iBytes=word(data,entry+24);
-        if(id<=previous||!vertices||vertices>65536||!indices||indices>65535||indices%3||vBytes!=vertices*60||iBytes!=indices*2)return PackError::layout;
+        if(id<=previous||!vertices||vertices>65536||!indices||indices>65535||indices%3||vBytes!=vertices*sizeof(Vertex)||iBytes!=indices*2)return PackError::layout;
         if(vOffset!=cursor||iOffset!=align16(cursor+vBytes))return PackError::layout;
         const auto next=align16(std::size_t(iOffset)+iBytes);if(next>data.size())return PackError::bounds;
         if(!zero(data.subspan(cursor+vBytes,iOffset-cursor-vBytes))||!zero(data.subspan(iOffset+iBytes,next-iOffset-iBytes)))return PackError::layout;
-        output.entries[i]={id,vOffset,iOffset,vBytes,iBytes,word(data,entry+28)};
+        entries[i]={id,vOffset,iOffset,vBytes,iBytes,word(data,entry+28)};
         cursor=next;previous=id;
     }
     if(cursor!=data.size())return PackError::layout;
-    output.bytes=data;output.count=count;return PackError::none;
+    output.entries=std::move(entries);output.bytes=data;output.count=count;return PackError::none;
 }
 PackError MeshPack::mesh(std::uint32_t id,MeshView& output)const{
     output={};if(!count)return PackError::header;

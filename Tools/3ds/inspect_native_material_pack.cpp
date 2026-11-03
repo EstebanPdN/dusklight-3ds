@@ -25,7 +25,7 @@ int main(int argc,char** argv){
         parameterized+=parameters;
         for(auto image:view.imageIds)bindings+=image!=0;
         dusk::pica::Material state;
-        if(view.requiresFog&&dusk::pica::instantiateMaterial(view,nullptr,state))return 8;
+        if(view.requiresFog&&view.state.fogCarrier==dusk::pica::FogCarrier::none&&dusk::pica::instantiateMaterial(view,nullptr,state))return 8;
         dusk::pica::FogParameters context;
         if(view.initialSnapshotOnly&&dusk::pica::instantiateMaterial(view,&context,state))return 9;
     }

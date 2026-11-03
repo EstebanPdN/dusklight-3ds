@@ -204,8 +204,8 @@ DiscStatus Disc::validate() {
     std::array<unsigned char, 0x440> header{};
     if (!mapped(0, header.size())) return DiscStatus::malformed;
     if (!readBytes(0, header.data(), header.size())) return DiscStatus::ioError;
-    if (std::memcmp(header.data(), "GZ2E01", 6) || header[6] || header[7] ||
-        be32(header.data() + 0x1c) != 0xc2339f3d || be32(header.data() + 0x18))
+    if ((std::memcmp(header.data(), "GZ2E01", 6) && std::memcmp(header.data(), "GZ2P01", 6)) ||
+        header[6] || header[7] || be32(header.data() + 0x1c) != 0xc2339f3d || be32(header.data() + 0x18))
         return DiscStatus::unsupported;
     const auto dol = be32(header.data() + 0x420);
     const auto fst = be32(header.data() + 0x424);
@@ -439,10 +439,10 @@ const char* discFileStatusText(DiscFileStatus status) {
 }
 const char* discStatusText(DiscStatus status) {
     switch (status) {
-    case DiscStatus::ready: return "GCN USA r0 structure validated";
+    case DiscStatus::ready: return "GCN USA/PAL r0 structure validated";
     case DiscStatus::missing: return "Missing /3ds/DuskLight/zelda.twilight";
     case DiscStatus::ioError: return "Disc container read failed; check SD card";
-    case DiscStatus::unsupported: return "Requires GCN USA revision 0 assets";
+    case DiscStatus::unsupported: return "Requires GCN USA/PAL revision 0 assets";
     case DiscStatus::malformed: return "Invalid/truncated disc structure";
     case DiscStatus::noMemory: return "Insufficient memory for bounded disc index";
     }

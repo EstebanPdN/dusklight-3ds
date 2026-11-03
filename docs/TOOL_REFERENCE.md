@@ -133,13 +133,14 @@ arguments and prerequisites before running historical workflows.
 | [test_title_typed_vertex.py](../Tools/3ds/test_title_typed_vertex.py) | Verify the native typed vertex state and list ABI with the owner's title model in memory. |
 | [test_title_vertex.py](../Tools/3ds/test_title_vertex.py) | Read the owner's local title model in memory; verify original DL optimization and native vertex decoding. |
 | [test_trace.py](../Tools/3ds/test_trace.py) | Synthetic collector regression checks; never reads game input. |
+| [test_twilight_pack.py](../Tools/3ds/test_twilight_pack.py) | Synthetic USA/PAL bundle identity, payload round trips and unsupported revision rejection. |
 | [test_vertex_decode.py](../Tools/3ds/test_vertex_decode.py) | Check bounded native vertex decoding on host sanitizers and ARM compiler. |
 | [test_video_retrace.py](../Tools/3ds/test_video_retrace.py) | Test native retrace/sleep contracts with a synthetic event source and real queues. |
 | [test_worker_shutdown.py](../Tools/3ds/test_worker_shutdown.py) | Test production worker shutdown with real host threads; never builds ARM or controls an emulator. |
 | [texture_compression_lab.py](../Tools/3ds/texture_compression_lab.py) | Bounded PRIVATE host texture lab. No game assets, source or installed tools modified. |
 | [texture_lab_etc_host.cpp](../Tools/3ds/texture_lab_etc_host.cpp) | Native development fixture or configuration; inspect the source before use. |
 | [texture_lab_formats.py](../Tools/3ds/texture_lab_formats.py) | Host lab formats. Independent ETC1 decoder follows the Khronos bit grammar. |
-| [twilight_pack.py](../Tools/3ds/twilight_pack.py) | Private, bounded GameCube USA r0 -> DuskLight indexed asset container v1. |
+| [twilight_pack.py](../Tools/3ds/twilight_pack.py) | Private, bounded GameCube USA/PAL r0 -> DuskLight indexed asset container v1. |
 | [validate_texture_compression_lab.py](../Tools/3ds/validate_texture_compression_lab.py) | Reopen a lab run, validate every actual PICA payload, and retain receipts. |
 | [verify_application_dump.py](../Tools/3ds/verify_application_dump.py) | Read-only verification of a private DUSKLIGHT_APPLICATION_DUMP_1 directory. |
 | [verify_diagnostic_package.py](../Tools/3ds/verify_diagnostic_package.py) | Validate this diagnostic CIA's structure and hashes, not signatures or hardware. |

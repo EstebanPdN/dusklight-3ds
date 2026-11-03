@@ -37,9 +37,24 @@ def main():
         bw,bh,_=compiler.BLOCKS[kind];levels=[cell*((w//bw)*(w//bh)) for w in (16,8)]
         source=model([(kind,levels,palette)]);scratch=out/f'format-{kind}';scratch.mkdir(exist_ok=False)
         packed,receipt=compiler.convert(source,decoder,scratch);assert receipt['image_storage_converted'] and not receipt['rendering_ready']
+        assert packed[:12]==b'DUSKTX01\x03\x00\x00\x00'
         at=struct.unpack_from('<I',packed,52)[0];payload=packed[at:]
-        expectedBytes=(b'\0\xf8'*(256+64) if kind==4 else bytes(expected[::-1])*(256+64))
+        expectedBytes=(b'\0\xf8'*(256+64) if kind in (4,14) else bytes(expected[::-1])*(256+64))
         assert payload==expectedBytes,(kind,hashlib.sha256(payload).hexdigest());count+=1
+    # Four selectors per row, repeated in each CMPR sub-block and mip.
+    opaque=(b'\xf8\x00\x07\xe0'+b'\x1b'*4)*4
+    punch=(b'\x00\x00\xf8\x00'+b'\x1b'*4)*4
+    def tiled_words(words,side):
+        return b''.join(struct.pack('<H',words[((m&1)+((m>>1)&2))])
+                        for _ in range((side//8)**2) for m in range(64))
+    scratch=out/'cmpr-words';scratch.mkdir(exist_ok=False)
+    packed,receipt=compiler.convert(model([(14,[opaque*4,opaque],b'')]),decoder,scratch)
+    assert receipt['images'][0]['native_format']=='rgb565'
+    assert packed[64:]==tiled_words((0xf800,0x07e0,0x9ae0,0x64e0),16)+tiled_words((0xf800,0x07e0,0x9ae0,0x64e0),8)
+    scratch=out/'cmpr-alpha';scratch.mkdir(exist_ok=False)
+    packed,receipt=compiler.convert(model([(14,[opaque*4,punch],b'')]),decoder,scratch)
+    assert receipt['images'][0]['native_format']=='rgba5551'
+    assert packed[64:]==tiled_words((0xf801,0x07c1,0x9b01,0x64c1),16)+tiled_words((0x0001,0xf801,0x7801,0x7800),8)
     # Independent nonconstant source planar cells exercise address/orientation.
     rgba=bytes(c for y in range(16) for x in range(16) for c in (x*7,y*11,(x^y)*13,255-x-y));planar=bytearray()
     for by in range(0,16,4):

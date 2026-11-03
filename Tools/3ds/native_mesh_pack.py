@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Prepare version1 native mesh packs on the Mac; no source-command payloads."""
+"""Prepare DUSKPN01 version2 mesh banks; version1 is not supported.
+
+Records are 64 bytes: position3/normal3/UV3x2 float32, color/color1 RGBA8
+at48/52, bone row offsets at56 and UNORM8 weights summing to255 at60.
+Bone selectors address an offline-partitioned palette of at most four matrices.
+Library-authored vertices may omit either color to use opaque white.
+"""
 import argparse
 import hashlib
 import json
@@ -10,8 +16,9 @@ import struct
 import zlib
 
 MAGIC=b'DUSKPN01'
-VERTEX=struct.Struct('<12f12B')
+VERTEX=struct.Struct('<12f16B')
 MAX_FILE=64<<20
+MAX_MODEL_PARTS=1024
 
 def align16(n):return (n+15)&~15
 
@@ -34,23 +41,23 @@ def mesh_bytes(mesh):
     if not isinstance(indices,list) or not 1<=len(indices)<=65535 or len(indices)%3:raise ValueError('Native triangle index count')
     vertex_data=bytearray()
     for v in vertices:
-        if not isinstance(v,dict) or set(v)-{'position','normal','uv','color','bones','weights'}:raise ValueError('Unknown native vertex field')
+        if not isinstance(v,dict) or set(v)-{'position','normal','uv','color','color1','bones','weights'}:raise ValueError('Unknown native vertex field')
         position=vector(v['position'],3,1<<20,'position');normal=vector(v.get('normal',[0,0,1]),3,2,'normal')
         uv=v.get('uv',[[0,0],[0,0],[0,0]])
         if not isinstance(uv,list) or len(uv)!=3:raise ValueError('Three native UV pairs required')
         coordinates=[x for pair in uv for x in vector(pair,2,32768,'UV')]
-        color=v.get('color',[255]*4);bones=v.get('bones',[0]*4);weights=v.get('weights',[255,0,0,0])
-        if any(not isinstance(a,list) or len(a)!=4 for a in [color,bones,weights]):raise ValueError('Native color/influence length')
-        color=[integer(x,0,255) for x in color];rows=[3*integer(x,0,7) for x in bones];weights=[integer(x,0,255) for x in weights]
+        color=v.get('color',[255]*4);color1=v.get('color1',[255]*4);bones=v.get('bones',[0]*4);weights=v.get('weights',[255,0,0,0])
+        if any(not isinstance(a,list) or len(a)!=4 for a in [color,color1,bones,weights]):raise ValueError('Native color/influence length')
+        color=[integer(x,0,255) for x in color];color1=[integer(x,0,255) for x in color1];rows=[3*integer(x,0,3) for x in bones];weights=[integer(x,0,255) for x in weights]
         if sum(weights)!=255:raise ValueError('Native weights must sum to255')
-        vertex_data.extend(VERTEX.pack(*position,*normal,*coordinates,*color,*rows,*weights))
+        vertex_data.extend(VERTEX.pack(*position,*normal,*coordinates,*color,*color1,*rows,*weights))
     index_data=struct.pack('<'+'H'*len(indices),*[integer(i,0,len(vertices)-1) for i in indices])
     return identifier,len(vertices),len(indices),bytes(vertex_data),index_data
 
 def compile_pack(document):
     if not isinstance(document,dict) or set(document)!={'schema','meshes'} or document['schema']!='dusklight-native-mesh/1':raise ValueError('Native input schema')
     meshes=document['meshes']
-    if not isinstance(meshes,list) or not 1<=len(meshes)<=64:raise ValueError('Native pack mesh count')
+    if not isinstance(meshes,list) or not 1<=len(meshes)<=MAX_MODEL_PARTS:raise ValueError('Native pack mesh count')
     compiled=sorted(mesh_bytes(m) for m in meshes);ids=[m[0] for m in compiled]
     if len(set(ids))!=len(ids):raise ValueError('Duplicate native mesh ID')
     cursor=32+len(meshes)*32;table=bytearray();payload=bytearray()
@@ -59,7 +66,7 @@ def compile_pack(document):
         if end>MAX_FILE:raise ValueError('Native pack exceeds64MiB')
         table.extend(struct.pack('<8I',identifier,nv,ni,vo,io,len(vertices),len(indices),zlib.crc32(vertices+indices)))
         payload.extend(vertices);payload.extend(bytes(io-vo-len(vertices)));payload.extend(indices);payload.extend(bytes(end-io-len(indices)));cursor=end
-    prefix=struct.pack('<8s5I',MAGIC,1,cursor,len(meshes),32,len(table))
+    prefix=struct.pack('<8s5I',MAGIC,2,cursor,len(meshes),32,len(table))
     result=prefix+struct.pack('<I',zlib.crc32(prefix+table))+table+payload
     assert len(result)==cursor
     return result

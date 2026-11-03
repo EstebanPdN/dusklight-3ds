@@ -37,7 +37,7 @@ struct DiscDirectoryEntry {
     bool directory = false;
     std::array<char, 256> name{};
 };
-// No resource payloads or arbitrary paths are logged. Initial layout is GCN USA r0.
+// No resource payloads or arbitrary paths are logged. Supports GCN USA/PAL r0.
 // Calls are for a loading/I/O worker, never a frame-critical render/audio callback.
 class Disc {
     friend class DvdProvider;

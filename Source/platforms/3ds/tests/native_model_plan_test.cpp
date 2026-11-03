@@ -20,6 +20,7 @@ int main(int argc,char** argv){
     for(unsigned bit:{1u,2u,4u,16u,32u})assert(plan->bindings(63^bit).empty());
     PartBinding part;unsigned pass;assert(plan->entry(0,part,pass)&&part.mesh==1&&part.material==1&&part.samplerMask==3&&part.samplers[1].lodBias==-152&&pass==0);
     assert(plan->uniform(0)->paletteCount==2&&plan->uniform(0)->palette[1]==2&&plan->uniform(1)->palette[1]==3&&plan->uniform(1)->anchor==1);
+    assert(plan->uniform(0)->sourceStageCount==3&&plan->uniform(0)->sourceTexGenCount==2);
     assert(!plan->entry(2,part,pass)&&part.mesh==0&&!plan->uniform(2));
     // Every decoded binding is owned, including after unaligned file input and
     // mutation/release of the source metadata bytes.
@@ -29,7 +30,7 @@ int main(int argc,char** argv){
     for(unsigned size=0;size<bytes.size();++size){assert(ModelPlan::open(std::span(bytes).first(size),*plan)!=PackError::none&&plan->size()==0&&plan->bindings(63).empty());++rejected;}
     for(unsigned at=0;at<bytes.size();++at){auto bad=bytes;bad[at]^=std::byte{1};assert(ModelPlan::open(bad,*plan)!=PackError::none&&plan->size()==0);++rejected;}
     const auto slots=word(bytes,32);
-    for(auto [at,value]:std::vector<std::pair<unsigned,unsigned>>{{24,64},{48,0},{52,0},{56,2},{60,8},{64,2},{68,1},{108,1},{slots,99},{slots+4,0},{slots+8,0},{slots+12,0},{slots+20,1},{slots+44,1}}){auto bad=bytes;put(bad,at,value);repair(bad);assert(ModelPlan::open(bad,*plan)!=PackError::none&&plan->size()==0);++rejected;}
+    for(auto [at,value]:std::vector<std::pair<unsigned,unsigned>>{{24,64},{48,0},{52,0},{56,2},{60,8},{64,2},{68,1},{108,1},{slots,99},{slots+4,0},{slots+8,0},{slots+12,0},{slots+20,1},{slots+72,17}}){auto bad=bytes;put(bad,at,value);repair(bad);assert(ModelPlan::open(bad,*plan)!=PackError::none&&plan->size()==0);++rejected;}
     for(unsigned at:{72u,73u,74u,75u,76u,77u,78u,79u,82u,83u}){auto bad=bytes;bad[at]=std::byte{255};repair(bad);assert(ModelPlan::open(bad,*plan)!=PackError::none&&plan->size()==0);++rejected;}
     std::ifstream biases(argv[2]);assert(biases.good());unsigned cases=0;
     for(int rawBias=-32768;rawBias<32768;++rawBias){int expected;assert(biases>>expected);volatile float hundredths=1.0f/100.0f;float bias=float(rawBias)*hundredths;bias=bias<-4?-4:bias>=4?3.99f:bias;const int quantized=int(std::trunc(bias*32.0f));assert(quantized*8==expected);++cases;}

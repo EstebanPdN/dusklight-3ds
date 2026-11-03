@@ -16,6 +16,8 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',required=True,type=Path)
     out=parser.parse_args().output.resolve()
+    ctru=CTRU if (CTRU/'include/3ds/gpu/gx.h').is_file() else Path(os.environ.get('DEVKITPRO','/opt/devkitpro'))/'libctru'
+    if not (ctru/'include/3ds/gpu/gx.h').is_file():parser.error('Set DEVKITPRO to an installed libctru SDK')
     out.mkdir(exist_ok=False)
     stubs = {
         '3ds/types.h': '''#pragma once
@@ -71,10 +73,10 @@ extern "C" void C3D_FrameEnd(u8);
         path.write_text(content)
     sources = [NATIVE / 'gpu_sync_ctru.cpp', NATIVE / 'ctru_gxqueue.c', NATIVE.parent / 'tests/gpu_queue_lifecycle_test.cpp']
     inputs = [*sources, Path(__file__).resolve(), NATIVE / 'gpu_sync.hpp', NATIVE / 'clock.hpp',
-              CTRU / 'include/3ds/gpu/gx.h']
-    hashes = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
+              ctru / 'include/3ds/gpu/gx.h']
+    hashes = {os.path.relpath(p, ROOT): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     common = ['-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
-              '-I' + str(out / 'include'), '-I' + str(CTRU / 'include'), '-I' + str(NATIVE)]
+              '-I' + str(out / 'include'), '-I' + str(ctru / 'include'), '-I' + str(NATIVE)]
     commands = [
         ['clang', '-std=c11','-DgxCmdQueueInterrupt=duskOriginalGxCmdQueueInterrupt', *common, '-c', str(sources[1]), '-o', str(out / 'gxqueue.o')],
         ['clang++', '-std=c++20', *common, '-Wall', '-Wextra', '-Werror',
@@ -92,7 +94,7 @@ extern "C" void C3D_FrameEnd(u8);
                 subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=45)
         receipt['cases'] = []
         for name in ('delayed', 'postcopy', 'timeout', 'flushfailure', 'foreign',
-                     'stoppedfull', 'stoppedquery', 'unrelatedirq', 'headroom', 'tail', 'reserve-timeout', 'bad-reserve', 'callback', 'frame-tail', 'begin', 'frame-timeout'):
+                     'stoppedfull', 'stoppedquery', 'unrelatedirq', 'headroom', 'tail', 'reserve-timeout', 'bad-reserve', 'callback', 'frame-tail', 'begin', 'frame-timeout', 'command-reclaim', 'command-reclaim-failure'):
             result = subprocess.run([str(out / 'probe'), name], capture_output=True, text=True,
                                     timeout=5, env={**os.environ, 'ASAN_OPTIONS': 'halt_on_error=1',
                                                     'UBSAN_OPTIONS': 'halt_on_error=1'})
@@ -102,7 +104,7 @@ extern "C" void C3D_FrameEnd(u8);
                                      ('unrelatedirq',) else 'contract check'})
             print(result.stdout + result.stderr, end='')
             result.check_returncode()
-        assert hashes == {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
+        assert hashes == {os.path.relpath(p, ROOT): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
         receipt.update(status='pass', input_unchanged=True)
     except (OSError, subprocess.SubprocessError, AssertionError) as error:
         receipt.update(status='fail', error=str(error))

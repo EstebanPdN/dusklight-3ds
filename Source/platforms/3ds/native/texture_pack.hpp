@@ -7,6 +7,7 @@ struct TextureImage {
     std::uint16_t width{},height{};
     TextureFormat format{};
     unsigned mipLevels{};
+    bool framebufferColor{}; // Live borrowed capture, never an owned image payload.
 };
 struct TextureView {
     std::uint32_t id{};
@@ -17,6 +18,8 @@ class TexturePack {
 public:
     static PackError open(std::span<const std::byte>,TexturePack&);
     PackError image(std::uint32_t id,TextureView&)const;
+    // Zero-based table order; preserves authored IDs and validates payload CRC.
+    PackError imageAt(unsigned index,TextureView&)const;
     unsigned size()const{return count;}
 private:
     struct Entry {

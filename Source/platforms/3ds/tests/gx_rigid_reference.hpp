@@ -10,8 +10,8 @@ inline dusk::native::gx::GpuVertex rigidReference(const dusk::native::gx::RigidV
     const auto& u=p.uniforms;GpuVertex out;auto dot=[](const auto& a,const auto& b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];};
     std::array<float,4> pos{v.position[0],v.position[1],v.position[2],1},view{};
     std::array<float,3> inputNormal{v.texcoord[1][0],v.texcoord[1][1],v.position[3]},normal{};
-    const unsigned matrix=unsigned(v.texcoord[2][0]);
-    for(unsigned r=0;r<3;++r){view[r]=dot(u[matrix+r],pos)+u[matrix+r][3];normal[r]=dot(u[matrix+3+r],inputNormal);}view[3]=1;
+    const unsigned matrix=unsigned(v.texcoord[2][0]),normalMatrix=unsigned(v.texcoord[2][1]);
+    for(unsigned r=0;r<3;++r){view[r]=dot(u[matrix+r],pos)+u[matrix+r][3];normal[r]=dot(u[normalMatrix+r],inputNormal);}view[3]=1;
     const auto length=dot(normal,normal);if(length>1e-10f)for(auto& n:normal)n/=std::sqrt(length);
     for(unsigned r=0;r<4;++r)out.position[r]=dot(u[6+r],view)+u[6+r][3];
     auto illumination=u[10];
@@ -66,6 +66,6 @@ inline dusk::native::gx::GpuVertex expandCompactRigid(const dusk::native::gx::Ri
     if(p.uniforms[15][3]>=0)out.color[3]=v.color[3]*p.uniforms[16][3]*p.uniforms[15][3];
     out.texcoord[0]={v.texcoord[0]*p.uniforms[13][2],1-v.texcoord[1]*p.uniforms[13][3]};
     out.texcoord[1]={v.normal[0]*p.uniforms[11][3],v.normal[1]*p.uniforms[11][3]};
-    out.texcoord[2][0]=v.matrix;
+    out.texcoord[2]={float(v.matrix[0]),float(v.matrix[1])};
     return out;
 }

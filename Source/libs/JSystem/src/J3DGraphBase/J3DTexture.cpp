@@ -5,8 +5,12 @@
 #include "JSystem/JKernel/JKRHeap.h"
 #if defined(DUSK_TARGET_3DS)
 #include "JSystem/JKernel/JKRExpHeap.h"
+#include "m_Do/m_Do_graphic.h"
 #include "../../../../platforms/3ds/runtime/texture_resources.hpp"
+#include "../../../../platforms/3ds/runtime/gx_copy_images.hpp"
 #include "../../../../platforms/3ds/runtime/gx_state.hpp"
+#include "../../../../platforms/3ds/native/game_source.hpp"
+#include "../../../../platforms/3ds/runtime/resource_archive.hpp"
 #endif
 
 J3DTexture::~J3DTexture() {
@@ -14,6 +18,8 @@ J3DTexture::~J3DTexture() {
     releaseNativeTextures();
     for(u16 i=0;i<mNum;++i) dusk::native::gx::destroyTlutObject(&mpTlutObj[i]);
     delete[] mpNativeSources;
+    delete[] mpNativeImageDigests;
+    delete[] mpNativeImageState;
     if (mNativeResOwned) JKR_DELETE_ARRAY(mpRes);
 #endif
 #if TARGET_PC
@@ -31,19 +37,84 @@ void J3DTexture::releaseNativeTexture(u16 index) {
 void J3DTexture::releaseNativeTextures() {
     for (u16 i=0; i<mNum; ++i) releaseNativeTexture(i);
 }
+void J3DTexture::captureNativeImage(u16 index, const ResTIMG& source) {
+    // These are typed resource-ledger lookups, not command/register decoding.
+    // The source reference supplies the ORIGINAL header, never mpRes+offset.
+    std::uint32_t token{};
+    dusk::native::gx::Texture retained;
+    dusk::native::BtiInfo info;
+    auto state=NativeImageState::valid;
+    if(!dusk::native::gx::textureCommandToken(mpImgDataPtr[index],token))
+        state=NativeImageState::missingToken;
+    else if(!dusk::native::gx::textureFromCommandToken(token,retained))
+        state=NativeImageState::missingRegistration;
+    else if(!retained.immutablePixels) {
+        dusk::native::gx::Texture object;
+        if(&source==mDoGph_gInf_c::getFrameBufferTimg() &&
+           mpImgDataPtr[index]==mDoGph_gInf_c::getFrameBufferTex() &&
+           dusk::native::gx::textureAliasImage(retained.handle)==mpImgDataPtr[index] &&
+           retained.format==GX_TF_RGBA8 && retained.mipCount==1 &&
+           dusk::native::registeredFramebufferCapture(mpImgDataPtr[index],retained.handle) &&
+           dusk::native::gx::queryTextureObject(&mpTexObj[index],object) &&
+           object.handle==retained.handle)
+            mpNativeImageDigests[index]=dusk::pica::identifyFramebufferColor();
+        else
+            state=NativeImageState::mutablePixels;
+    }
+    else if(dusk::native::inspectBti({retained.bti.data(),retained.bti.size()},1024,info)!=dusk::native::ResourceStatus::ready)
+        state=NativeImageState::invalidBti;
+    else if(!dusk::pica::identifyImage({reinterpret_cast<const uint8_t*>(&source),sizeof(source)},
+            {info.image.data,info.image.size},{info.palette.data,info.palette.size},mpNativeImageDigests[index]))
+        state=NativeImageState::invalidIdentity;
+    mpNativeImageState[index]=state;
+    mNativeImageContextValid=false;
+}
+bool J3DTexture::getNativeImageContext(std::array<uint8_t,32>& out) {
+    out={};
+    if(!mNativeImageContextValid) {
+        if(mNum>4096) {
+            OSReport("Native image context rejected slot=unavailable count=%u reason=table-limit\n",unsigned(mNum));
+            return false;
+        }
+        for(u16 i=0;i<mNum;++i)if(mpNativeImageState[i]!=NativeImageState::valid) {
+            const char* reason="unresolved-image";
+            switch(mpNativeImageState[i]) {
+            case NativeImageState::unresolved: reason=mpNativeSources[i]?"unresolved-image":"unassigned-slot";break;
+            case NativeImageState::missingToken: reason="missing-texture-token";break;
+            case NativeImageState::missingRegistration: reason="missing-texture-registration";break;
+            case NativeImageState::mutablePixels: reason="mutable-pixels";break;
+            case NativeImageState::invalidBti: reason="invalid-retained-bti";break;
+            case NativeImageState::invalidIdentity: reason="invalid-image-identity";break;
+            case NativeImageState::valid: break;
+            }
+            OSReport("Native image context rejected slot=%u count=%u reason=%s\n",unsigned(i),unsigned(mNum),reason);
+            return false;
+        }
+        if(!dusk::pica::identifyImageContext({mpNativeImageDigests,mNum},mNativeImageContext)) {
+            OSReport("Native image context rejected slot=unavailable count=%u reason=context-hash\n",unsigned(mNum));
+            return false;
+        }
+        mNativeImageContextValid=true;
+    }
+    out=mNativeImageContext;return true;
+}
 void J3DTexture::retainNativeTexture(u16 index, const ResTIMG& source) {
     using namespace dusk::native;
     gx::Texture metadata;
     if (!collectTextureResources() || !gx::queryTextureObject(&mpTexObj[index], metadata))
         OSPanic(__FILE__,__LINE__,"Native J3D texture object/retirement: %s",textureResourceFailure());
-    if (retainArchiveTexture(&mpTexObj[index], &source, metadata.handle)) return;
+    if (retainArchiveTexture(&mpTexObj[index], &source, metadata.handle)) {
+        captureNativeImage(index,source);return;
+    }
     // ARAM archives can decompress a complete BMD into an independent EXP
     // allocation. Use its actual live extent, never the heap's capacity.
     JKRHeap* heap=JKRHeap::findFromRoot(const_cast<ResTIMG*>(&source));
     const s32 remaining=heap && heap->getHeapType()=='EXPH' ?
         static_cast<JKRExpHeap*>(heap)->getRemainingAllocationSize(&source) : -1;
     if (remaining>=32 && retainTextureResource(&mpTexObj[index],
-        {reinterpret_cast<const u8*>(&source),static_cast<std::size_t>(remaining)},mpImgDataPtr[index])) return;
+        {reinterpret_cast<const u8*>(&source),static_cast<std::size_t>(remaining)},mpImgDataPtr[index])) {
+        captureNativeImage(index,source);return;
+    }
     OSPanic(__FILE__,__LINE__,"Native J3D texture bounds: %s (index=%u format=%u size=%ux%u allocation=%ld)",
         textureResourceFailure(),unsigned(index),unsigned(source.format),unsigned(source.width),unsigned(source.height),long(remaining));
 }
@@ -146,6 +217,9 @@ void J3DTexture::entryNum(u16 num) {
     releaseNativeTextures();
     for(u16 i=0;i<mNum;++i) dusk::native::gx::destroyTlutObject(&mpTlutObj[i]);
     delete[] mpNativeSources;
+    delete[] mpNativeImageDigests;
+    delete[] mpNativeImageState;
+    mNativeImageContextValid=false;
     if (mNativeResOwned) JKR_DELETE_ARRAY(mpRes);
     mNativeResOwned=true;
 #endif
@@ -164,6 +238,8 @@ void J3DTexture::entryNum(u16 num) {
     mpTlutDataPtr = new u8*[num]();
 #if defined(DUSK_TARGET_3DS)
     mpNativeSources = new const ResTIMG*[num]();
+    mpNativeImageDigests = new std::array<uint8_t,32>[num]();
+    mpNativeImageState = new NativeImageState[num]();
 #endif
 
     for (int i = 0; i < mNum; i++) {

@@ -20,9 +20,24 @@ def main():
             levels.append(pack.tile_rgba8(rgba,width,width))
         images.append({'id':identifier,'width':16,'height':16,'format':'rgba8','levels':levels})
     original=pack.compile_images(images);digest=hashlib.sha256(original).hexdigest()
+    assert original[:12]==b'DUSKTX01\x03\x00\x00\x00'
     assert pack.compile_images(compression.images_from_pack(original))==original
     same,receipt=compression.compile_profile(original,out/'missing-codec',out,set(),digest)
     assert same==original and not receipt['default_enabled'] and receipt['encoder_sha256'] is None
+    role={'id':4,'width':0,'height':0,'format':pack.FRAMEBUFFER_COLOR,'levels':[b'']}
+    mixed=pack.compile_images(images+[role])
+    preserved,role_receipt=compression.compile_profile(mixed,out/'missing-codec',out,{4},hashlib.sha256(mixed).hexdigest())
+    assert preserved==mixed and compression.images_from_pack(mixed)==images+[role]
+    assert role_receipt['images'][3]['status']=='runtime_role' and role_receipt['encoder_sha256'] is None
+    # A tiled RGBA5551 bank is round-tripped and admitted with exact binary alpha.
+    rgba5551={'id':5,'width':8,'height':8,'format':'rgba5551',
+              'levels':[(b'\x01\xf8\x00\x00')*32]}
+    bank5551=pack.compile_images([rgba5551])
+    assert compression.images_from_pack(bank5551)==[rgba5551]
+    scratch5551=out/'rgba5551';scratch5551.mkdir(exist_ok=False)
+    converted5551,receipt5551=compression.compile_profile(bank5551,encoder,scratch5551,{5},hashlib.sha256(bank5551).hexdigest(),max_rgb_error=255,max_rgb_mse=65535)
+    assert compression.images_from_pack(converted5551)[0]['format']=='etc1a4'
+    assert receipt5551['images'][0]['metrics'][0]['alpha_exact']
     scratch=out/'admitted';scratch.mkdir(exist_ok=False)
     converted,receipt=compression.compile_profile(original,encoder,scratch,{1,2,3},digest)
     result=compression.images_from_pack(converted)

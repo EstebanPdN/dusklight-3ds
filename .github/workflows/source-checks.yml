@@ -3,22 +3,94 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
 jobs:
-  public-source:
+  lint:
+    name: Lint
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: '3.12'
-      - name: Check publication content and documentation
+          python-version: '3.10'
+      - name: Install pinned linters
+        run: python -m pip install -r .github/requirements-lint.txt
+      - name: Check Python correctness and minimum supported syntax
+        run: |
+          ruff check --config .github/ruff.toml --output-format github Tools/3ds
+          python -m compileall -q Tools/3ds
+      - name: Check maintained shell helper
+        run: shellcheck Tools/fetch-public-git-checkouts.sh
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.26'
+          cache: false
+      - name: Check GitHub Actions syntax, expressions and shell commands
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -color
+  cpp-analysis:
+    name: C++ static analysis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Clang analyzer
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y clang-tidy-18
+      - name: Analyze SDK-independent native bank readers
+        run: |
+          clang-tidy-18 --quiet --checks='-*,clang-analyzer-*' --warnings-as-errors='*' \
+            Source/platforms/3ds/native/contracts.cpp \
+            Source/platforms/3ds/native/pack.cpp \
+            Source/platforms/3ds/native/texture_pack.cpp \
+            Source/platforms/3ds/native/material_pack.cpp -- -std=c++20
+  publication:
+    name: Publication policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check public content, documentation links and firmware integrity
         run: python3 Tools/3ds/check_publication.py
-      - name: Run synthetic host checks
-        run: python3 Tools/3ds/test_public_host.py
+  public-source:
+    name: Host (${{ matrix.compiler }}, Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: g++
+            python: '3.10'
+          - compiler: clang++
+            python: '3.14'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run synthetic host checks with ASan and UBSan
+        run: python3 Tools/3ds/test_public_host.py --compiler '${{ matrix.compiler }}'
       - name: Check native offline conversion and bank formats
         run: |
           python3 Tools/3ds/test_j3d_native_geometry.py --output Build/ci-native-geometry
@@ -26,3 +98,37 @@ jobs:
           python3 Tools/3ds/test_native_pack.py --output Build/ci-native-mesh
           python3 Tools/3ds/test_native_texture_pack.py --output Build/ci-native-textures
           python3 Tools/3ds/test_native_material_pack.py --output Build/ci-native-fragments
+  native-build:
+    name: 3DS (${{ matrix.profile }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      # Official devkitPro image; update the digest only after both profiles pass.
+      image: devkitpro/devkitarm@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [diagnostic, game]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Record compiler and SDK versions
+        run: |
+          "$DEVKITARM/bin/arm-none-eabi-g++" --version
+          dkp-pacman -Q devkitARM libctru citro3d 3dstools picasso
+      - name: Compile and link without game data
+        run: |
+          python3 Tools/3ds/build_public.py --profile '${{ matrix.profile }}' \
+            --build-dir 'Build/ci-${{ matrix.profile }}' --jobs 2
+      - name: Check six assembled native shader ABIs
+        if: matrix.profile == 'game'
+        run: |
+          python3 Tools/3ds/test_native_shader.py \
+            --shader-binary Build/ci-game/native_scene.shbin \
+            --rigid-binary Build/ci-game/native_scene_rigid.shbin \
+            --output Build/ci-native-shader
+          python3 Tools/3ds/test_native_uv_shader.py \
+            --build-dir Build/ci-game --output Build/ci-native-uv
+          python3 Tools/3ds/test_native_projective_shader.py \
+            --build-dir Build/ci-game --output Build/ci-native-projective
