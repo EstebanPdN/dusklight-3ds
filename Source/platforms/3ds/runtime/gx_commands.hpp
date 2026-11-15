@@ -1,4 +1,5 @@
 #pragma once
+#include <limits>
 #include "gx_vertex_decode.hpp"
 #include "gx_copy_setup.hpp"
 #include "gx_batch_cache.hpp"
@@ -20,6 +21,10 @@ private:
     struct Region { MemoryHandle handle=0;std::span<const u8> bytes; };
     std::array<Region,capacity> regions{};
     MemoryHandle next=1;
+    // Address span of all live regions: most array bindings are live game
+    // arrays outside it and skip the table scan.
+    std::uintptr_t lowest=std::numeric_limits<std::uintptr_t>::max(),highest=0;
+    void rebound();
 };
 enum class CommandError { none, truncated, unsupported, format, unregisteredMemory, staleMemory,
                           arrayBounds, invalidIndex, missingSink, sinkRejected, reentrant };
@@ -43,6 +48,17 @@ struct CommandRegisters {
     std::bitset<2> matrixIndexValid{};
     u32 bpMask=0xffffff;
     std::uint64_t vertexCacheEpoch=0;
+    // Bumped by every value-changing register write except the ones made for
+    // each shape and always re-read by a draw: position/normal matrix memory
+    // (XF 0x000-0x077, 0x400-0x459) and the matrix index registers (CP 0x30/
+    // 0x40, XF 0x1018/0x1019). Equal epochs prove that plans derived from the
+    // rest of the bank (raster, material, lights, texgen, fog, textures,
+    // vertex layout) still apply. Array bindings are not covered.
+    std::uint32_t stateEpoch=0;
+    // Bumped when the vertex descriptor/format registers, XF 0x1008 or an
+    // array binding change. A vertex-setup display list identical to the last
+    // one executed is a no-op while this stands.
+    std::uint32_t vertexSetupEpoch=0;
     CopySetup copy{};
 };
 struct CommandDraw {
@@ -57,6 +73,12 @@ struct CommandDraw {
     bool triangleIndex(u32 index,u16& output) const;
 };
 using CommandDrawSink=bool(*)(const CommandDraw&,void*);
+// Compiled display lists (CommandProcessor::executeList): replays, lists
+// compiled, calls left to the interpreter and, with verification on, replays
+// whose registers differed from the interpreter (must stay zero).
+void compiledListStatistics(std::uint64_t& hits,std::uint64_t& compiles,std::uint64_t& interpreted,std::uint64_t& mismatches);
+// enabled: A/B switch. verify: run both and compare the complete register bank.
+void setCompiledLists(bool enabled,bool verify);
 struct CommandStatistics { std::uint64_t commands=0,draws=0,plans=0,mergedPrimitives=0,reusedVertices=0,batchCacheHits=0,batchCacheMisses=0; };
 struct PrimitiveBatchScratch {
     std::span<u8> vertices;
@@ -88,6 +110,12 @@ public:
         sink=value;sinkContext=context;
     }
     bool execute(std::span<const u8> bytes);
+    // Display-list call. A list made only of register loads (J3D material and
+    // shape-packet lists) is compiled once into host-word register writes and
+    // replayed while its bytes are unchanged; every other list, a changed
+    // list and the first sight of any list take execute(). Same register
+    // results, epochs and command counts as execute().
+    bool executeList(std::span<const u8> bytes);
     // Native typed setters use host words directly, sharing list semantics
     // without a serialize/parse round trip. Each successful call counts once.
     bool writeCp(u8 reg,u32 value);
@@ -139,6 +167,7 @@ private:
     bool applyBinding(unsigned slot,std::uint64_t address,u32 size,bool little,size_t offset);
     bool applyIndexed(u8 code,u16 index,u16 packed,size_t offset);
     bool resolveBinding(const Binding& binding,std::span<const u8>& bytes) const;
+    void runCompiled(const u32* words,unsigned count);
     bool prepare(unsigned vat);
     bool draw(std::span<const u8> vertices,std::span<const u8> indices,u8 opcode,u16 count,u32 indexCount,size_t offset);
     bool drawBatch(std::span<const u8> bytes,u8 vat,size_t offset,size_t& consumed);

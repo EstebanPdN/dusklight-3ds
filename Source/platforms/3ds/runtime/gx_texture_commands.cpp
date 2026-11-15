@@ -29,6 +29,7 @@ bool resolveCommandTexture(const CommandRegisters& r,unsigned map,Texture& out,c
     Texture texture;
     if(watchedCaptureToken&&r.bp[0x94+offset]==watchedCaptureToken){
         watchedCaptureLastUse=textureFrameCounter;
+        watchedCaptureSlotUse[watchedCaptureSlot]=textureFrameCounter;
         {static unsigned reports;if(reports<6){++reports;OSReport("Native capture consumer #%u: map=%u frame=%llu tevStages=%u list=%p gen=%u proj=%u\n",reports,map,
             static_cast<unsigned long long>(textureFrameCounter),unsigned((r.bp[0]>>10)&15)+1,gx::staticGeometryHint.list,unsigned(gx::staticGeometryHint.generation),
             unsigned(r.xfValid[0x1026]?r.xf[0x1026]:9));}}

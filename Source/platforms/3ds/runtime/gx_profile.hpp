@@ -26,7 +26,7 @@ struct GxProfileScope {
 };
 // Sparse native painter attribution. Entries are static call sites, not assets.
 struct GxNamedProfileEntry {const char* name{};std::uint64_t ticks{},calls{};};
-inline std::array<GxNamedProfileEntry,96> gxNamedProfiles{};
+inline std::array<GxNamedProfileEntry,128> gxNamedProfiles{};
 // Draw classification on sparse frames: 0 static rigid GPU, 1 dynamic rigid
 // GPU, 2 orthographic CPU (2D), 3 perspective CPU, 4 culled/rejected/other.
 inline std::array<std::uint64_t,5> gxDrawClassTicks{},gxDrawClassCount{};
@@ -35,6 +35,21 @@ inline std::array<std::uint32_t,256> gxFifoOpcodeCounts{},gxFifoOpcodeBytes{};
 inline unsigned gxNamedProfileCount{};
 // Diagnostic: first gate that kept a perspective draw off the GPU paths.
 inline std::array<std::uint64_t,16> gxPerspCpuGate{},gxPerspCpuGateVertices{};
+// Sparse per-process attribution: ticks and calls of each process profile's
+// execute (0) and draw (1) method on the profiled frame. Diagnostics only.
+inline constexpr unsigned gxProcessProfileCapacity=800;
+inline std::array<std::array<std::uint32_t,gxProcessProfileCapacity>,2> gxProcessTicks{};
+inline std::array<std::array<std::uint16_t,gxProcessProfileCapacity>,2> gxProcessCalls{};
+struct GxProcessProfileScope {
+#if defined(__3DS__)
+    unsigned kind,profile;std::uint64_t start{};bool active{};
+    GxProcessProfileScope(unsigned k,int name):kind(k),profile(unsigned(name)),
+        active(gxSparseVertexProfiling&&name>=0&&unsigned(name)<gxProcessProfileCapacity){if(active)start=gxProfileTick();}
+    ~GxProcessProfileScope(){if(active){gxProcessTicks[kind][profile]+=std::uint32_t(gxProfileTick()-start);++gxProcessCalls[kind][profile];}}
+#else
+    GxProcessProfileScope(unsigned,int){}
+#endif
+};
 inline unsigned registerGxNamedProfile(const char* name){
     const unsigned index=gxNamedProfileCount;
     if(index<gxNamedProfiles.size()){gxNamedProfiles[index].name=name;++gxNamedProfileCount;}

@@ -10,7 +10,6 @@ inline constexpr char gameImagePath[] = "sdmc:/3ds/DuskLight/zelda.twilight";
 enum class DiscStatus { ready, missing, ioError, unsupported, malformed, noMemory };
 const char* discStatusText(DiscStatus status);
 enum class DiscFileStatus { ready, notFound, notReady, invalidPath, ioError, malformed };
-const char* discFileStatusText(DiscFileStatus status);
 class Disc;
 class DiscFile {
     friend class Disc;

@@ -85,7 +85,9 @@ bool planVertexTransform(const CommandRegisters& r,std::uint8_t requested,Vertex
 bool transformVertex(const VertexTransformPlan& p,const DecodedVertex& v,TransformedVertex& out,VertexTransformError* error,bool normalRequired){
     out={};if(error)*error=VertexTransformError::none;
     if(!p.registers)return fail(VertexTransformError::missingState,error);
-    const auto& r=*p.registers;TransformedVertex value{};float input[4];
+    // Built in place; a failure clears the output again (the contract).
+    struct ClearOnFailure {TransformedVertex& out;bool keep{};~ClearOnFailure(){if(!keep)out={};}} guard{out};
+    const auto& r=*p.registers;TransformedVertex& value=out;float input[4];
     if(!source(v,0,input,error))return false;
     unsigned position;
     if(v.present&1)position=v.matrix[0];
@@ -134,7 +136,7 @@ bool transformVertex(const VertexTransformPlan& p,const DecodedVertex& v,Transfo
         // if a post matrix computed q. Preserve that contract for the GPU sink.
         if(!t.projection)uv[2]=1;
     }
-    out=value;return true;
+    guard.keep=true;return true;
 }
 const char* vertexTransformErrorText(VertexTransformError e){
     switch(e){case VertexTransformError::none:return "none";

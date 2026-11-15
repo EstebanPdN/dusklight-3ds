@@ -137,6 +137,16 @@ bool readTexcoord(const Attribute& a,const u8* s,std::int16_t* o){
 }
 template<class Attribute>
 unsigned elementBytes(unsigned slot,const Attribute& a){return slot==2?colorBytes(a.type):a.scalarSize*a.components;}
+// Origin of the positions of one compact record set (RigidVertexPlan::origin):
+// the first vertex on a 256-unit grid, zero near the world origin so models,
+// 2D and effects keep their coordinates. The same source data always gives
+// the same origin, so cached and GPU-resident records stay valid. The
+// subtraction is exact or rounds far below the PICA's own 24-bit precision.
+inline std::array<float,3> compactOrigin(const float* first){
+    std::array<float,3> origin{};
+    for(unsigned c=0;c<3;++c)if(std::abs(first[c])>=512.f)origin[c]=256.f*std::round(first[c]/256.f);
+    return origin;
+}
 // Direct (immediate) attributes are big-endian packed bytes; convert one
 // element to the little-endian layout the readers above expect.
 template<class Attribute>
@@ -239,13 +249,39 @@ bool finishCompactRigidUniforms(RigidVertexPlan& rigid,const std::array<float,2>
     if(rigid.color.lit&2)material[3]*=std::clamp(rigid.color.ambient[3],0.f,1.f);
     for(float value:material)if(!std::isfinite(value)||value<0||value>1)return false;
     if(rigid.multiTexture){
-        for(unsigned unit=0;unit<3;++unit)if(rigid.uniforms[80][unit]==1){
-            const unsigned base=81+4*unit;
+        for(unsigned unit=0;unit<3;++unit)if(multiRole(rigid,unit)==1){
+            const unsigned base=multiUnitRow(unit);
             for(unsigned row:{0u,2u})for(unsigned c=0;c<2;++c)rigid.uniforms[base+row][c]*=rigid.decodedTex0Scale;
             for(unsigned row:{1u,3u})for(unsigned c=0;c<2;++c)rigid.uniforms[base+row][c]*=rigid.decodedTex1Scale;
         }
     }else{
         rigid.uniforms[13][2]=rigid.decodedTex0Scale*scale[0];rigid.uniforms[13][3]=rigid.decodedTex0Scale*scale[1];
+    }
+    // The records hold positions relative to rigid.origin: every row applied
+    // to (position,1) takes the origin into its constant, M.(p-o,1) + M.o.
+    // A draw reaches this once, with rows freshly placed from the registers;
+    // foldedOrigin keeps a second pass over the same plan from adding it again.
+    const double o[3]{double(rigid.origin[0])-rigid.foldedOrigin[0],double(rigid.origin[1])-rigid.foldedOrigin[1],double(rigid.origin[2])-rigid.foldedOrigin[2]};
+    if(o[0]!=0||o[1]!=0||o[2]!=0){
+        // First pass proves every result finite; nothing changes on failure.
+        for(const bool apply:{false,true}){
+            bool finite=true;
+            auto fold=[&](unsigned row){
+                auto& m=rigid.uniforms[row];
+                const float value=float(double(m[3])+double(m[0])*o[0]+double(m[1])*o[1]+double(m[2])*o[2]);
+                if(apply)m[3]=value;else finite&=std::isfinite(value)&&std::abs(value)<=1e8f;
+            };
+            for(unsigned m=0;m<rigid.matrixOffsets.size();++m){
+                // Identical matrices share rows (addRigidMatrix): once each.
+                const int offset=rigid.matrixOffsets[m];bool earlier=false;
+                for(unsigned k=0;k<m;++k)earlier|=rigid.matrixOffsets[k]==offset;
+                if(offset>=0&&!earlier)for(unsigned row=0;row<3;++row)fold(unsigned(offset)+row);
+            }
+            if(rigid.multiTexture){if(rigid.multiProjected)for(unsigned row=0;row<3;++row)fold(multiUnitRow(0)+row);}
+            else if(rigid.projectedTexture)for(unsigned row=0;row<3;++row)fold(rigid.projectionBase()+row);
+            if(!finite)return false;
+        }
+        rigid.foldedOrigin=rigid.origin;
     }
     rigid.uniforms[11][3]=rigid.decodedNormalScale;
     rigid.uniforms[12][3]=1;
@@ -310,6 +346,10 @@ bool decodeCompactRigidBatch(const VertexDecodePlan& plan,std::span<const u8> pa
     std::array<IndexedGather,4> gather{};
     for(unsigned slot=0;slot<4;++slot)if(const auto* a=fields[slot])
         if(!gather[slot].prepare(a->offset,a->descriptor==GX_INDEX16,arrays[a->attribute],elementBytes(slot,*a)))return false;
+    std::array<float,3> origin{};
+    {float first[3];const u8* at=gather[0].read(packed.data());
+     if(!at||!readPosition(*fields[0],at,first))return false;
+     origin=compactOrigin(first);}
     // Static J3D geometry: trusted by generation, no byte comparison.
     StaticCompactCache* staticCache=!rigid.compactPalette&&staticGeometryHint.generation&&staticGeometryHint.list?activeStaticCache:nullptr;
     StaticCompactCache::Key staticKey{};
@@ -352,6 +392,7 @@ bool decodeCompactRigidBatch(const VertexDecodePlan& plan,std::span<const u8> pa
         if(fields[2])readColor(fields[2]->type,source[2],v.color.data());
         if(!readPosition(*fields[0],source[0],v.position.data())||!readNormal(*fields[1],source[1],v.normal.data())||
            !readTexcoord(*fields[3],source[3],v.texcoord.data()))return false;
+        for(unsigned c=0;c<3;++c)v.position[c]-=origin[c];
         if(matrix){
             const unsigned index=packed[matrix->offset];
             if(index>27||index%3||rigid.matrixOffsets[index/3]<0)return false;
@@ -378,6 +419,7 @@ bool decodeCompactRigidBatch(const VertexDecodePlan& plan,std::span<const u8> pa
         if(economical)cache->store(cacheKey,originalPacked,cacheArrays,ranges,target);
     }
     rigid.decodedNormalScale=normalScale(*fields[1]);rigid.decodedTex0Scale=texcoordScale(*fields[3]);rigid.decodedTex1Scale=1;
+    rigid.origin=origin;
     (void)material;
     return finishCompactRigidUniforms(rigid,scale);
 }
@@ -395,8 +437,11 @@ bool decodeCompactRigidBatchMT(const VertexDecodePlan& plan,std::span<const u8> 
     for(unsigned i=0;i<plan.count;++i){
         const auto& a=plan.attributes[i];unsigned slot;
         if(a.attribute<=GX_VA_TEX7MTXIDX){
-            if(a.attribute!=GX_VA_PNMTXIDX||a.descriptor!=GX_DIRECT)return reject(1);
-            matrix=&a;continue;
+            if(a.descriptor!=GX_DIRECT)return reject(1);
+            // Texture matrix selectors: the plan refused the draw if a
+            // coordinate it reads has one; the others are skipped.
+            if(a.attribute==GX_VA_PNMTXIDX)matrix=&a;
+            continue;
         }
         if(a.attribute==GX_VA_POS)slot=0;else if(a.attribute==GX_VA_NRM)slot=1;else if(a.attribute==GX_VA_CLR0)slot=2;
         else if(a.attribute==GX_VA_TEX0)slot=3;else if(a.attribute==GX_VA_TEX1)slot=4;else return reject(2);
@@ -408,9 +453,10 @@ bool decodeCompactRigidBatchMT(const VertexDecodePlan& plan,std::span<const u8> 
         fields[slot]=&a;
     }
     bool needsTex1=false,needsTex0=false;
-    for(unsigned unit=0;unit<3;++unit)if(rigid.uniforms[80][unit]==1)(rigid.unitSource[unit]?needsTex1:needsTex0)=true;
-    // Normals are optional for unlit plans (the dummy light has zero color).
-    if(!fields[0]||(!fields[1]&&rigid.color.lit)||(needsTex0&&!fields[3])||(needsTex1&&!fields[4])||
+    for(unsigned unit=0;unit<3;++unit)if(multiRole(rigid,unit)==1)(rigid.unitSource[unit]?needsTex1:needsTex0)=true;
+    // Normals are optional for plans that never read them (unlit, or lit by
+    // ambient only: the dummy light has zero color).
+    if(!fields[0]||(!fields[1]&&!rigid.normalsUnused)||(needsTex0&&!fields[3])||(needsTex1&&!fields[4])||
        ((rigid.color.vertex|rigid.color.ambientVertex)&&!fields[2])||(rigid.color.ambientVertex&2)||bool(matrix)!=rigid.indexedMatrices)return reject(6);
     auto material=rigid.color.material;
     if(rigid.color.lit&2)material[3]*=std::clamp(rigid.color.ambient[3],0.f,1.f);
@@ -420,8 +466,8 @@ bool decodeCompactRigidBatchMT(const VertexDecodePlan& plan,std::span<const u8> 
         const int offset=rigid.matrixOffsets[m],normal=rigid.normalOffsets[m];
         if(offset < -1)return reject(59);
         if(offset<0)continue;
-        if(offset>0&&(offset<int(paletteBase)||offset+3>80))return reject(59);
-        if(normal<0||normal+3>80||(normal!=offset&&normal!=offset+3))return reject(59);
+        if(offset>0&&(offset<int(paletteBase)||offset+3>int(rigid.paletteLimit())))return reject(59);
+        if(normal<0||normal+3>int(rigid.paletteLimit())||(normal!=offset&&normal!=offset+3))return reject(59);
         if(!rigid.compactPalette&&(normal!=offset+3||(offset>0&&(offset-paletteBase)%6)))return reject(59);
     }
     auto target=std::as_writable_bytes(output).first(output.size()*sizeof(CompactRigidVertexMT));
@@ -431,6 +477,12 @@ bool decodeCompactRigidBatchMT(const VertexDecodePlan& plan,std::span<const u8> 
         if(a->descriptor==GX_DIRECT){anyDirect=true;continue;}
         if(!gather[slot].prepare(a->offset,a->descriptor==GX_INDEX16,arrays[a->attribute],elementBytes(slot,*a)))return reject(61);
     }
+    std::array<float,3> origin{};
+    {float first[3];u8 firstScratch[16];const auto& a=*fields[0];const u8* at=nullptr;
+     if(a.descriptor!=GX_DIRECT)at=gather[0].read(packed.data());
+     else if(elementBytes(0,a)<=sizeof(firstScratch)&&a.offset+elementBytes(0,a)<=plan.stride)at=littleElement(0,a,packed.data()+a.offset,firstScratch);
+     if(!at||!readPosition(a,at,first))return reject(55);
+     origin=compactOrigin(first);}
     StaticCompactCache* staticCache=!anyDirect&&!rigid.compactPalette&&staticGeometryHint.generation&&staticGeometryHint.list?staticCompactCache():nullptr;
     StaticCompactCache::Key staticKey{};
     if(staticCache){
@@ -467,6 +519,7 @@ bool decodeCompactRigidBatchMT(const VertexDecodePlan& plan,std::span<const u8> 
             CompactRigidVertexMT v;
             if(fields[2])readColor(fields[2]->type,source[2],v.color.data());
             if(!readPosition(*fields[0],source[0],v.position.data()))return reject(55);
+            for(unsigned c=0;c<3;++c)v.position[c]-=origin[c];
             if(fields[1]&&!readNormal(*fields[1],source[1],v.normal.data()))return false;
             if(fields[3]&&!readTexcoord(*fields[3],source[3],v.texcoord0.data()))return false;
             if(fields[4]&&!readTexcoord(*fields[4],source[4],v.texcoord1.data()))return false;
@@ -483,6 +536,7 @@ bool decodeCompactRigidBatchMT(const VertexDecodePlan& plan,std::span<const u8> 
     }
     rigid.decodedNormalScale=fields[1]?normalScale(*fields[1]):0.f;
     rigid.decodedTex0Scale=fields[3]?texcoordScale(*fields[3]):1.f;rigid.decodedTex1Scale=fields[4]?texcoordScale(*fields[4]):1.f;
+    rigid.origin=origin;
     (void)material;
     return finishCompactRigidUniforms(rigid,{1.f,1.f});
 }

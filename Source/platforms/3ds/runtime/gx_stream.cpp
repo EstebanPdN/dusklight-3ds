@@ -17,7 +17,11 @@ bool CommandStream::write(std::span<const u8> bytes) {
         }
         return true;
     }
+    return writeCommands(bytes);
+}
+bool CommandStream::writeCommands(std::span<const u8> bytes) {
     while(!bytes.empty()){
+        if(held){if(!continueHeld(bytes))return false;continue;}
         if(needed>scratch.size())return reject(StreamError::capacity);
         const size_t count=std::min(needed-used,bytes.size());
         std::memcpy(scratch.data()+used,bytes.data(),count);
@@ -30,12 +34,65 @@ bool CommandStream::write(std::span<const u8> bytes) {
         peak=std::max(peak,needed);
         if(needed>scratch.size())return reject(StreamError::capacity);
         if(!headerComplete||used<needed)continue;
-        if(gxSparseVertexProfiling){++gxFifoOpcodeCounts[scratch[0]];gxFifoOpcodeBytes[scratch[0]]+=used;}
-        if(!processor.execute(scratch.first(used)))return reject(StreamError::processor);
-        if(failure!=StreamError::none)return false;
-        used=0;needed=1;
+        // Merge scope: keep a complete quad/triangle list for the next GXBegin.
+        if(merge&&used>3&&((scratch[0]&0xf8)==GX_QUADS||(scratch[0]&0xf8)==GX_TRIANGLES)&&(scratch[1]||scratch[2])){
+            held=true;heldPhase=0;continue;
+        }
+        if(!executeScratch())return false;
     }
     return true;
+}
+bool CommandStream::executeScratch() {
+    if(gxSparseVertexProfiling){++gxFifoOpcodeCounts[scratch[0]];gxFifoOpcodeBytes[scratch[0]]+=used;}
+    static const auto executeIndex=registerGxNamedProfile("stream.execute");GxNamedProfileScope executeProfile(executeIndex);
+    if(!processor.execute(scratch.first(used)))return reject(StreamError::processor);
+    if(failure!=StreamError::none)return false;
+    used=0;needed=1;
+    return true;
+}
+bool CommandStream::flushHeld() {
+    if(!held)return true;
+    // A following primitive header was begun and never completed.
+    if(heldPhase)return reject(StreamError::truncated);
+    held=false;
+    const bool wasActive=active;active=true;
+    const bool okay=executeScratch();
+    active=wasActive;return okay;
+}
+// The held draw is complete in scratch[0..used). Consume the header of the
+// next command: the same opcode extends the held draw, anything else draws it
+// and is then processed normally.
+bool CommandStream::continueHeld(std::span<const u8>& bytes) {
+    constexpr size_t mergeLimit=1024; // vertices in one merged draw
+    while(held&&!bytes.empty()){
+        const u8 value=bytes[0];
+        if(heldPhase==0){
+            if(value!=scratch[0])return flushHeld(); // not consumed
+            heldPhase=1;bytes=bytes.subspan(1);
+        }else if(heldPhase==1){
+            heldHigh=value;heldPhase=2;bytes=bytes.subspan(1);
+        }else{
+            bytes=bytes.subspan(1);heldPhase=0;
+            const size_t count=(size_t(scratch[1])<<8)|scratch[2],add=(size_t(heldHigh)<<8)|value;
+            const size_t stride=(used-3)/count,group=(scratch[0]&0xf8)==GX_QUADS?4:3;
+            if(!add||add%group||count%group||count+add>mergeLimit||add*stride>scratch.size()-used){
+                // Cannot extend: draw the held primitive and replay this header.
+                const u8 header[3]{scratch[0],heldHigh,value};
+                if(!flushHeld())return false;
+                return writeCommands(header);
+            }
+            const size_t total=count+add;
+            scratch[1]=u8(total>>8);scratch[2]=u8(total);
+            needed=used+add*stride;peak=std::max(peak,needed);
+            held=false;++merged; // the normal path completes the payload and holds it again
+        }
+    }
+    return true;
+}
+bool CommandStream::setImmediateMerge(bool enabled) {
+    if(active||processor.executing())return reject(StreamError::reentrant);
+    if(!enabled&&!flushHeld())return false;
+    merge=enabled;return true;
 }
 bool CommandStream::flushAutoPrimitives() {
     // Split only independent primitives. Strips/fans require retained boundary
@@ -68,7 +125,8 @@ bool CommandStream::beginAuto(u8 opcode) {
 bool CommandStream::endAuto() {
     if(active||processor.executing())return reject(StreamError::reentrant);
     if(failure!=StreamError::none)return false;
-    if(!autoDraw)return finish();
+    // A held merge-scope primitive stays pending for the next GXBegin.
+    if(!autoDraw)return (held&&!heldPhase)||finish();
     const size_t payload=used-3;
     if(!autoStride||payload%autoStride)return reject(StreamError::truncated);
     const size_t vertices=payload/autoStride;
@@ -85,7 +143,7 @@ bool CommandStream::call(std::span<const u8> list) {
     static const auto index=registerGxNamedProfile("stream.call");GxNamedProfileScope profile(index);
     if(!finish())return false;
     active=true;struct Guard{bool& flag;~Guard(){flag=false;}}guard{active};
-    if(!processor.execute(list))return reject(StreamError::processor);
+    if(!processor.executeList(list))return reject(StreamError::processor);
     return failure==StreamError::none;
 }
 bool CommandStream::writeCp(u8 reg,u32 value) {
@@ -112,6 +170,7 @@ bool CommandStream::setCopyControl(bool texture,u32 mask,u32 value) {
 bool CommandStream::finish() {
     if(active||processor.executing())return reject(StreamError::reentrant);
     if(failure!=StreamError::none)return false;
+    if(held&&!flushHeld())return false;
     if(processor.error()!=CommandError::none)return reject(StreamError::processor);
     return (!autoDraw&&!used)||reject(StreamError::truncated);
 }
@@ -123,6 +182,7 @@ bool CommandStream::reset() {
     processor.reset();
     if(processor.error()!=CommandError::none)return reject(StreamError::processor);
     used=0;needed=1;autoDraw=false;autoStride=0;failure=StreamError::none;
+    held=false;heldPhase=0;merge=false;
     const bool enabled=su.enabled;su={};su.enabled=enabled;return true;
 }
 bool CommandStream::configureAutomaticSu(bool enabled) {

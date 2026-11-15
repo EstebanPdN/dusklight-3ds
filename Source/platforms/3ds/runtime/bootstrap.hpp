@@ -19,11 +19,18 @@ void detachKernelWorker();
 void bindCurrentThread(OSThread* record);
 void logText(const char* text);
 [[noreturn]] void fatal(const char* text);
+// Unattended automatic test: a fatal error shows its message briefly and asks
+// the system to start the game again, so the test continues with the next zone.
+void setFatalUnattended(bool unattended);
+// Console GPU guard (gpu_canary.hpp): message, then restart or wait for START.
+[[noreturn]] void restartAfterGpuHang(const char* text,bool restart);
 // Per-thread ARM11 exception report into the SD log (call at thread entry).
 void installExceptionLogger();
 // Main thread only: write pending native log lines to sdmc:/3ds/DuskLight/log.txt.
 void flushNativeLog();
 void flushCache(void* memory, std::uint32_t size);
+// Development switch: forward the game's own cache flushes to the kernel again.
+void setGameCacheFlush(bool forward);
 void invalidateCache(void* memory, std::uint32_t size);
 void waitForRetrace();
 }

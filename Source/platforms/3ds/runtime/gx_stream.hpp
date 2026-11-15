@@ -29,6 +29,15 @@ public:
     bool beginAuto(u8 opcode);
     bool endAuto();
     bool recordingAuto()const{return autoDraw;}
+    // Native PICA engine: inside a merge scope a complete fixed-count quad or
+    // triangle list is held instead of drawn. A following GXBegin with the
+    // same opcode appends its vertices to it; any other stream operation
+    // (they all pass through finish()) draws it first, so the state every
+    // merged primitive was issued under is the same. Only loops whose draws
+    // all go through this stream may open a scope.
+    bool setImmediateMerge(bool enabled);
+    bool continuesHeld(u8 opcode)const{return held&&!heldPhase&&used&&scratch[0]==opcode;}
+    std::uint64_t mergedDraws()const{return merged;}
     bool writeCp(u8 reg,u32 value);
     bool writeBp(u8 reg,u32 value);
     bool writeXf(u16 address,std::span<const u32> values);
@@ -73,6 +82,13 @@ private:
     size_t autoStride=0;
     StreamError failure=StreamError::none;
     bool flushAutoPrimitives();
+    bool merge=false,held=false;
+    u8 heldPhase=0,heldHigh=0; // header bytes of the next primitive consumed so far
+    std::uint64_t merged=0;
+    bool executeScratch();
+    bool flushHeld();
+    bool continueHeld(std::span<const u8>& bytes);
+    bool writeCommands(std::span<const u8> bytes);
     bool reject(StreamError value){if(failure==StreamError::none)failure=value;return false;}
 };
 // TLS routing for the original GXCmd/GXCallDisplayList ABI. Install only while

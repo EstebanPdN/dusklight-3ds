@@ -1,6 +1,8 @@
+#include "gpu_canary.hpp"
 #include "pad_mapping.hpp"
 #ifdef DUSK_GAME_STARTUP
 #include "application_dump_ctru.hpp"
+#include "dev_console.hpp"
 #endif
 #include "developer_script.hpp"
 #include <dolphin/os.h>
@@ -41,9 +43,17 @@ extern "C" u32 PADRead(PADStatus* status) {
     u32 keys = hidKeysHeld();
     dusk::native::applyScriptedInput(keys, circle.dx, circle.dy);
 #ifdef DUSK_GAME_STARTUP
+    // After a restart of the console GPU guard: pass the warnings and logos.
+    if(dusk::native::gpuCanaryPressA())keys|=KEY_A;
+#endif
+#ifdef DUSK_GAME_STARTUP
     if(dusk::native::applicationDumpInputSuppressed()){
         keys=0;circle={};cstick={};
     }
+    // The developer console or its automatic test owns the pad: the game
+    // receives only the test's scripted input.
+    if(dusk::native::devConsoleOwnsPad())
+        dusk::native::devConsoleVirtualPad(keys,circle.dx,circle.dy,cstick.dx,cstick.dy);
 #endif
     status[0] = dusk::native::mapNativePad(
         {keys, circle.dx, circle.dy, cstick.dx, cstick.dy});

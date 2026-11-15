@@ -13,6 +13,8 @@ thread_local bool inCallback=false;
 thread_local u32 callbackCount=0;
 u32 previousCount;
 bool previousReady=false;
+bool framePaced=false;
+std::uint64_t framePaceTicks=0;
 struct DispatchGuard {
     DispatchGuard(){
         if(dispatching.test_and_set(std::memory_order_acquire))
@@ -50,6 +52,11 @@ void dusk::native::waitVideoRetrace(){DispatchGuard guard;waitNext();}
 std::uint32_t dusk::native::waitForFrameRetraces(OSMessageQueue* queue,unsigned interval,FrameRetraceDeadline& deadline){
     if(!queue||interval>65535)OSPanic(__FILE__,__LINE__,"Invalid native display retrace deadline");
     DispatchGuard guard;
+    framePaced=true;
+    struct PaceTimer {
+        std::uint64_t start=dusk::native::platformPaceTick();
+        ~PaceTimer(){framePaceTicks+=dusk::native::platformPaceTick()-start;}
+    } paceTimer;
     if(!deadline.initialized){
         deadline.next=platformVideoRetraceCount();deadline.initialized=true;
         if(!previousReady){previousCount=deadline.next;previousReady=true;}
@@ -68,6 +75,8 @@ std::uint32_t dusk::native::waitForFrameRetraces(OSMessageQueue* queue,unsigned 
         }
     }
 }
+bool dusk::native::consumeFramePaced(){const bool value=framePaced;framePaced=false;return value;}
+std::uint64_t dusk::native::takeFramePaceTicks(){const auto value=framePaceTicks;framePaceTicks=0;return value;}
 void dusk::native::sleepGameTicks(std::int64_t ticks){
     if(ticks<0)OSPanic(__FILE__,__LINE__,"Negative native display sleep");
     const auto seconds=ticks/dolphinTickFrequency;

@@ -13,6 +13,9 @@ std::uint32_t dumpHash(const void* memory, std::size_t bytes, std::uint32_t valu
 bool flushDumpFile(std::FILE* file);
 // Exclusive create, flush/close, then readback checksum. Caller supplies bounded
 // scratch memory, which may alias data because hashing/writing finish first.
+// Read every dump file back and compare (slow on the console SD). Default off:
+// the checksum of the written bytes is still recorded in the manifest.
+extern bool dumpReadBack;
 bool writeVerifiedDumpFile(const char* path, const void* data, std::size_t bytes,
                            void* scratch, std::size_t scratchBytes, std::uint32_t& checksum);
 // For a live arena only: checksum the bytes actually copied into each bounded

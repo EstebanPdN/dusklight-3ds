@@ -12,4 +12,5 @@ std::uint32_t platformVideoRetraceCount(){
 }
 void platformWaitVideoRetrace(){gspWaitForVBlank0();}
 void platformSleepNanoseconds(std::int64_t ns){svcSleepThread(ns);}
+std::uint64_t platformPaceTick(){return svcGetSystemTick();}
 }

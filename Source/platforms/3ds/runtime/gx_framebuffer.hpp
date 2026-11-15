@@ -10,6 +10,8 @@ bool platformClearFramebuffer(FramebufferHandle,std::uint32_t color,std::uint32_
 bool platformReadFramebufferColor(FramebufferHandle,std::span<const std::byte>&);
 bool platformReadFramebufferDepth(FramebufferHandle,unsigned logicalX,unsigned logicalY,std::uint32_t&);
 bool platformReadFramebufferDepthImage(FramebufferHandle,std::span<const std::byte>&);
+// Depth words read in place (VRAM) for a few samples; no copy. Valid until the next draw.
+bool platformReadFramebufferDepthView(FramebufferHandle,std::span<const std::byte>&);
 // Private opt-in diagnostic only. A borrows the existing completed depth
 // readback; B is one independent, bounded linear allocation. Retention blocks
 // ALL depth readback reuse until the caller finishes its final observation.

@@ -3,6 +3,7 @@
 #include "gx_compact_cache.hpp"
 #include <dolphin/gx/GXCommandList.h>
 #include <dolphin/gx/GXAurora.h>
+#include <algorithm>
 #include <bit>
 #include <cstring>
 #include <limits>
@@ -29,15 +30,23 @@ bool CommandMemory::add(std::span<const u8> bytes,MemoryHandle& handle) {
     if(!free)return false;
     // The low bits identify the slot; the generation rejects recycled slots.
     handle=next++*capacity+static_cast<MemoryHandle>(free-regions.data());
-    *free={handle,bytes};return true;
+    *free={handle,bytes};rebound();return true;
+}
+void CommandMemory::rebound(){
+    lowest=std::numeric_limits<std::uintptr_t>::max();highest=0;
+    for(const auto& r:regions)if(r.handle){
+        const auto base=reinterpret_cast<std::uintptr_t>(r.bytes.data());
+        lowest=std::min(lowest,base);highest=std::max(highest,base+r.bytes.size());
+    }
 }
 bool CommandMemory::remove(MemoryHandle handle){
     auto& region=regions[handle%capacity];
     if(!handle||region.handle!=handle)return false;
-    region={};return true;
+    region={};rebound();return true;
 }
 bool CommandMemory::find(std::uint64_t address,u32 size,MemoryHandle& handle,u32& offset)const {
     handle=0;offset=0;if(!address||!size)return false;
+    if(address<lowest||address>highest)return false;
     for(const auto& r:regions)if(r.handle){
         const auto base=reinterpret_cast<std::uintptr_t>(r.bytes.data());
         if(address>=base && address-base<=r.bytes.size() && size<=r.bytes.size()-(address-base)){
@@ -67,7 +76,9 @@ void CommandProcessor::reset(){
     auto* mem=&memory;auto callback=sink;auto* context=sinkContext;auto resolver=liveArrayResolver;
     // In-place reset avoids materializing the register bank on a 3DS stack.
     const auto scratch=batchScratch;auto* topology=batchCache;
+    const auto epoch=regs.stateEpoch,setupEpoch=regs.vertexSetupEpoch; // never reuse an epoch for a different bank
     this->~CommandProcessor();new(this)CommandProcessor(*mem);setSink(callback,context);setLiveArrayResolver(resolver);setPrimitiveBatchScratch(scratch);setPrimitiveBatchCache(topology);
+    regs.stateEpoch=epoch+1;regs.vertexSetupEpoch=setupEpoch+1;
 }
 bool CommandProcessor::prepare(unsigned vat) {
     auto& prepared=cache[vat];if(prepared.ready)return true;
@@ -220,6 +231,10 @@ bool CommandProcessor::drawBatch(std::span<const u8> bytes,u8 vat,size_t offset,
     stats.reusedVertices+=vertexCount-submittedVertices;
     return true;
 }
+namespace {
+// XF words outside the per-shape geometry matrices and matrix index registers.
+inline bool epochWord(u32 at){return !(at<0x78||(at>=0x400&&at<0x45a)||at==0x1018||at==0x1019);}
+}
 bool CommandProcessor::applyCp(u8 reg,u32 value,size_t offset) {
     if(reg==0x50)normalAliasesValid=false;
     if(!(reg==0x30||reg==0x40||reg==0x50||reg==0x60||(reg>=0x70&&reg<0x98)||(reg>=0xb0&&reg<0xc0)))return reject(CommandError::unsupported,offset);
@@ -229,6 +244,7 @@ bool CommandProcessor::applyCp(u8 reg,u32 value,size_t offset) {
         if(reg==0x50||reg==0x60)for(auto& entry:cache)entry.ready=false;
         else if(reg>=0x70&&reg<0x98)cache[reg&7].ready=false;
     }
+    if(reg!=0x30&&reg!=0x40&&(!regs.cpValid[reg]||regs.cp[reg]!=value)){++regs.stateEpoch;++regs.vertexSetupEpoch;}
     regs.cp[reg]=value;regs.cpValid.set(reg);
     if(reg==0x30||reg==0x40){const unsigned slot=(reg-0x30)/16;
         regs.matrixIndex[slot]=value;regs.matrixIndexValid.set(slot);}
@@ -244,6 +260,13 @@ void CommandProcessor::applyBp(u8 reg,u32 value) {
     if(reg==0xfe)regs.bpMask=value;
     else {
         const u32 merged=(regs.bp[reg]&~regs.bpMask)|(value&regs.bpMask);
+        // TEV colour registers alternate between two banks through one raw
+        // register: compare the addressed bank, not the last raw value. A
+        // TLUT load always counts (it replaces a palette token).
+        const bool changed=reg>=0xe0&&reg<=0xe7?
+            (!regs.tevColorValid[((merged>>23)&1)*8+(reg-0xe0)]||regs.tevColor[(merged>>23)&1][reg-0xe0]!=merged):
+            (reg==0x65||!regs.bpValid[reg]||regs.bp[reg]!=merged);
+        if(changed)++regs.stateEpoch;
         regs.bp[reg]=merged;regs.bpValid.set(reg);regs.bpMask=0xffffff;
         if(reg==0x65){
             const u32 offset=merged&1023,entries=((merged>>10)&2047)*16;
@@ -349,10 +372,21 @@ bool CommandProcessor::applyIndexed(u8 code,u16 index,u16 packed,size_t offset) 
     if(!resolveBinding(bind,array))return reject(CommandError::staleMemory,offset);
     const std::uint64_t at=std::uint64_t(index)*(regs.cp[0xb0+slot]&255);
     if(at>array.size()||count*4>array.size()-at)return reject(CommandError::arrayBounds,offset);
-    if(bind.little&&std::endian::native==std::endian::little)std::memcpy(regs.xf.data()+address,array.data()+at,count*4);
+    // Geometry matrices (the common case) skip the change comparison.
+    const bool geometry=address+count<=0x78||(address>=0x400&&address+count<=0x45a);
+    bool changed=false;
+    if(bind.little&&std::endian::native==std::endian::little){
+        if(!geometry)for(u32 i=0;i<count&&!changed;++i){
+            u32 value;std::memcpy(&value,array.data()+at+i*4,4);
+            changed=epochWord(address+i)&&(!regs.xfValid[address+i]||regs.xf[address+i]!=value);
+        }
+        std::memcpy(regs.xf.data()+address,array.data()+at,count*4);
+    }
     else for(u32 i=0;i<count;++i){u32 value;if(bind.little){const auto* p=array.data()+at+i*4;value=u32(p[0])|(u32(p[1])<<8)|(u32(p[2])<<16)|(u32(p[3])<<24);}else value=word(array.data()+at+i*4);
+        if(!geometry&&epochWord(address+i)&&(!regs.xfValid[address+i]||regs.xf[address+i]!=value))changed=true;
         regs.xf[address+i]=value;}
     for(u32 i=0;i<count;++i)regs.xfValid.set(address+i);
+    if(changed){++regs.stateEpoch;if(address<=0x1008&&address+count>0x1008)++regs.vertexSetupEpoch;}
     return true;
 }
 bool CommandProcessor::loadIndexed(u8 code,u16 index,u16 packed) {
@@ -366,7 +400,20 @@ bool CommandProcessor::writeXf(u16 address,std::span<const u32> values) {
     if(active)return reject(CommandError::reentrant,0);
     if(failure!=CommandError::none)return false;
     if(values.empty()||address>=regs.xf.size()||values.size()>regs.xf.size()-address)return reject(CommandError::unsupported,0);
-    for(size_t i=0;i<values.size();++i){regs.xf[address+i]=values[i];regs.xfValid.set(address+i);}
+    if(address+values.size()<=0x78||(address>=0x400&&address+values.size()<=0x45a)){
+        // Per-shape position/normal matrices: outside the state epoch and the
+        // matrix index mirror, written for every shape of every frame.
+        std::memcpy(regs.xf.data()+address,values.data(),values.size()*sizeof(u32));
+        for(size_t i=0;i<values.size();++i)regs.xfValid[address+i]=true;
+        ++stats.commands;return true;
+    }
+    bool changed=false;
+    for(size_t i=0;i<values.size();++i){
+        const u32 at=address+u32(i);
+        if(epochWord(at)&&(!regs.xfValid[at]||regs.xf[at]!=values[i]))changed=true;
+        regs.xf[at]=values[i];regs.xfValid.set(at);
+    }
+    if(changed){++regs.stateEpoch;if(address<=0x1008&&address+values.size()>0x1008)++regs.vertexSetupEpoch;}
     updateMatrixIndices(address,values.size());++stats.commands;return true;
 }
 bool CommandProcessor::submitDescriptors(u32 low,u32 high,bool normal,bool nbt,u8 type) {
@@ -431,14 +478,20 @@ bool CommandProcessor::setDescriptor(unsigned attribute,unsigned type) {
 }
 bool CommandProcessor::applyBinding(unsigned slot,std::uint64_t address,u32 size,bool little,size_t offset) {
     if(slot>=bindings.size())return reject(CommandError::format,offset);
-    if(!address&&!size){bindings[slot]={};return true;}
+    const auto assign=[&](const Binding& value){
+        auto& current=bindings[slot];
+        if(current.handle!=value.handle||current.offset!=value.offset||current.size!=value.size||
+           current.little!=value.little||current.liveAddress!=value.liveAddress)++regs.vertexSetupEpoch;
+        current=value;return true;
+    };
+    if(!address&&!size)return assign({});
     MemoryHandle handle;u32 at;
     if(!memory.find(address,size,handle,at)){
         if(!address||!size||address>UINTPTR_MAX||size>UINTPTR_MAX-address||
            !liveArrayResolver||!liveArrayResolver(address,size))return reject(CommandError::unregisteredMemory,offset);
-        bindings[slot]={0,0,size,little,address};return true;
+        return assign({0,0,size,little,address});
     }
-    bindings[slot]={handle,at,size,little};return true;
+    return assign({handle,at,size,little});
 }
 bool CommandProcessor::resolveBinding(const Binding& binding,std::span<const u8>& bytes) const {
     if(!binding.liveAddress)return memory.resolve(binding.handle,binding.offset,binding.size,bytes);
@@ -478,7 +531,13 @@ bool CommandProcessor::execute(std::span<const u8> bytes) {
             const u32 count=u32(half(rest.data()+1))+1,address=half(rest.data()+3);
             if(address>=regs.xf.size()||count>regs.xf.size()-address)return reject(CommandError::unsupported,start);
             size=5+size_t(count)*4;if(!need(size))return false;
-            for(u32 i=0;i<count;++i){regs.xf[address+i]=word(rest.data()+5+i*4);regs.xfValid.set(address+i);}
+            bool changed=false;
+            for(u32 i=0;i<count;++i){
+                const u32 at=address+i,value=word(rest.data()+5+i*4);
+                if(epochWord(at)&&(!regs.xfValid[at]||regs.xf[at]!=value))changed=true;
+                regs.xf[at]=value;regs.xfValid.set(at);
+            }
+            if(changed){++regs.stateEpoch;if(address<=0x1008&&address+count>0x1008)++regs.vertexSetupEpoch;}
             updateMatrixIndices(address,count);
         } else if(code==GX_LOAD_INDX_A||code==GX_LOAD_INDX_B||code==GX_LOAD_INDX_C||code==GX_LOAD_INDX_D){
             if(!need(5))return false;
@@ -529,6 +588,167 @@ bool CommandProcessor::execute(std::span<const u8> bytes) {
         cursor+=size;++stats.commands;
     }
     return true;
+}
+namespace {
+// Compiled display lists. Word stream per list: BP `op|reg<<8, value&mask,
+// ~mask` (mask folded from a preceding BP 0xFE at compile time), special BP
+// (TLUT load, TEV colour banks) `op|reg<<8, value, mask` through applyBp, CP
+// `op|reg<<8, value`, XF `op|count<<8, address, words...`, and the vertex
+// cache invalidation. Anything else (draws, indexed loads, array bindings,
+// copies, malformed bytes) makes the list interpreter-only.
+enum : u32 {opBp=1,opBpSpecial,opCp,opXf,opInvalidate};
+struct CompiledList {
+    const u8* data{};u32 size{};u32 sumA{},sumB{};u32 first{},words{},commands{},finalMask{};
+    u8 state{}; // 0 empty, 1 compiled, 2 interpreter-only, 3 changes too often
+    u8 heat{};
+};
+constexpr unsigned compiledCapacity=1024,compiledProbe=4,compiledPoolWords=96*1024;
+std::array<CompiledList,compiledCapacity> compiledLists{};
+std::array<u32,compiledPoolWords> compiledPool;
+unsigned compiledUsed{};
+bool compiledEnabled=true,compiledVerify=false;
+std::uint64_t compiledHits{},compiledCompiles{},compiledInterpreted{},compiledMismatches{};
+void listChecksum(std::span<const u8> bytes,u32& a,u32& b){
+    a=2166136261u;b=0x9e3779b9u;std::size_t i=0;
+    for(;i+4<=bytes.size();i+=4){u32 w;std::memcpy(&w,bytes.data()+i,4);a=(a^w)*16777619u;b=((b<<5)|(b>>27))+w;}
+    for(;i<bytes.size();++i){a=(a^bytes[i])*16777619u;b=((b<<5)|(b>>27))+bytes[i];}
+}
+bool compileList(std::span<const u8> bytes,CompiledList& out){
+    unsigned used=compiledUsed;u32 mask=0xffffff,commands=0;
+    auto put=[&](u32 w){if(used>=compiledPoolWords)return false;compiledPool[used++]=w;return true;};
+    std::size_t cursor=0;
+    while(cursor<bytes.size()){
+        const u8* at=bytes.data()+cursor;const u8 code=*at;const std::size_t rest=bytes.size()-cursor;std::size_t size=1;
+        if(code==GX_NOP){}
+        else if(code==GX_CMD_INVL_VC){if(!put(opInvalidate))return false;}
+        else if(code==GX_LOAD_CP_REG){
+            if(rest<6)return false;
+            size=6;const u32 reg=at[1];
+            if(!(reg==0x30||reg==0x40||reg==0x50||reg==0x60||(reg>=0x70&&reg<0x98)||(reg>=0xb0&&reg<0xc0))||
+               (reg>=0x78&&reg<0x80)||(reg>=0x88&&reg<0x90))return false;
+            if(!put(opCp|(reg<<8))||!put(word(at+2)))return false;
+        }else if(code==GX_LOAD_BP_REG){
+            if(rest<5)return false;
+            size=5;const u32 value=word(at+1),reg=value>>24,data=value&0xffffff;
+            if(reg==0x52)return false;
+            if(reg==0xfe)mask=data;
+            else{
+                if(reg==0x65||(reg>=0xe0&&reg<=0xe7)){if(!put(opBpSpecial|(reg<<8))||!put(data)||!put(mask))return false;}
+                else if(!put(opBp|(reg<<8))||!put(data&mask)||!put(~mask&0xffffff))return false;
+                mask=0xffffff;
+            }
+        }else if(code==GX_LOAD_XF_REG){
+            if(rest<5)return false;
+            const u32 count=u32(half(at+1))+1,address=half(at+3);
+            if(address>=0x1058||count>0x1058-address)return false;
+            size=5+std::size_t(count)*4;if(rest<size)return false;
+            if(!put(opXf|(count<<8))||!put(address))return false;
+            for(u32 i=0;i<count;++i)if(!put(word(at+5+i*4)))return false;
+        }else return false;
+        cursor+=size;++commands;
+    }
+    out.first=compiledUsed;out.words=used-compiledUsed;out.commands=commands;out.finalMask=mask;compiledUsed=used;return true;
+}
+}
+void compiledListStatistics(std::uint64_t& hits,std::uint64_t& compiles,std::uint64_t& interpreted,std::uint64_t& mismatches){
+    hits=compiledHits;compiles=compiledCompiles;interpreted=compiledInterpreted;mismatches=compiledMismatches;
+}
+void setCompiledLists(bool enabled,bool verify){
+    compiledEnabled=enabled;compiledVerify=verify;compiledUsed=0;for(auto& entry:compiledLists)entry={};
+}
+void CommandProcessor::runCompiled(const u32* w,unsigned count){
+    const u32* const end=w+count;
+    while(w<end){
+        const u32 head=*w++,reg=(head>>8)&0xff;
+        switch(head&0xff){
+        case opBp:{
+            const u32 merged=(regs.bp[reg]&w[1])|w[0];w+=2;
+            if(!regs.bpValid[reg]||regs.bp[reg]!=merged){++regs.stateEpoch;regs.bp[reg]=merged;regs.bpValid.set(reg);}
+            break;}
+        case opBpSpecial:regs.bpMask=w[1];applyBp(u8(reg),w[0]);w+=2;break;
+        case opCp:applyCp(u8(reg),*w++,0);break;
+        case opXf:{
+            const u32 n=head>>8,address=*w++;bool changed=false;
+            for(u32 i=0;i<n;++i){
+                const u32 at=address+i,value=w[i];
+                if(epochWord(at)&&(!regs.xfValid[at]||regs.xf[at]!=value))changed=true;
+                regs.xf[at]=value;regs.xfValid.set(at);
+            }
+            w+=n;
+            if(changed){++regs.stateEpoch;if(address<=0x1008&&address+n>0x1008)++regs.vertexSetupEpoch;}
+            updateMatrixIndices(address,n);
+            break;}
+        case opInvalidate:++regs.vertexCacheEpoch;break;
+        default:return;
+        }
+    }
+}
+bool CommandProcessor::executeList(std::span<const u8> bytes) {
+    // A pending BP mask from outside the list is runtime state the compiled
+    // form does not model.
+    if(!compiledEnabled||bytes.size()<16||bytes.size()>65536||active||failure!=CommandError::none||regs.bpMask!=0xffffff)
+        return execute(bytes);
+    // Lists are 32-byte aligned and sized: take the well-mixed high bits.
+    const unsigned home=unsigned((((std::uint32_t(reinterpret_cast<std::uintptr_t>(bytes.data()))>>5)^(std::uint32_t(bytes.size())<<11))*2654435761u)>>22)%compiledCapacity;
+    CompiledList* entry=nullptr;
+    for(unsigned n=0;n<compiledProbe&&!entry;++n){
+        auto& candidate=compiledLists[(home+n)%compiledCapacity];
+        if(candidate.state&&candidate.data==bytes.data()&&candidate.size==bytes.size())entry=&candidate;
+    }
+    if(entry&&entry->state>=2){
+        // Re-examine an interpreter-only address now and then: its storage may
+        // hold a different list by now.
+        if(++entry->heat==255)entry->state=0;
+        ++compiledInterpreted;return execute(bytes);
+    }
+    u32 sumA,sumB;listChecksum(bytes,sumA,sumB);
+    if(entry&&entry->state==1&&entry->sumA==sumA&&entry->sumB==sumB){
+        if(entry->heat)--entry->heat;
+        ++compiledHits;
+        if(compiledVerify){
+            static CommandRegisters before,compiled;
+            before=regs;const auto savedStats=stats;
+            runCompiled(compiledPool.data()+entry->first,entry->words);regs.bpMask=entry->finalMask;
+            compiled=regs;regs=before;stats=savedStats;
+            const bool okay=execute(bytes);
+            if(!okay||std::memcmp(&compiled,&regs,sizeof(regs))){++compiledMismatches;entry->state=3;}
+            return okay;
+        }
+        dusk::native::GxProfileScope profile(dusk::native::GxProfilePart::stream);
+        runCompiled(compiledPool.data()+entry->first,entry->words);
+        regs.bpMask=entry->finalMask;stats.commands+=entry->commands;
+        return true;
+    }
+    if(entry){
+        // A list rewritten almost every call (animated material constants)
+        // costs a checksum and a compilation each time: leave it interpreted.
+        entry->heat=u8(std::min<unsigned>(entry->heat+4u,255u));
+        if(entry->heat>=32){entry->state=3;entry->heat=0;++compiledInterpreted;return execute(bytes);}
+    }else{
+        for(unsigned n=0;n<compiledProbe&&!entry;++n){auto& candidate=compiledLists[(home+n)%compiledCapacity];if(!candidate.state)entry=&candidate;}
+        static unsigned victim{};
+        if(!entry)entry=&compiledLists[(home+(victim++%compiledProbe))%compiledCapacity];
+        *entry={};
+    }
+    if(bytes.size()>compiledPoolWords-compiledUsed){
+        // Pool exhausted: forget every list; each one compiles again on its next call.
+        const u8 heat=entry->heat;
+        compiledUsed=0;for(auto& item:compiledLists)item={};
+        entry->heat=heat;
+    }
+    // A rewritten list usually keeps its structure: its new words then take
+    // the place of the old ones instead of new pool space.
+    const bool had=entry->state==1;const unsigned oldFirst=entry->first,oldWords=entry->words,mark=compiledUsed;
+    entry->data=bytes.data();entry->size=u32(bytes.size());entry->sumA=sumA;entry->sumB=sumB;
+    if(compileList(bytes,*entry)){
+        entry->state=1;++compiledCompiles;
+        if(had&&entry->words==oldWords&&oldFirst+oldWords<=mark){
+            std::memcpy(compiledPool.data()+oldFirst,compiledPool.data()+entry->first,oldWords*sizeof(u32));
+            entry->first=oldFirst;compiledUsed=mark;
+        }
+    }else entry->state=2;
+    ++compiledInterpreted;
+    return execute(bytes);
 }
 bool CommandProcessor::frame(std::span<const u8> prefix,size_t& required) {
     required=1;

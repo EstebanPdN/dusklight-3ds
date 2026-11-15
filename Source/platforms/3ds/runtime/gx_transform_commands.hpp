@@ -16,11 +16,12 @@ bool commandAlpha(unsigned compare0,std::uint8_t ref0,unsigned op,unsigned compa
 bool commandCull(unsigned mode);
 bool commandZLocation(unsigned beforeTexture);
 bool commandLineWidth(std::uint8_t width,unsigned offsets);
-// Unported typed entry points must not silently mutate the old J2D state while
-// a command stream is selected. The existing diagnostic uses no command stream.
-void requireImmediateMode(const char* call);
 // Typed resource objects are shared by both draw paths. Finish earlier stream
 // bytes before changing object/map lifetimes; this does not emulate BP pointers.
 void finishCommandBoundary(const char* call);
 void commandTextureBinding(unsigned unit);
+// Game policy (see CommandDrawContext::skipUnsupportedDraws): a texture object
+// whose image this port never retained leaves its unit without an image, so
+// the draws that sample it are left out and counted instead of ending the game.
+inline bool commandSkipUnavailableTextures{};
 }

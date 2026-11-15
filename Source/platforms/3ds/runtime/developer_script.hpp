@@ -15,6 +15,10 @@ struct FramebufferDepthQuery;
 struct ScriptedInput {std::uint64_t first{},last{};std::uint32_t keys{};bool circle{};std::int16_t x{},y{};};
 bool parseInputScriptLine(std::string_view line,ScriptedInput& out);
 void loadDeveloperScripts();
+// True for developer runs (any script file, a profiling switch, or an explicit
+// sdmc:/3ds/dusklight/diagnostics.txt). Ordinary play keeps detailed profiling,
+// the periodic report and per-frame SD writes off: they hitch on hardware.
+bool developerDiagnosticsRequested();
 // calibrate.txt: report guest ticks for loops of known instruction counts.
 void runDeveloperCalibration();
 void setDeveloperFrame(std::uint64_t frame);

@@ -33,4 +33,18 @@ bool reduceAlpha(const AlphaCompare& input, AlphaPlan& output);
 // Exact OR of two disjoint low/high tails, for ordered per-triangle passes.
 // Neither pass can accept the same fragment; bounded middle intervals reject.
 bool splitAlphaUnion(const AlphaCompare&, std::array<AlphaPlan,2>&);
+// Degraded single-test approximation, admitted only for the two-pass
+// translucent-edge idiom: a lower bound AND an upper bound that excludes
+// nothing but fully opaque texels (alpha < 255, alpha <= 254). The pass is then
+// drawn with its lower bound alone, so it also covers the opaque texels its
+// companion pass draws. Interior bands (for example XNOR(>=185, <=100)) and
+// every other pair stay unsupported: one test cannot stand in for them.
+inline bool relaxAlpha(const AlphaCompare& a,AlphaPlan& out){
+    if(a.op!=0)return false;
+    const auto lower=[](unsigned c){return c==4||c==6;}; // GREATER, GEQUAL
+    const auto onlyOpaqueExcluded=[](unsigned c,unsigned r){return (c==1&&r==255)||(c==3&&r==254);};
+    if(lower(a.compare0)&&onlyOpaqueExcluded(a.compare1,a.reference1)){out={a.compare0,a.reference0};return true;}
+    if(lower(a.compare1)&&onlyOpaqueExcluded(a.compare0,a.reference0)){out={a.compare1,a.reference1};return true;}
+    return false;
+}
 }
