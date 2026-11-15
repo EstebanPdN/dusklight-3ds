@@ -1,12 +1,4 @@
-#if !defined(DUSK_TARGET_3DS) || !DUSK_GROUND_CREATE_PROBE
 #define GCP_GATE(value) value
-#endif
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-#include "../../../platforms/3ds/runtime/ground_create_probe_hooks.hpp"
-#endif
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-#include "../../../platforms/3ds/runtime/scene_create_probe_hooks.hpp"
-#endif
 /**
  * d_a_alink.cpp
  * Player (Link) Actor
@@ -4989,10 +4981,6 @@ int daAlink_c::create() {
         attention_info.flags = -1;
 
         if (!dComIfGp_getEventManager().dataLoaded()) {
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-            if (dusk::native::sceneProbeEnabled())
-                dusk::native::sceneProbeDetail(id, dusk::native::SceneProbeKind::link, 10, 0, 0);
-#endif
             return cPhs_INIT_e;
         }
 
@@ -5000,10 +4988,6 @@ int daAlink_c::create() {
         setOriginalHeap(&mpArcHeap, 0xA2800);
         JKRHEAP_NAME(mpArcHeap, "Alink ArcHeap");
         if (dComIfG_resLoad(&mPhaseReq, mArcName, mpArcHeap) != cPhs_COMPLEATE_e) {
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-            if (dusk::native::sceneProbeEnabled())
-                dusk::native::sceneProbeDetail(id, dusk::native::SceneProbeKind::link, 11, mPhaseReq.id, 0);
-#endif
             return cPhs_INIT_e;
         }
 
@@ -5019,10 +5003,6 @@ int daAlink_c::create() {
         JKRHEAP_NAME(mpShieldArcHeap, "Alink ShieldArcHeap");
         if (dComIfG_resLoad(&mShieldPhaseReq, mShieldArcName, mpShieldArcHeap) != cPhs_COMPLEATE_e)
         {
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-            if (dusk::native::sceneProbeEnabled())
-                dusk::native::sceneProbeDetail(id, dusk::native::SceneProbeKind::link, 12, mShieldPhaseReq.id, 0);
-#endif
             return cPhs_INIT_e;
         }
 
@@ -5051,27 +5031,9 @@ int daAlink_c::create() {
         }
     }
 
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-    auto groundScope = dusk::native::groundLinkBefore(id, fopAcM_GetParam(this), startMode, startPoint, current.pos, old.pos, mLinkAcch);
-#endif
     mLinkAcch.CrrPos(dComIfG_Bgsp());
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-    dusk::native::groundLinkAfter(groundScope, current.pos, old.pos, mLinkAcch);
-#endif
     void* portalActor = NULL;
 
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-    if (dusk::native::sceneProbeGate(id, 1, (GCP_GATE(mLinkAcch.GetGroundH() == -G_CM3D_F_INF)), startMode, startPoint)
-        || dusk::native::sceneProbeGate(id, 2, ((startMode == 14 && !dComIfG_Bgsp().ChkMoveBG(mLinkAcch.m_gnd))), startMode, startPoint)
-        || dusk::native::sceneProbeGate(id, 3, ((startPoint == -4 && !(portalActor = fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchPortal, &current.pos)))), startMode, startPoint)
-        || dusk::native::sceneProbeGate(id, 4, ((mRideActorID != fpcM_ERROR_PROCESS_ID_e && !fopAcM_SearchByID(mRideActorID))), startMode, startPoint)
-        || dusk::native::sceneProbeGate(id, 5, ((checkCanoeStart() && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchCanoe, NULL))), startMode, startPoint)
-        || dusk::native::sceneProbeGate(id, 6, ((checkBoarStart() && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchBoar, NULL))), startMode, startPoint)
-        || dusk::native::sceneProbeGate(id, 7, ((startMode == 13 && (!mLinkAcch.ChkWaterHit() || mLinkAcch.m_wtr.GetHeight() < current.pos.y))), startMode, startPoint)
-        || dusk::native::sceneProbeGate(id, 8, (((checkCarryStartLightBallA() || checkCarryStartLightBallB()) && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchLightBall, NULL))), startMode, startPoint)
-        || dusk::native::sceneProbeGate(id, 9, ((isHorseStart && dComIfGp_getHorseActor() == NULL)), startMode, startPoint)
-        )
-#else
     if (GCP_GATE(mLinkAcch.GetGroundH() == -G_CM3D_F_INF)
         || (startMode == 14 && !dComIfG_Bgsp().ChkMoveBG(mLinkAcch.m_gnd))
         || (startPoint == -4 && !(portalActor = fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchPortal, &current.pos)))
@@ -5082,7 +5044,6 @@ int daAlink_c::create() {
         || ((checkCarryStartLightBallA() || checkCarryStartLightBallB()) && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchLightBall, NULL))
         || (isHorseStart && dComIfGp_getHorseActor() == NULL)
         )
-#endif
     {
         return cPhs_INIT_e;
     }
@@ -5091,10 +5052,6 @@ int daAlink_c::create() {
         dComIfGp_getEvent()->setPtD(portalActor);
     }
 
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-    if (dusk::native::sceneProbeEnabled())
-        dusk::native::sceneProbeDetail(id, dusk::native::SceneProbeKind::link, 14, startMode, startPoint);
-#endif
     bgWaitFlg = FALSE;
 
     dComIfGs_setRestartRoom(current.pos, shape_angle.y, getStartRoomNo());

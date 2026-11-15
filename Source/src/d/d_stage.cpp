@@ -1,6 +1,3 @@
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-#include "../../platforms/3ds/runtime/scene_create_probe_hooks.hpp"
-#endif
 #include "d/dolzel.h" // IWYU pragma: keep
 
 #include "JSystem/JKernel/JKRAramArchive.h"
@@ -2831,14 +2828,7 @@ static void layerActorLoader(void* i_data, dStage_dt_c* i_stage, int param_2) {
 #endif
     };
 
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-    const int probe_layer = dComIfG_play_c::getLayerNo(0);
-    if (dusk::native::sceneProbeEnabled())
-        dusk::native::sceneProbeLayer(param_2, probe_layer);
-    dStage_setLayerTagName(l_layerFuncTable, 4, probe_layer);
-#else
     dStage_setLayerTagName(l_layerFuncTable, 4, dComIfG_play_c::getLayerNo(0));
-#endif
     dStage_dt_c_decode(i_data, i_stage, l_layerFuncTable, ARRAY_SIZEU(l_layerFuncTable));
 }
 

@@ -1,6 +1,3 @@
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-#include "../../platforms/3ds/runtime/scene_create_probe_hooks.hpp"
-#endif
 /**
  * f_pc_stdcreate_req.cpp
  * Framework - Process Standard Create Request
@@ -104,10 +101,6 @@ int fpcSCtRq_phase_IsComplete(standard_create_request_class* i_request) {
     process_node_class* procNode =
         (process_node_class*)((standard_create_request_class*)i_request)->base.process;
     if (fpcBs_Is_JustOfType(g_fpcNd_type, procNode->base.subtype) == TRUE) {
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-        if (dusk::native::sceneProbeEnabled())
-            dusk::native::sceneProbeChildren(i_request->base.id, procNode->layer.counts.create_count);
-#endif
         if (fpcLy_IsCreatingMesg(&procNode->layer) == TRUE) {
             return cPhs_INIT_e;
         }
@@ -133,16 +126,7 @@ int fpcSCtRq_phase_Done(standard_create_request_class* i_request) {
 }
 
 int fpcSCtRq_Handler(standard_create_request_class* i_request) {
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-    const int probe_phase = i_request->phase_request.id;
-#endif
     int phase_state = cPhs_Do(&i_request->phase_request, i_request);
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-    if (dusk::native::sceneProbeEnabled())
-        dusk::native::sceneProbePhase(i_request->base.id,
-            dusk::native::sceneProbeIdentity(i_request->base, i_request->process_name),
-            probe_phase, phase_state);
-#endif
 
     switch (phase_state) {
     case cPhs_NEXT_e:
@@ -202,9 +186,5 @@ fpc_ProcID fpcSCtRq_Request(layer_class* i_layer, s16 i_procName, stdCreateFunc 
     request->unk_0x60 = 60;
 #endif
 
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-    if (dusk::native::sceneProbeEnabled())
-        dusk::native::sceneProbeStart(dusk::native::sceneProbeIdentity(request->base, i_procName));
-#endif
     return request->base.id;
 }

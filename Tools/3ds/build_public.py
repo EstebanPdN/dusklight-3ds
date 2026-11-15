@@ -34,8 +34,7 @@ def main():
         'DUSK_GAMEPLAY_LINK_GATE', 'DUSK_GAME_STARTUP')]
     options += [f'-D{key}=OFF' for key in (
         'DUSK_COMMAND_PROBE_STARTUP', 'DUSK_SCENE_FOG_INSPECTION',
-        'DUSK_SCENE_MATERIAL_INSPECTION', 'DUSK_BG_BUDGET_EXPERIMENT_76',
-        'DUSK_SCENE_CREATE_PROBE', 'DUSK_GROUND_CREATE_PROBE')]
+        'DUSK_SCENE_MATERIAL_INSPECTION')]
     options += ['-DDUSK_SCENE_TEXTURES=ON', '-DDUSK_DIAGNOSTIC_EXIT_FRAMES=0',
                 '-DDUSK_PROFILE_LINK_SELECTION:FILEPATH=']
     command = ['cmake', '-S', str(source), '-B', str(build),

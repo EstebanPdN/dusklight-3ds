@@ -1,14 +1,5 @@
 #include <cstdlib>
-#if DUSK_BG_BUDGET_EXPERIMENT_76
-#include "bg_budget_experiment.hpp"
-#endif
 #include "copy_lifecycle_probe.hpp"
-#if DUSK_GROUND_CREATE_PROBE
-#include "ground_create_probe.hpp"
-#endif
-#if DUSK_SCENE_CREATE_PROBE
-#include "scene_create_probe.hpp"
-#endif
 #include "cache_maintenance_profile.hpp"
 #include "game_startup.hpp"
 #if defined(DUSK_PICA_GAME_DRAW)
@@ -737,15 +728,6 @@ int runOriginalGame(){
     if(!PADInit())fatal("Original PAD services are unavailable");
     mDoCPd_c::create();
     mDoDvdThd_callback_c::create((mDoDvdThd_callback_func)LOAD_COPYDATE,nullptr);
-#if DUSK_SCENE_CREATE_PROBE
-    initializeSceneProbeFromSd();
-#endif
-#if DUSK_GROUND_CREATE_PROBE
-    initializeGroundProbeFromSd();
-#endif
-#if DUSK_BG_BUDGET_EXPERIMENT_76
-    dusk::bg76::initializeFromSd();
-#endif
     fapGm_Create();fopAcM_initManager();cDyl_InitAsync();
     g_mDoAud_audioHeap=JKRCreateSolidHeap(0x14D800*2,JKRGetCurrentHeap(),false);
     if(!g_mDoAud_audioHeap)fatal("Original audio heap allocation failed");
@@ -867,15 +849,6 @@ int runOriginalGame(){
             // comparisons. All ordinary frames keep concise aggregate profiles.
             gxVertexLayoutTracing=frame==359;
             drawContext.cpuVertexReasons={};
-#if DUSK_SCENE_CREATE_PROBE
-            sceneProbeBegin(static_cast<std::uint32_t>(frame+1));
-#endif
-#if DUSK_GROUND_CREATE_PROBE
-            groundProbeBegin(static_cast<std::uint32_t>(frame+1));
-#endif
-#if DUSK_BG_BUDGET_EXPERIMENT_76
-            dusk::bg76::setFrame(static_cast<std::uint32_t>(frame+1));
-#endif
             std::uint64_t audioTicks=0;
             for(unsigned tick=0;tick<ticks;++tick){
                 duskNativeTickPaint=tick==0;duskNativeTickDraw=drawEveryTick||tick+1==ticks;
@@ -890,15 +863,6 @@ int runOriginalGame(){
             duskNativeTickPaint=duskNativeTickDraw=true;
             // The next paint shows this picture: it follows the previous paint by these ticks.
             previousTicks=ticks;
-#if DUSK_GROUND_CREATE_PROBE
-            groundProbeEnd();
-#endif
-#if DUSK_SCENE_CREATE_PROBE
-            sceneProbeEnd();
-#endif
-#if DUSK_BG_BUDGET_EXPERIMENT_76
-            dusk::bg76::flush();
-#endif
             const auto executionTicks=gxProfileTick()-executionStart;
             if(!stream.finish())fatal("Original game left an incomplete GX command");
             if(!endGxGeometryFrame())fatal(gxGeometryFailure());
@@ -1174,12 +1138,6 @@ int runOriginalGame(){
         if(!dusk::pica::game::endFrame())fatal(dusk::pica::game::failure());
         if(!platformEndGpuFrame(GX_CMDLIST_FLUSH))fatal("Native reset GPU completion unavailable");
     }
-#endif
-#if DUSK_SCENE_CREATE_PROBE
-    sceneProbeClose();
-#endif
-#if DUSK_GROUND_CREATE_PROBE
-    groundProbeClose();
 #endif
     if(drawContext.diagnosticRasterCarrier)
         OSReport("Native raster carrier totals: attempts=%llu submitted=%llu rejected=%llu first=%s vertex=%lu\n",

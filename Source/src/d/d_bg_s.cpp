@@ -1,6 +1,3 @@
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-#include "../../platforms/3ds/runtime/ground_create_probe_hooks.hpp"
-#endif
 /**
  * d_bg_s.cpp
  * Background (Map) Collision main handler
@@ -221,14 +218,8 @@ bool cBgS::Release(dBgW_Base* pbgw) {
         }
         #endif
 
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-        const u32 groundReleaseActor = m_chk_element[id].m_actor_id;
-#endif
         m_chk_element[id].Release();
         pbgw->Release();
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-        dusk::native::groundReleased(pbgw, id, groundReleaseActor);
-#endif
 
     } else {
         #if DEBUG
@@ -313,43 +304,13 @@ f32 cBgS::GroundCross(cBgS_GndChk* pgndchk) {
     pgndchk->ClearPi();
     pgndchk->PreCheck();
 
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-    const bool groundObserve = dusk::native::groundDispatchBegin(pgndchk);
-#endif
     cBgS_ChkElm* elm = m_chk_element;
     for (int i = 0; i < 0x100; i++) {
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-        if (groundObserve) {
-            if (elm->ChkUsed()) {
-                dusk::native::groundDispatchCount(pgndchk, 0);
-                if (elm->m_bgw_base_ptr->ChkNotReady()) {
-                    dusk::native::groundDispatchCount(pgndchk, 1);
-                } else if (pgndchk->ChkSameActorPid(elm->m_actor_id)) {
-                    dusk::native::groundDispatchCount(pgndchk, 2);
-                } else {
-                    const float groundBeforeY = pgndchk->GetNowY();
-                    bool groundHit = elm->m_bgw_base_ptr->GroundCross(pgndchk);
-                    dusk::native::groundDispatch(pgndchk, i, elm->m_actor_id, elm->m_bgw_base_ptr,
-                        groundBeforeY, pgndchk->GetNowY(), groundHit);
-                    if (groundHit) {
-                        pgndchk->SetActorInfo(i, elm->m_bgw_base_ptr, elm->m_actor_id);
-                    }
-                }
-            }
-        } else {
         if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady() &&
             !pgndchk->ChkSameActorPid(elm->m_actor_id) && elm->m_bgw_base_ptr->GroundCross(pgndchk))
         {
             pgndchk->SetActorInfo(i, elm->m_bgw_base_ptr, elm->m_actor_id);
         }
-        }
-#else
-        if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady() &&
-            !pgndchk->ChkSameActorPid(elm->m_actor_id) && elm->m_bgw_base_ptr->GroundCross(pgndchk))
-        {
-            pgndchk->SetActorInfo(i, elm->m_bgw_base_ptr, elm->m_actor_id);
-        }
-#endif
         elm++;
     }
 

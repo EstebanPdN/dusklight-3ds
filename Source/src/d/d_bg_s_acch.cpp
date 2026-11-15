@@ -1,6 +1,3 @@
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-#include "../../platforms/3ds/runtime/ground_create_probe_hooks.hpp"
-#endif
 /**
  * d_bg_s_acch.cpp
  * BG collision Actor Check
@@ -161,18 +158,7 @@ void dBgS_Acch::GroundCheck(dBgS& bgs) {
 
         field_0x94 = 0.0f;
         m_gnd.SetPos(&grnd_pos);
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-        if (dusk::native::groundQuerySelected(static_cast<cBgS_GndChk*>(&m_gnd)))
-        dusk::native::groundQueryBefore(static_cast<cBgS_GndChk*>(&m_gnd), grnd_pos.x, grnd_pos.y, grnd_pos.z,
-            m_flags, field_0x90, field_0x94, m_gnd_chk_offset,
-            m_gnd.mSameActorChk, m_gnd.mFlags,
-            dusk::native::groundPassMask(m_gnd));
-#endif
         m_ground_h = bgs.GroundCross(&m_gnd);
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-        if (dusk::native::groundQuerySelected(static_cast<cBgS_GndChk*>(&m_gnd)))
-        dusk::native::groundQueryAfter(static_cast<cBgS_GndChk*>(&m_gnd), m_ground_h, m_gnd.GetPolyIndex(), m_gnd.GetBgIndex());
-#endif
 
 
         if (m_ground_h != -G_CM3D_F_INF) {

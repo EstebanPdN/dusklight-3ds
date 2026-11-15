@@ -153,29 +153,6 @@ target_compile_options(dusk_native_kernel PRIVATE
     -Wno-multichar -Wno-deprecated-declarations)
 
 
-# Private BG instance admission experiment; no budget defaults.
-option(DUSK_BG_BUDGET_EXPERIMENT_76 "Experimental bounded BG instance admission" OFF)
-target_compile_definitions(dusk_native_kernel PRIVATE
-    DUSK_BG_BUDGET_EXPERIMENT_76=$<BOOL:${DUSK_BG_BUDGET_EXPERIMENT_76}>)
-if(DUSK_BG_BUDGET_EXPERIMENT_76)
-    target_sources(dusk_native_kernel PRIVATE
-        runtime/bg_budget_experiment.cpp runtime/bg_budget_experiment_sd.cpp)
-endif()
-option(DUSK_SCENE_CREATE_PROBE "Private bounded scene creation probe" OFF)
-target_compile_definitions(dusk_native_kernel PRIVATE
-    DUSK_SCENE_CREATE_PROBE=$<BOOL:${DUSK_SCENE_CREATE_PROBE}>)
-if(DUSK_SCENE_CREATE_PROBE)
-    target_sources(dusk_native_kernel PRIVATE
-        runtime/scene_create_probe.cpp runtime/scene_create_probe_sd.cpp)
-endif()
-
-option(DUSK_GROUND_CREATE_PROBE "Private bounded ground creation probe" OFF)
-target_compile_definitions(dusk_native_kernel PRIVATE
-    DUSK_GROUND_CREATE_PROBE=$<BOOL:${DUSK_GROUND_CREATE_PROBE}>)
-if(DUSK_GROUND_CREATE_PROBE)
-    target_sources(dusk_native_kernel PRIVATE
-        runtime/ground_create_probe.cpp runtime/ground_create_probe_sd.cpp)
-endif()
 
 add_library(dusk_native_math OBJECT
     "${DUSK_ROOT}/extern/aurora/lib/dolphin/mtx/mtx.c"

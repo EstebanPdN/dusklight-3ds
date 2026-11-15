@@ -1,6 +1,3 @@
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-#include "../../platforms/3ds/runtime/scene_create_probe_hooks.hpp"
-#endif
 /**
  * f_op_actor.cpp
  * Actor base process class
@@ -546,10 +543,6 @@ static int fopAc_Create(void* i_this) {
     print_error_check_c error_check(actor, print_error_check_c::sCREATE);
     #endif
 
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-    if (dusk::native::sceneProbeEnabled())
-        dusk::native::sceneProbeActor(actor->id, actor->current.roomNo, actor->parentActorID);
-#endif
     ret = fpcMtd_Create((process_method_class*)actor->sub_method, actor);
 
     #if DEBUG

@@ -29,9 +29,6 @@
 #include "f_op/f_op_scene_mng.h"
 #include "m_Do/m_Do_lib.h"
 #include <cstring>
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-#include "../../platforms/3ds/runtime/scene_create_probe_hooks.hpp"
-#endif
 
 #define MAKE_ITEM_PARAMS(itemNo, itemBitNo, param_2, param_3)                                      \
     ((itemNo & 0xFF) << 0x0 | (itemBitNo & 0xFF) << 0x8 | (param_2 & 0xFF) << 0x10 | (param_3 & 0xF) << 0x18)
@@ -386,10 +383,6 @@ s32 fopAcM_callCallback(fopAc_ac_c* i_actor, heapCallbackFunc i_callback, JKRHea
     JKRHeap* oldHeap = mDoExt_setCurrentHeap(i_heap);
     s32 ret = i_callback(i_actor);
     mDoExt_setCurrentHeap(oldHeap);
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-    if (dusk::native::sceneProbeEnabled())
-        dusk::native::sceneProbeDetail(i_actor->id, dusk::native::SceneProbeKind::heapCallback, ret, 0, 0);
-#endif
     return ret;
 }
 
@@ -760,11 +753,6 @@ u8 var_r30 = fopAcM::HeapAdjustEntry;
     }
 #endif
 
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-    if (dusk::native::sceneProbeEnabled())
-        dusk::native::sceneProbeDetail(i_actor->id, dusk::native::SceneProbeKind::heapFinal,
-            result, static_cast<int>(i_size), static_cast<int>(size));
-#endif
     return result;
 }
 
