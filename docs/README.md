@@ -9,6 +9,7 @@ The guides below describe the New3DS adaptation, not a supported consumer releas
 | --- | --- |
 | Understand what works and what is pending | [Compatibility](COMPATIBILITY.md), [Verification status](STATUS.md) |
 | Work on the new PICA200 renderer | [Native renderer and ten-step roadmap](NATIVE_RENDERER.md), [Architecture decision](decisions/0001-native-renderer.md) |
+| Understand the SDK enum boundary and GPU read-backs | [ADR 0002](decisions/0002-int-sized-enums.md), [ADR 0003](decisions/0003-cpu-readbacks-and-transfer-stops.md) |
 | Build a clean checkout | [Building](BUILDING.md), [Configuration](CONFIGURATION.md) |
 | Find the owner of a subsystem | [Repository map](REPOSITORY.md), [Architecture](ARCHITECTURE.md) |
 | Prepare your own local runtime inputs | [Game data and controls](GAME_DATA.md) |

@@ -30,9 +30,6 @@ are passed last and override an individual profile setting.
 | `DUSK_COMMAND_PROBE_STARTUP` | OFF | Start the synthetic command/GPU diagnostic. |
 | `DUSK_SCENE_FOG_INSPECTION` | OFF | Inspection path with fog omitted; changes the rendered workload. |
 | `DUSK_SCENE_MATERIAL_INSPECTION` | OFF | Inspection path omitting unsupported materials; not normal gameplay. |
-| `DUSK_BG_BUDGET_EXPERIMENT_76` | OFF | Experimental bounded background-instance admission. |
-| `DUSK_SCENE_CREATE_PROBE` | OFF | Instrument scene creation. |
-| `DUSK_GROUND_CREATE_PROBE` | OFF | Instrument ground creation. |
 | `DUSK_PROFILE_LINK_SELECTION` | empty | A bounded developer profile list; incompatible with full game startup. |
 | `DUSK_DIAGNOSTIC_EXIT_FRAMES` | 0 | Optional diagnostic exit bound. |
 | `DUSK_DUMP_BUILD_ID` | unsealed integration label | Fingerprint embedded in diagnostic metadata for game startup. |
@@ -40,14 +37,12 @@ are passed last and override an individual profile setting.
 
 The `game` helper profile enables scene startup, environment startup, the complete
 gameplay link gate and game startup. `diagnostic` explicitly disables those four
-paths. Both profiles disable CMake inspection/creation/background experiments
-unless overridden. Neither profile creates a tag, release or network upload.
+paths. Both profiles disable the CMake inspection paths unless overridden.
+Neither profile creates a tag, release or network upload.
 
-Some runtime experiments are controlled by local SD configuration rather than
-CMake. Do not assume that selecting the game build enables every experimental
-conversion or heap partition. The implementation and historical research tools
-remain the detailed reference for those developer-only controls. They are not
-a supported end-user settings interface.
+Developer controls that change runtime behavior for comparison are empty files
+in `/3ds/DuskLight/` on the SD card; [Diagnostics](DIAGNOSTICS.md#sd-switches)
+lists them. They are not a supported end-user settings interface.
 
 The full startup gate refuses a partial original-profile selection. This prevents
 a diagnostic link configuration from masquerading as complete engine linkage.

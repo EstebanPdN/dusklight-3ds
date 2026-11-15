@@ -11,6 +11,7 @@ arguments and prerequisites before running historical workflows.
 | [analyze_depth_audit.py](../Tools/3ds/analyze_depth_audit.py) | Verify private PICA depth snapshots, queued queries, and previous-frame retention. |
 | [analyze_gx_trace.py](../Tools/3ds/analyze_gx_trace.py) | Validate private metadata-only GX captures and report workload, never 3DS FPS. |
 | [analyze_texture_dump.py](../Tools/3ds/analyze_texture_dump.py) | Analyze every registered CPU GX image in a private DSKTEX01 snapshot. |
+| [analyze_tour.py](../Tools/3ds/analyze_tour.py) | Summarize an automatic-test folder (`/3ds/DuskLight/tour/NNN`) per zone and phase. |
 | [arm32_inventory.py](../Tools/3ds/arm32_inventory.py) | Compile every bootstrap TU; retain failures, dependencies and categorized evidence. |
 | [audit_cmpr_half_candidates.py](../Tools/3ds/audit_cmpr_half_candidates.py) | Bounded private GX14 census; metadata only, never approves startup sources. |
 | [audit_scenario_coverage.py](../Tools/3ds/audit_scenario_coverage.py) | Separate executed stage probes, visible scenes, and verified story coverage. |
@@ -21,6 +22,8 @@ arguments and prerequisites before running historical workflows.
 | [build_color_lookup_probe.py](../Tools/3ds/build_color_lookup_probe.py) | Build the asset-free dual-raster RGBA GPU probe; execution and completed pixel metrics are separate. |
 | [build_public.py](../Tools/3ds/build_public.py) | Build the existing native target locally; never tag, upload or publish. |
 | [capture_to_png.py](../Tools/3ds/capture_to_png.py) | Convert native DSKCAP01 framebuffer captures to PNG in LCD orientation. |
+| [check_ctru_abi.py](../Tools/3ds/check_ctru_abi.py) | Build gate: fail when a platform source reads an SDK member or inline across the enum-size boundary. |
+| [check_pica_shader.py](../Tools/3ds/check_pica_shader.py) | Build gate: every output component of every PICA vertex program is written exactly once. |
 | [check_publication.py](../Tools/3ds/check_publication.py) | Check tracked public content, maintained guide links and open firmware integrity. |
 | [check_svc_access.py](../Tools/3ds/check_svc_access.py) | Fail when the ELF uses an SVC that the CXI exheader does not grant. |
 | [compare_native_profiles.py](../Tools/3ds/compare_native_profiles.py) | Compare sparse native guest profiles; these are not hardware FPS results. |
@@ -31,6 +34,8 @@ arguments and prerequisites before running historical workflows.
 | [full_game_coverage.py](../Tools/3ds/full_game_coverage.py) | Private metadata inventory and conservative full-game evidence ledger. |
 | [gdb_sampler.py](../Tools/3ds/gdb_sampler.py) | Bounded guest thread-context observations; Azahar RSP is not a CPU profiler. |
 | [generate_profile_link_probe.py](../Tools/3ds/generate_profile_link_probe.py) | Select original profile pointers for a bounded LINK diagnostic, not gameplay. |
+| [generate_zone_table.py](../Tools/3ds/generate_zone_table.py) | Generate the developer-console zone table (`runtime/zone_table.inc`) from start-point metadata. |
+| [gpu_hang_report.py](../Tools/3ds/gpu_hang_report.py) | Report a console GPU guard hang record: job, shadow registers, uniforms, last GPU jobs and draw data. |
 | [inspect_first_room.py](../Tools/3ds/inspect_first_room.py) | Read original Ordon actor-name metadata for a private bounded LINK probe. |
 | [inspect_startup_textures.py](../Tools/3ds/inspect_startup_textures.py) | Bounded private startup texture metadata inventory; no asset payload output. |
 | [inventory_game_core.py](../Tools/3ds/inventory_game_core.py) | Inventory ARM32 game objects without modifying or linking the native target. |
@@ -39,6 +44,8 @@ arguments and prerequisites before running historical workflows.
 | [make_azahar_input_fixture.py](../Tools/3ds/make_azahar_input_fixture.py) | Modify only button fields in a real local CTM recording; preserve poll order. |
 | [package_diagnostic.py](../Tools/3ds/package_diagnostic.py) | Build a local diagnostic CIA from native code and owner-supplied artwork only. |
 | [package_startup_candidate.py](../Tools/3ds/package_startup_candidate.py) | Package an immutable local original-startup CXI; no ROMFS or game data. |
+| [pica_list_decode.py](../Tools/3ds/pica_list_decode.py) | Decode a saved PICA command list into named register writes. |
+| [pica_shader_disasm.py](../Tools/3ds/pica_shader_disasm.py) | Disassemble a Picasso `.shbin` vertex program with resolved operands and outputs. |
 | [platform_audit.py](../Tools/3ds/platform_audit.py) | Fingerprint exact conditional blocks; carry forward only matching manual reviews. |
 | [probe_environment_link.py](../Tools/3ds/probe_environment_link.py) | Resolve retained original environment dependencies; never claim runtime from this probe. |
 | [probe_j3d_link.py](../Tools/3ds/probe_j3d_link.py) | Inspect retained original model dependencies; not a final executable link. |

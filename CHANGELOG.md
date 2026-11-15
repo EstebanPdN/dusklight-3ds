@@ -2,6 +2,52 @@
 
 This file records public source milestones. It does not announce a binary release.
 
+## Unreleased — console test fixes and source cleanup
+
+Fixed
+- Cutscene cameras and other file-backed enums: the tree is built with
+  int-sized enums; SDK structures whose layout depends on it are read through
+  `runtime/ctru_abi.hpp` and checked at build time.
+- First gameplay picture on the console: render targets are read back by the
+  CPU from VRAM instead of the transfer engine.
+- START+SELECT from the title no longer clears the title scene's memory pools.
+- Saves on the SD card: the container is replaced as a whole file; the empty
+  save left by earlier builds is removed.
+- The L+R+A dump no longer reads GPU hardware registers (that read froze the
+  console).
+- Black presentation between scenes no longer uses an SDK inline that reads
+  render-target fields at the wrong offsets.
+- Host test runners: the substitutes and fixtures of eight research runners
+  follow the current runtime again (six-attribute compact vertices, the
+  hardware clip guard, the GPU guard, the multi-texture default route, F32
+  texture coordinates as fixed point); two no longer need private baselines.
+
+Added
+- Real-speed game logic: 30 logic steps per second of real time, up to four
+  per picture.
+- Console GPU guard: new draw kinds run alone once, hang records with the last
+  GPU jobs, transfer-stop fallback levels, per-build learned state.
+- Bottom-screen developer console, START+SELECT automatic multi-zone test,
+  frame telemetry, and one folder per L+R+A dump with screenshots and a
+  readable state report.
+- Native bloom and model shadows drawn with PICA-native passes.
+- Tools: `check_ctru_abi.py`, `check_pica_shader.py`, `gpu_hang_report.py`,
+  `pica_list_decode.py`, `pica_shader_disasm.py`, `analyze_tour.py`,
+  `generate_zone_table.py`.
+
+Changed
+- GX sync calls are ordered on the GPU instead of waiting for it.
+- An oversized real-shadow request (the title's wall of light) is skipped.
+
+Removed
+- Closed investigations: the capture94 and FRAME76 draw captures, the
+  VITAL80 log, the strict material74 mode, and the scene-creation,
+  ground-creation and background-budget compile-time probes.
+- Four functions with no caller and an orphan test source no build compiled.
+
+No release, tag or binary is published. Console results are recorded in
+[Verification status](docs/STATUS.md).
+
 ## Unreleased — PAL input and GX compatibility fixes
 
 - Accept European/PAL revision-0 (`GZ2P01`) data alongside USA revision-0

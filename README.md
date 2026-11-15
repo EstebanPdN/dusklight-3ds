@@ -66,7 +66,9 @@ sustained 30 FPS on physical hardware has not been established.
 
 This repository publishes the current source. **There is no GitHub release,
 prerelease, installation QR or supported end-user download.** Build instructions
-are available for developers in [Building](docs/BUILDING.md).
+are available for developers in [Building](docs/BUILDING.md). Development builds
+are tested privately on a New 3DS; dated results are in
+[Verification status](docs/STATUS.md).
 
 The port targets **New Nintendo 3DS, New Nintendo 3DS XL and New Nintendo 2DS XL**.
 Old Nintendo 3DS and Old Nintendo 2DS are outside the current target.
