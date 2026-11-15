@@ -24,6 +24,9 @@
 #include "f_op/f_op_actor_mng.h"
 #include "d/actor/d_a_player.h"
 #include "SSystem/SComponent/c_math.h"
+#if defined(DUSK_TARGET_3DS)
+#include "helpers/native_effects.h"
+#endif
 
 #if TARGET_PC
 #include "dusk/game_clock.h"
@@ -1372,10 +1375,42 @@ void dPa_control_c::draw(JPADrawInfo* param_0, u8 param_1) {
     ZoneScoped;
 #endif
 #if defined(DUSK_TARGET_3DS)
-    // Native cost reduction: world particle groups 0-13 are not drawn. Emitters
+    // World particle groups 0-13 can be switched off for A/B runs. Emitters
     // still calculate so their lifetimes end normally; 2D/menu groups remain.
-    if (param_1 <= 13) {
+    if (param_1 <= 13 && dusk::native_effects::particles == 0) {
         return;
+    }
+    // A group with no particle alive costs its whole GX setup (light, fog and
+    // TEV registers), about a third of a millisecond each, nineteen times a
+    // frame. Its emitters' draw callbacks still run: some of them manage the
+    // emitter's lifetime there.
+    if (mEmitterMng != NULL) {
+        bool drawable = false;
+        JSUList<JPABaseEmitter>& list = mEmitterMng->pEmtrUseList[param_1];
+        for (JSULink<JPABaseEmitter>* link = list.getFirst(); link != list.getEnd();
+             link = link->getNext()) {
+            JPABaseEmitter* emtr = link->getObject();
+            if (!emtr->checkStatus(0x04) && emtr->getParticleNumber() != 0) {
+                drawable = true;
+                break;
+            }
+        }
+        if (!drawable) {
+            JSULink<JPABaseEmitter>* next;
+            for (JSULink<JPABaseEmitter>* link = list.getFirst(); link != list.getEnd();
+                 link = next) {
+                next = link->getNext();
+                JPABaseEmitter* emtr = link->getObject();
+                if (!emtr->checkStatus(0x04) && emtr->mpEmtrCallBack != NULL) {
+                    emtr->mpEmtrCallBack->draw(emtr);
+                    // draw() may detach the callback from the emitter.
+                    if (emtr->mpEmtrCallBack != NULL) {
+                        emtr->mpEmtrCallBack->drawAfter(emtr);
+                    }
+                }
+            }
+            return;
+        }
     }
 #endif
     if (mEmitterMng != NULL) {

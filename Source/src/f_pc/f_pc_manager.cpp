@@ -1,5 +1,23 @@
 #if defined(DUSK_TARGET_3DS)
 #include "../../platforms/3ds/runtime/gx_profile.hpp"
+// Provided by the native game loop; absent in link-only probe configurations.
+extern "C" void duskNativePainterDone() __attribute__((weak));
+// Real-speed scheduling (game_startup.cpp): one picture can carry several
+// original logic ticks. Only the first tick paints (the lists of the previous
+// picture) and only the last one enters the draw lists; each phase runs with
+// the number of ticks its picture stands for, so frame-scaled draw animations
+// keep real time. A link-only probe without the native loop paints and draws
+// every tick.
+extern "C" bool duskNativeTickPaint __attribute__((weak));
+extern "C" bool duskNativeTickDraw __attribute__((weak));
+extern "C" float duskNativePaintTicks __attribute__((weak));
+extern "C" float duskNativeDrawTicks __attribute__((weak));
+namespace {
+bool nativeTickPaints() { return !&duskNativeTickPaint || duskNativeTickPaint; }
+bool nativeTickDraws() { return !&duskNativeTickDraw || duskNativeTickDraw; }
+float nativePaintTicks() { return &duskNativePaintTicks ? duskNativePaintTicks : 1.0f; }
+float nativeDrawTicks() { return &duskNativeDrawTicks ? duskNativeDrawTicks : 1.0f; }
+}
 #endif
 #if DUSK_GX_TRACE
 #include <aurora/gx_trace.h>
@@ -27,6 +45,12 @@
 #include "f_pc/f_pc_pause.h"
 #include "f_pc/f_pc_priority.h"
 #include "m_Do/m_Do_controller_pad.h"
+
+#if defined(DUSK_TARGET_3DS)
+#include "JSystem/JUtility/JUTFader.h"
+#include "dusk/game_clock.h"
+#include "m_Do/m_Do_graphic.h"
+#endif
 
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
 #include "dusk/game_clock.h"
@@ -91,11 +115,21 @@ void fpcM_Management(fpcM_ManagementFunc i_preExecuteFn, fpcM_ManagementFunc i_p
             IF_DUSK_BLOCK(!dusk::game_clock::g_frameTiming.separatePresentation)
 #endif
             #if defined(DUSK_TARGET_3DS)
-                { dusk::native::GxProfileScope profile(dusk::native::GxProfilePart::gamePaint);
+            if (nativeTickPaints()) {
+                dusk::game_clock::set_presentation_frames(nativePaintTicks());
+                { dusk::native::GxProfileScope profile(dusk::native::GxProfilePart::gamePaint, true);
 #endif
                 cAPIGph_Painter();
 #if defined(DUSK_TARGET_3DS)
                 }
+                dusk::game_clock::set_presentation_frames(1.0f);
+                // The frame's draws are assembled: let the PICA render them
+                // while the actors update and enter the next frame's lists.
+                if (duskNativePainterDone) duskNativePainterDone();
+            } else if (JUTFader* fader = mDoGph_gInf_c::getFader()) {
+                // The skipped paint would have advanced the screen fader once.
+                fader->advance();
+            }
 #endif
 #if !defined(DUSK_TARGET_3DS)
             IF_DUSK_BLOCK_END
@@ -124,7 +158,7 @@ void fpcM_Management(fpcM_ManagementFunc i_preExecuteFn, fpcM_ManagementFunc i_p
                 const auto traceUpdateStart = std::chrono::steady_clock::now();
 #endif
                 #if defined(DUSK_TARGET_3DS)
-                { dusk::native::GxProfileScope profile(dusk::native::GxProfilePart::gameUpdate);
+                { dusk::native::GxProfileScope profile(dusk::native::GxProfilePart::gameUpdate, true);
 #endif
                 fpcEx_Handler((fpcLnIt_QueueFunc)fpcM_Execute);
 #if defined(DUSK_TARGET_3DS)
@@ -135,23 +169,34 @@ void fpcM_Management(fpcM_ManagementFunc i_preExecuteFn, fpcM_ManagementFunc i_p
 #endif
             }
 
+#if defined(DUSK_TARGET_3DS)
+            const bool drawTick = nativeTickDraws();
+            if (drawTick && (!fapGm_HIO_c::isCaptureScreen() || fapGm_HIO_c::getCaptureScreenDivH() != 1)) {
+#else
             if (!fapGm_HIO_c::isCaptureScreen() || fapGm_HIO_c::getCaptureScreenDivH() != 1) {
+#endif
 #if DUSK_GX_TRACE
                 const auto traceDrawStart = std::chrono::steady_clock::now();
 #endif
                 #if defined(DUSK_TARGET_3DS)
-                { dusk::native::GxProfileScope profile(dusk::native::GxProfilePart::gameDraw);
+                dusk::game_clock::set_presentation_frames(nativeDrawTicks());
+                { dusk::native::GxProfileScope profile(dusk::native::GxProfilePart::gameDraw, true);
 #endif
                 fpcDw_Handler((fpcDw_HandlerFuncFunc)fpcM_DrawIterater, (fpcDw_HandlerFunc)fpcM_Draw);
 #if defined(DUSK_TARGET_3DS)
                 }
+                dusk::game_clock::set_presentation_frames(1.0f);
 #endif
 #if DUSK_GX_TRACE
                 dusk_gx_trace_cpu(1, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - traceDrawStart).count());
 #endif
             }
 
+#if defined(DUSK_TARGET_3DS)
+            if (drawTick) dComIfGp_drawSimpleModel();
+#else
             IF_DUSK(dComIfGp_drawSimpleModel());
+#endif
 
             if (i_postExecuteFn != NULL) {
                 i_postExecuteFn();

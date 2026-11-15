@@ -9,6 +9,11 @@ struct ParticleDrawCtx {
     bool useTexMtx; // UVs transformed by texMtx
     bool useClr0;   // prm color in GX_VA_CLR0
     bool useClr1;   // env color in GX_VA_CLR1
+    bool child;     // batch of child particles (native 3DS batch only)
+    bool prj;       // UVs projected from the corner position by texMtx (native 3DS batch only)
+    int texIdx;     // per-particle texture index (native 3DS batch only)
+    bool open;      // a primitive is open (native 3DS batch only)
+    unsigned culled; // quads left out because they are off screen (native 3DS batch only)
     float age;
     Mtx texMtx;
     GXColor clr0;

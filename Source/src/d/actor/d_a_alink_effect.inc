@@ -2055,6 +2055,10 @@ void daAlink_blur_c::draw() {
             &mBlurTexObj, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
         mpCachedBlurTex = m_blurTex;
     }
+#if defined(DUSK_TARGET_3DS)
+    // The sword trail builds its object straight over Link's archive image.
+    mDoLib_retainNativeTexture(m_blurTex, &mBlurTexObj);
+#endif
     GXLoadTexObj(&mBlurTexObj, GX_TEXMAP0);
 #else
     GXInitTexObj(&texObj, (void*)((uintptr_t)m_blurTex + m_blurTex->imageOffset), 16, 4, GX_TF_I4,

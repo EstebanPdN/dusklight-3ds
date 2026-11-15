@@ -805,6 +805,7 @@ void dScnLogo_c::nextSceneChange() {
                 // Direct stage entry bypasses the file selector/menu, which
                 // normally initialize transient items and oxygen before PLAY.
                 dComIfGp_itemDataInit();
+                dusk::native::applyBootStageLoadout();
                 fopScnM_ChangeReq(this,fpcNm_PLAY_SCENE_e,0,30);
                 dComIfGp_setNextStage(stage->name,stage->point,stage->room,stage->layer);
                 g_dComIfG_gameInfo.play.mNextStage.getStartStage()->set(stage->name,stage->room,stage->point,stage->layer);

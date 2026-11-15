@@ -1,3 +1,5 @@
+#include <cstdio>
+#include <cstdint>
 #include "JSystem/JSystem.h" // IWYU pragma: keep
 
 #if defined(DUSK_TARGET_3DS)
@@ -120,8 +122,28 @@ void* JKRSolidHeap::do_alloc(u32 size, int alignment) {
 
     unlock();
 #if defined(DUSK_TARGET_3DS)
-    if(!ptr)OSReport("Native solid allocation failed heap=%p request=%lu align=%d total=%lu free=%lu\n",
-        this,static_cast<unsigned long>(size),alignment,static_cast<unsigned long>(mSize),static_cast<unsigned long>(mFreeSize));
+    if(!ptr){
+        OSReport("Native solid allocation failed heap=%p request=%lu align=%d total=%lu free=%lu\n",
+            this,static_cast<unsigned long>(size),alignment,static_cast<unsigned long>(mSize),static_cast<unsigned long>(mFreeSize));
+#if defined(__3DS__)
+        // Diagnosis: code addresses found on the caller's stack (symbolize with
+        // addr2line). Reported for the first few failures only.
+        static unsigned traces;
+        if(traces<6){
+            ++traces;
+            extern char __start__[],__end__[];
+            const auto* sp=static_cast<const std::uintptr_t*>(__builtin_frame_address(0));
+            char line[256];int at=std::snprintf(line,sizeof(line),"Native solid allocation callers:");
+            for(unsigned n=0,found=0;n<192&&found<20&&at<int(sizeof(line))-12;++n){
+                const auto value=sp[n];
+                if(value>=reinterpret_cast<std::uintptr_t>(__start__)&&value<reinterpret_cast<std::uintptr_t>(__end__)&&!(value&3)){
+                    at+=std::snprintf(line+at,sizeof(line)-at," %lx",static_cast<unsigned long>(value));++found;
+                }
+            }
+            OSReport("%s\n",line);
+        }
+#endif
+    }
 #endif
     return ptr;
 }

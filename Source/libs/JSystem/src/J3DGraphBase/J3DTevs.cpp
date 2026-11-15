@@ -12,6 +12,7 @@
 #include "global.h"
 #if defined(DUSK_TARGET_3DS)
 #include "../../../../platforms/3ds/runtime/gx_state.hpp"
+#include "../../../../platforms/3ds/runtime/gx_transform_commands.hpp"
 #endif
 
 static void J3DGDLoadTexMtxImm(f32 (*)[4], u32, GXTexMtxType);
@@ -300,15 +301,29 @@ void loadTexNo(u32 param_0, const u16& texNo) {
     // Original archive loading builds shared DLs before actors resolve named
     // external textures. Preserve their original index until that patch. It
     // is deliberately not a live token; attempting to draw it still rejects.
+    bool nativeUnavailable = false;
     if (resTIMG->imageOffset == 0) {
         J3DGDSetTexImgPtrRaw(GXTexMapID(param_0), texNo);
     } else {
         u32 token{};
-        if (!dusk::native::gx::textureCommandToken(j3dSys.getTexture()->getImgDataPtr(texNo), token))
-            OSPanic(__FILE__, __LINE__, "Native J3D image is unregistered (index=%u map=%lu format=%u size=%ux%u offset=%lu)",
-                unsigned(texNo), static_cast<unsigned long>(param_0), unsigned(resTIMG->format),
-                unsigned(resTIMG->width), unsigned(resTIMG->height), static_cast<unsigned long>(resTIMG->imageOffset));
-        J3DGDSetTexImgPtr(GXTexMapID(param_0), j3dSys.getTexture()->getImgDataPtr(texNo));
+        if (!dusk::native::gx::textureCommandToken(j3dSys.getTexture()->getImgDataPtr(texNo), token)) {
+            if (!dusk::native::gx::commandSkipUnavailableTextures)
+                OSPanic(__FILE__, __LINE__, "Native J3D image is unregistered (index=%u map=%lu format=%u size=%ux%u offset=%lu)",
+                    unsigned(texNo), static_cast<unsigned long>(param_0), unsigned(resTIMG->format),
+                    unsigned(resTIMG->width), unsigned(resTIMG->height), static_cast<unsigned long>(resTIMG->imageOffset));
+            // Game policy: a texture that could not be retained (its archive
+            // went away during a scene change) keeps its index instead of a
+            // live token; the draws that sample it are left out and counted.
+            static unsigned reported;
+            if (reported < 8 && ++reported)
+                OSReport("Native J3D image unavailable, draws omitted (index=%u map=%lu format=%u size=%ux%u)\n",
+                    unsigned(texNo), static_cast<unsigned long>(param_0), unsigned(resTIMG->format),
+                    unsigned(resTIMG->width), unsigned(resTIMG->height));
+            nativeUnavailable = true;
+            J3DGDSetTexImgPtrRaw(GXTexMapID(param_0), texNo);
+        } else {
+            J3DGDSetTexImgPtr(GXTexMapID(param_0), j3dSys.getTexture()->getImgDataPtr(texNo));
+        }
     }
 #else
     J3DGDSetTexImgPtr(GXTexMapID(param_0), (u8*)resTIMG + resTIMG->imageOffset);
@@ -320,7 +335,7 @@ void loadTexNo(u32 param_0, const u16& texNo) {
         GXTlutSize tlutSize = resTIMG->numColors > 16 ? GX_TLUT_256 : GX_TLUT_16;
         GDOverflowCheck(0x14);
 #if defined(DUSK_TARGET_3DS)
-        if (resTIMG->imageOffset == 0) {
+        if (resTIMG->imageOffset == 0 || nativeUnavailable) {
             // The subsequent original patch must overwrite exactly this span.
             GDOverflowCheck(30);
             for (unsigned i = 0; i < 30; ++i) J3DGDWrite_u8(0);

@@ -53,6 +53,9 @@ void J3DModel::initialize() {
     mDiffFlag = 0;
     mCalcCallBack = NULL;
     mUserArea = 0;
+#if defined(DUSK_TARGET_3DS)
+    mNativeShadowSlot = 0;
+#endif
 
     mBaseScale.x = 1.0f;
     mBaseScale.y = 1.0f;

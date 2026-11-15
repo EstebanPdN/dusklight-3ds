@@ -24,6 +24,9 @@
 #include "m_Do/m_Do_graphic.h"
 #include <cstdio>
 #include <cstring>
+#if defined(DUSK_TARGET_3DS)
+#include "helpers/native_effects.h"
+#endif
 
 
 #if TARGET_PC
@@ -1385,8 +1388,9 @@ s8 dComIfGp_getReverb(int i_roomNo) {
 int dComIfGd_setSimpleShadow(cXyz* i_pos, f32 param_1, f32 param_2, cBgS_PolyInfo& param_3,
                              s16 i_angle, f32 param_5, TGXTexObj* i_tex) {
 #if defined(DUSK_TARGET_3DS)
-    // Native cost reduction: shadows are disabled; skip the floor-plane lookup.
-    return 0;
+    if (dusk::native_effects::shadows == 0) {
+        return 0;
+    }
 #endif
     if (param_3.ChkSetInfo() && -G_CM3D_F_INF != param_1) {
         cM3dGPla plane;
@@ -1442,6 +1446,19 @@ stage_arrow_class* dComIfGp_getRoomArrow(int i_roomNo) {
 void dComIfGp_setNextStage(char const* i_stage, s16 i_point, s8 i_roomNo, s8 i_layer,
                            f32 i_lastSpeed, u32 i_lastMode, int i_setPoint, s8 i_wipe,
                            s16 i_lastAngle, int param_9, int i_wipeSpeedT) {
+#if defined(DUSK_TARGET_3DS)
+    // No THP playback on 3DS: an idle title would leave for the attract-movie
+    // stage, show nothing there (its player cannot run) and come back without
+    // its demo data, over and over. The title stays on PRESS START instead.
+    if (i_stage != NULL && !strcmp(i_stage, "S_MV000")) {
+        static bool reported;
+        if (!reported) {
+            reported = true;
+            OSReport("Native movie: the attract-movie stage is skipped; the title stays\n");
+        }
+        return;
+    }
+#endif
     if (i_layer >= 15) {
         i_layer = -1;
     }

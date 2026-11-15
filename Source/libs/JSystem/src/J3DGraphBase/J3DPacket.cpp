@@ -13,6 +13,9 @@
 #include "../../../../platforms/3ds/runtime/gx_profile.hpp"
 #define NATIVE_J3D_PROFILE(name) static const auto nativeProfileIndex_##__LINE__=dusk::native::registerGxNamedProfile(name);\
     dusk::native::GxNamedProfileScope nativeProfileScope(nativeProfileIndex_##__LINE__)
+// Native model shadows: PICA draws of a tagged model are remembered so the
+// caster pass can replay them (platforms/3ds/runtime/shadow_casters.hpp).
+extern "C" void duskNativeShadowCaster(unsigned slot);
 #else
 #define NATIVE_J3D_PROFILE(name)
 #endif
@@ -466,7 +469,22 @@ void J3DShapePacket::draw() {
             mpDisplayListObj->callDL();
         }
 
+#if defined(DUSK_TARGET_3DS)
+        // Only the scene's own view counts: a mirror draws the same model
+        // again through a reflected matrix, which is not the caster.
+        const unsigned casterSlot =
+            mpModel != NULL && mpBaseMtxPtr == (Mtx*)j3dSys.getViewMtx() ?
+                mpModel->mNativeShadowSlot : 0;
+        if (casterSlot != 0) {
+            duskNativeShadowCaster(casterSlot);
+        }
         mpShape->draw();
+        if (casterSlot != 0) {
+            duskNativeShadowCaster(0);
+        }
+#else
+        mpShape->draw();
+#endif
     }
 
 #endif
@@ -489,7 +507,22 @@ void J3DShapePacket::drawFast() {
             J3DDifferedTexMtx::sTexGenBlock = NULL;
         }
 
+#if defined(DUSK_TARGET_3DS)
+        // Only the scene's own view counts: a mirror draws the same model
+        // again through a reflected matrix, which is not the caster.
+        const unsigned casterSlot =
+            mpModel != NULL && mpBaseMtxPtr == (Mtx*)j3dSys.getViewMtx() ?
+                mpModel->mNativeShadowSlot : 0;
+        if (casterSlot != 0) {
+            duskNativeShadowCaster(casterSlot);
+        }
         mpShape->drawFast();
+        if (casterSlot != 0) {
+            duskNativeShadowCaster(0);
+        }
+#else
+        mpShape->drawFast();
+#endif
     }
 
 #endif

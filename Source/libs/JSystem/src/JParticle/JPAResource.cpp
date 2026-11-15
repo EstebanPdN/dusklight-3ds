@@ -22,6 +22,12 @@
 #include <tracy/Tracy.hpp>
 #endif
 
+#if defined(DUSK_TARGET_3DS)
+#include "helpers/native_effects.h"
+#include <algorithm>
+#include <cmath>
+#endif
+
 #define JPA_DRAW_CTX_ARG , &ctx
 #else
 #define JPA_DRAW_CTX_ARG
@@ -33,6 +39,7 @@ JPAResource::JPAResource() {
     mpCalcParticleFuncList = mpCalcParticleChildFuncList = NULL;
     mpDrawParticleFuncList = mpDrawParticleChildFuncList = NULL;
     mBatchInfo = {};
+    mChildBatchInfo = {};
 #else
     mpCalcParticleFuncList = mpDrawParticleFuncList = mpCalcParticleChildFuncList = mpDrawParticleChildFuncList = NULL;
 #endif
@@ -97,6 +104,12 @@ void JPAResource::initBatchInfo() {
                    func == static_cast<DrawParticleFunc>(JPARegistEnv)) // overloaded
         {
             mBatchInfo.hasPtclColor = true;
+#if defined(DUSK_TARGET_3DS)
+        } else if (func == JPADrawDBillboard) {
+            hasDrawFunc = true;
+        } else if (func == static_cast<DrawParticleFunc>(JPALoadTexAnm)) { // overloaded
+            mBatchInfo.hasPtclTex = true;
+#endif
         } else {
             // JPADrawPoint, JPADrawLine, JPADrawDBillboard, JPALoadTexAnm,
             // JPASetPointSize, JPASetLineWidth
@@ -128,6 +141,63 @@ void JPAResource::initBatchInfo() {
 
     mBatchInfo.supported = true;
 }
+
+#if defined(DUSK_TARGET_3DS)
+// Child particles: same quad templates as setCTev, same per-particle rules.
+static void initChildBatchInfo(JPAResource* res) {
+    JPAResource::BatchInfo& info = res->mChildBatchInfo;
+    info = {};
+    JPAChildShape* csp = res->getCsp();
+    if (csp == nullptr || res->mpDrawParticleChildFuncList == nullptr) {
+        return;
+    }
+
+    bool hasDrawFunc = false;
+    for (int i = 0; i < res->mpDrawParticleChildFuncListNum; i++) {
+        JPAResource::DrawParticleFunc func = res->mpDrawParticleChildFuncList[i];
+        if (func == JPADrawBillboard || func == JPADrawRotBillboard ||
+            func == JPADrawYBillboard || func == JPADrawRotYBillboard ||
+            func == JPADrawDirection || func == JPADrawRotDirection || func == JPADrawRotation)
+        {
+            // The batch loop runs the draw function last, as the list does.
+            if (i != 0) {
+                return;
+            }
+            hasDrawFunc = true;
+        } else if (func == JPADrawDBillboard) {
+            if (i != 0) {
+                return;
+            }
+            hasDrawFunc = true;
+        } else if (func == JPADrawParticleCallBack) {
+        } else if (func == JPARegistPrmAlphaEnv) {
+            info.hasPtclColor = true;
+        } else {
+            return;
+        }
+    }
+    if (!hasDrawFunc) {
+        return;
+    }
+
+    int base_plane_type = (csp->getType() == 3 || csp->getType() == 7) ?
+        csp->getBasePlaneType() : 0;
+    const s8* pos = reinterpret_cast<const s8*>(jpa_pos) + 0x30 + base_plane_type * 0x6C;
+    const s8* crd = reinterpret_cast<const s8*>(jpa_crd);
+    bool cross = csp->getType() == 4 || csp->getType() == 8;
+    info.vtxCount = cross ? 8 : 4;
+    for (int i = 0; i < info.vtxCount; i++) {
+        int posIdx = i < 4 ? i : 72 + (i - 4);
+        int crdIdx = i & 3;
+        info.vtxPos[i][0] = pos[posIdx * 3 + 0];
+        info.vtxPos[i][1] = pos[posIdx * 3 + 1];
+        info.vtxPos[i][2] = pos[posIdx * 3 + 2];
+        info.vtxUv[i][0] = crd[crdIdx * 2 + 0];
+        info.vtxUv[i][1] = crd[crdIdx * 2 + 1];
+    }
+    info.supported = true;
+}
+#endif
 #endif
 
 void JPAResource::init(JKRHeap* heap) {
@@ -777,6 +847,19 @@ void JPAResource::init(JKRHeap* heap) {
 
 #if TARGET_PC
     initBatchInfo();
+#if defined(DUSK_TARGET_3DS)
+    // The batch loop runs the draw function last, as the list does.
+    if (mBatchInfo.supported) {
+        DrawParticleFunc first = mpDrawParticleFuncList[0];
+        if (!(first == JPADrawBillboard || first == JPADrawRotBillboard ||
+              first == JPADrawYBillboard || first == JPADrawRotYBillboard ||
+              first == JPADrawDirection || first == JPADrawRotDirection ||
+              first == JPADrawRotation || first == JPADrawDBillboard)) {
+            mBatchInfo.supported = false;
+        }
+    }
+    initChildBatchInfo(this);
+#endif
 #endif
 }
 
@@ -862,6 +945,33 @@ bool JPAResource::calc(JPAEmitterWorkData* work, JPABaseEmitter* emtr) {
     return false;
 }
 
+#if defined(DUSK_TARGET_3DS)
+// A native batch reads the particle colour from the vertex: it leaves one
+// colour channel on and TEV stage 0 reading the rasterised colour. The next
+// batch sets both again, so they are only put back when a per-particle draw
+// follows (and at the end of the group).
+static bool sNativeTevDirty;
+
+extern "C" unsigned long long svcGetSystemTick(void);
+
+// The game swaps the frame-buffer copy in for the texture named "dummy":
+// a resource whose main texture is that one draws a refraction (heat haze,
+// water lens), not a picture of its own.
+static bool native_refraction_resource(JPAEmitterWorkData* work) {
+    JPAResource* res = work->mpRes;
+    JPATexture* texture = work->mpResMgr->pTexAry[res->getTexIdx(res->getBsp()->getTexIdx())];
+    const char* name = texture->getName();
+    return name[0] == 'd' && std::strcmp(name, "dummy") == 0;
+}
+
+void JPANativeBatchEnd() {
+    if (sNativeTevDirty) {
+        GXSetNumChans(0);
+        sNativeTevDirty = false;
+    }
+}
+#endif
+
 void JPAResource::draw(JPAEmitterWorkData* work, JPABaseEmitter* emtr) {
 #if !defined(DUSK_TARGET_3DS)
     ZoneScoped;
@@ -870,8 +980,63 @@ void JPAResource::draw(JPAEmitterWorkData* work, JPABaseEmitter* emtr) {
     work->mpRes = this;
     work->mDrawCount = 0;
     DUSK_DESKTOP_ONLY(dusk::interp::particle::EmitterDraw presentation(emtr));
+#if defined(DUSK_TARGET_3DS)
+    // A refraction resource samples the frame copy through an indirect warp.
+    // The PICA has no indirect stage, and drawn without it the particle is
+    // either invisible or, with its own texture matrix, a misplaced piece of
+    // the frame. Its particles are not drawn; the heat haze actor asks the
+    // screen-effect pass for its sway instead (native_effects::haze).
+    if (native_refraction_resource(work)) {
+        dusk::native_effects::counters.particleRefraction +=
+            emtr->mAlivePtclBase.getNum() + emtr->mAlivePtclChld.getNum();
+        if (emtr->mpEmtrCallBack != NULL) {
+            emtr->mpEmtrCallBack->draw(emtr);
+        }
+        // draw() may detach the callback from the emitter.
+        if (emtr->mpEmtrCallBack != NULL) {
+            emtr->mpEmtrCallBack->drawAfter(emtr);
+        }
+        return;
+    }
+    // Profiled frame: time and count this resource (see EmitterRow).
+    dusk::native_effects::EmitterRow* row = nullptr;
+    unsigned long long rowStart = 0;
+    unsigned rowBatches = 0, rowSingles = 0;
+    if (dusk::native_effects::emitterReport) {
+        using namespace dusk::native_effects;
+        for (unsigned i = 0; i < emitterRowCount && row == nullptr; i++) {
+            if (emitterRows[i].resource == this) {
+                row = &emitterRows[i];
+            }
+        }
+        if (row == nullptr && emitterRowCount < sizeof(emitterRows) / sizeof(*emitterRows)) {
+            row = &emitterRows[emitterRowCount++];
+            *row = {};
+            row->resource = this;
+            row->id = mUsrIdx;
+            row->flags = (native_refraction_resource(work) ? 1u : 0u) |
+                         (pEts != NULL && pEts->isUseIndirect() ? 2u : 0u) |
+                         (pBsp->isPrjTex() ? 4u : 0u) | (pCsp != NULL ? 8u : 0u) |
+                         (emtr->mpPtclCallBack != nullptr ? 16u : 0u) |
+                         (emtr->mpEmtrCallBack != nullptr ? 32u : 0u) |
+                         (mBatchInfo.hasPtclTex ? 64u : 0u) | (mBatchInfo.hasPtclTexMtx ? 128u : 0u) |
+                         (pBsp->getType() << 8) | (pBsp->getTevColorArgSel() << 12) |
+                         ((pBsp->pBsd->mBlendModeCfg & 3u) << 16);
+        }
+        if (row != nullptr) {
+            row->emitters++;
+            row->particles += emtr->mAlivePtclBase.getNum() + emtr->mAlivePtclChld.getNum();
+            rowBatches = counters.particleBatches;
+            rowSingles = counters.particleSingle;
+            rowStart = svcGetSystemTick();
+        }
+    }
+#endif
     calcWorkData_d(work);
     pBsp->setGX(work);
+#if defined(DUSK_TARGET_3DS)
+    JPANativeBatchEnd();
+#endif
     for (s32 i = 1; i <= emtr->getDrawTimes(); i++) {
         work->mDrawCount++;
         if (pBsp->isDrawPrntAhead() && pCsp != NULL)
@@ -880,6 +1045,13 @@ void JPAResource::draw(JPAEmitterWorkData* work, JPABaseEmitter* emtr) {
         if (!pBsp->isDrawPrntAhead() && pCsp != NULL)
             drawC(work);
     }
+#if defined(DUSK_TARGET_3DS)
+    if (row != nullptr) {
+        row->ticks += svcGetSystemTick() - rowStart;
+        row->batches += dusk::native_effects::counters.particleBatches - rowBatches;
+        row->singles += dusk::native_effects::counters.particleSingle - rowSingles;
+    }
+#endif
 }
 
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
@@ -1063,6 +1235,333 @@ static bool draw_particle_batch(JPAEmitterWorkData* work) {
 }
 #endif
 
+#if defined(DUSK_TARGET_3DS)
+// Native particle batch: one GX draw per emitter instead of one per particle
+// (each particle used to load a position matrix, a TEV colour and often a
+// texture matrix before its own four-vertex draw). Corners are transformed
+// here; the particle's primary colour travels as vertex colour, so the
+// rasterised colour takes the place of TEV register 0. The environment colour
+// stays in TEV register 1: when it differs between two particles, the
+// primitive is closed and a new one starts.
+void JPANativePrjTexMtx(JPAEmitterWorkData const* work, Mtx out); // JPABaseShape.cpp
+
+static GXTevColorArg native_batch_color_arg(GXTevColorArg arg) {
+    return arg == GX_CC_C0 ? GX_CC_RASC : arg == GX_CC_A0 ? GX_CC_RASA : arg;
+}
+
+static GXTevAlphaArg native_batch_alpha_arg(GXTevAlphaArg arg) {
+    return arg == GX_CA_A0 ? GX_CA_RASA : arg;
+}
+
+static bool native_draw_particle_batch(JPAEmitterWorkData* work, bool child) {
+    JPAResource* res = work->mpRes;
+    JPABaseEmitter* emtr = work->mpEmtr;
+    const JPAResource::BatchInfo& info = child ? res->mChildBatchInfo : res->mBatchInfo;
+    JPAList<JPABaseParticle>& list = child ? emtr->mAlivePtclChld : emtr->mAlivePtclBase;
+    // A single particle gains nothing from the state change around a batch.
+    if (dusk::native_effects::particles < 2 || list.getNum() < 2) {
+        return false;
+    }
+    // A projected texture is evaluated per corner; with a per-particle
+    // texture matrix on top the original has no defined combination.
+    const bool projected = !child && work->mPrjType != 0;
+    // A particle callback that draws (lit leaves, models) draws each particle itself.
+    const bool callbackDraws = emtr->mpPtclCallBack != nullptr && emtr->mpPtclCallBack->drawsParticle();
+    if (!info.supported || (projected && info.hasPtclTexMtx) || callbackDraws) {
+        // Diagnostics: why an emitter with several particles stayed unbatched.
+        unsigned& reason = dusk::native_effects::counters.particleUnbatched[
+            !info.supported ? 0 : projected ? 1 : 2];
+        reason += list.getNum();
+        return false;
+    }
+
+    JPABaseShape* shape = res->getBsp();
+    const u32 colorSel = shape->getTevColorArgSel();
+    const bool useClr0 = info.hasPtclColor;
+    if (useClr0 && colorSel >= 6) {
+        dusk::native_effects::counters.particleUnbatched[3] += list.getNum();
+        return false;
+    }
+    // Only these two colour formulas read the environment register.
+    const bool trackEnv = useClr0 && (colorSel == 3 || colorSel == 4);
+
+    if (useClr0) {
+        const GXTevColorArg* colorArg = shape->getTevColorArg();
+        const GXTevAlphaArg* alphaArg = shape->getTevAlphaArg();
+        GXSetNumChans(1);
+        GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, child ? GX_TEXMAP1 : GX_TEXMAP0, GX_COLOR0A0);
+        GXSetTevColorIn(GX_TEVSTAGE0, native_batch_color_arg(colorArg[0]),
+                        native_batch_color_arg(colorArg[1]), native_batch_color_arg(colorArg[2]),
+                        native_batch_color_arg(colorArg[3]));
+        GXSetTevAlphaIn(GX_TEVSTAGE0, native_batch_alpha_arg(alphaArg[0]),
+                        native_batch_alpha_arg(alphaArg[1]), native_batch_alpha_arg(alphaArg[2]),
+                        native_batch_alpha_arg(alphaArg[3]));
+    }
+    // Indirect texture: the PICA has none, and the translator evaluates the
+    // warp once per vertex on the CPU (about 40 microseconds a vertex). Over
+    // the four corners of a particle that is a small shift of the image, not
+    // a warp, so a batch draws the texture directly.
+    JPAExTexShape* ets = res->getEts();
+    const bool dropIndirect = !child && ets != nullptr && ets->isUseIndirect();
+    if (dropIndirect) {
+        GXSetNumIndStages(0);
+        GXSetTevDirect(GX_TEVSTAGE0);
+        dusk::native_effects::counters.particleDirect += list.getNum();
+    }
+    const bool changedTexGen = !child && (info.hasPtclTexMtx || projected);
+    if (changedTexGen) {
+        // UVs are transformed here; drop the texture matrix.
+        GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
+    }
+
+    // Clipping stays on for the batch. Quads wholly off screen never leave
+    // the loop below, and a draw with clipping off is transformed and clipped
+    // vertex by vertex on the CPU (20 microseconds a vertex) instead of on
+    // the PICA. Only a quad that crosses the near plane is drawn differently:
+    // it is clipped there.
+    const bool clipOff = child ? !res->getCsp()->isClipOn() : !shape->isClipOn();
+    if (clipOff) {
+        GXSetClipMode(GX_CLIP_ENABLE);
+    }
+
+    static Mtx identityMtx = {
+        {1.0f, 0.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f, 0.0f},
+    };
+    GXLoadPosMtxImm(identityMtx, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    if (useClr0) {
+        GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+        GXSetVtxAttrFmt(GX_VTXFMT1, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    }
+    GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+    GXSetVtxAttrFmt(GX_VTXFMT1, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT1, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+
+    ParticleDrawCtx ctx{};
+    ctx.batch = true;
+    ctx.child = child;
+    ctx.useTexMtx = !child && info.hasPtclTexMtx;
+    ctx.useClr0 = useClr0;
+    ctx.useClr1 = trackEnv;
+    ctx.prj = projected;
+    if (projected) {
+        JPANativePrjTexMtx(work, ctx.texMtx);
+    }
+    const bool trackTex = !child && info.hasPtclTex;
+    int texIdx = -1;
+
+    JPAResource::DrawParticleFunc* funcs = child ? res->mpDrawParticleChildFuncList : res->mpDrawParticleFuncList;
+    const int funcNum = child ? res->mpDrawParticleChildFuncListNum : res->mpDrawParticleFuncListNum;
+    const bool fwdAhead = shape->isDrawFwdAhead();
+    JPANode<JPABaseParticle>* node = fwdAhead ? list.getLast() : list.getFirst();
+
+    const auto drift = [](u8 a, u8 b, int limit) { return a > b ? a - b > limit : b - a > limit; };
+    const auto closeDraw = [&ctx]() {
+        if (ctx.open) {
+            GXEnd();
+            ctx.open = false;
+            dusk::native_effects::counters.particleBatches++;
+        }
+    };
+    const auto step = [fwdAhead](JPANode<JPABaseParticle>* n) {
+        return fwdAhead ? n->getPrev() : n->getNext();
+    };
+    u32 count = 0;
+
+    // Early cull: a particle whose bounding sphere lies outside one side of
+    // the view skips its draw functions and corner transforms altogether
+    // (a twilight field carried 900 such particles a frame). The sphere is
+    // twice the scaled quad, which covers its pivot shift and rotation; the
+    // exact per-corner test in the draw function still follows.
+    f32 cullPlanes[5][4];
+    {
+        const f32 (*m)[4] = work->mPrjMtx;
+        for (int i = 0; i < 4; i++) {
+            cullPlanes[0][i] = m[2][i];           // in front of the eye
+            cullPlanes[1][i] = m[0][i];           // s >= 0
+            cullPlanes[2][i] = m[2][i] - m[0][i]; // s <= 1
+            cullPlanes[3][i] = m[1][i];           // t >= 0
+            cullPlanes[4][i] = m[2][i] - m[1][i]; // t <= 1
+        }
+        for (auto& plane : cullPlanes) {
+            const f32 length = std::sqrt(plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]);
+            if (length > 1.0e-12f) {
+                for (f32& value : plane) {
+                    value /= length;
+                }
+            } else {
+                // Orthographic view: no plane through the eye.
+                plane[0] = plane[1] = plane[2] = 0.0f;
+                plane[3] = 1.0f;
+            }
+        }
+    }
+    f32 quadRadius = 0.0f;
+    for (int i = 0; i < info.vtxCount; i++) {
+        quadRadius = std::max(quadRadius, std::sqrt(info.vtxPos[i][0] * info.vtxPos[i][0] + info.vtxPos[i][1] * info.vtxPos[i][1] +
+                                                    info.vtxPos[i][2] * info.vtxPos[i][2]));
+    }
+    quadRadius *= 2.0f;
+    const f32 scaleX = std::fabs(work->mGlobalPtclScl.x), scaleY = std::fabs(work->mGlobalPtclScl.y);
+    const auto offScreen = [&](const JPABaseParticle* particle) {
+        Vec centre;
+        MTXMultVec(work->mPosCamMtx, &particle->mPosition, &centre);
+        const f32 radius = quadRadius * std::max(scaleX * std::fabs(particle->mParticleScaleX),
+                                                 scaleY * std::fabs(particle->mParticleScaleY));
+        for (const auto& plane : cullPlanes) {
+            if (plane[0] * centre.x + plane[1] * centre.y + plane[2] * centre.z + plane[3] < -radius) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // The environment colour follows each particle's age and the texture its
+    // animation frame, and neither can travel with a vertex: the TEV register
+    // and the bound texture belong to the draw. Drawn in list order, a fire
+    // emitter changed one of them at nearly every particle (242 draws for 279
+    // particles). The particles are grouped instead: one draw per texture and
+    // per environment colour within 24/255 a channel (9%), groups in order of
+    // their first particle. Inside one emitter the order between groups only
+    // matters where its particles overlap with a non-additive blend.
+    struct Group {
+        GXColor env;
+        int tex;
+    };
+    constexpr unsigned groupLimit = 12, particleLimit = 768;
+    constexpr u8 ungrouped = 0xff, culledGroup = 0xfe;
+    static u8 groupOf[particleLimit];
+    Group groups[groupLimit];
+    unsigned groupCount = 0;
+    const bool grouped = (trackEnv || trackTex) && list.getNum() <= particleLimit;
+    if (grouped) {
+        unsigned index = 0;
+        for (JPANode<JPABaseParticle>* n = node; n != list.getEnd(); n = step(n)) {
+            if (offScreen(n->getObject())) {
+                groupOf[index++] = culledGroup;
+                ctx.culled++;
+                count++;
+                continue;
+            }
+            work->mpCurNode = n;
+            for (int i = funcNum - 1; i >= 1; i--) {
+                (*funcs[i])(work, n->getObject(), &ctx);
+            }
+            const int tex = trackTex ? ctx.texIdx : -1;
+            unsigned g = 0;
+            for (; g < groupCount; g++) {
+                if (groups[g].tex == tex &&
+                    (!trackEnv || !(drift(ctx.clr1.r, groups[g].env.r, 24) || drift(ctx.clr1.g, groups[g].env.g, 24) ||
+                                    drift(ctx.clr1.b, groups[g].env.b, 24)))) {
+                    break;
+                }
+            }
+            if (g == groupCount) {
+                if (groupCount < groupLimit) {
+                    groups[groupCount++] = {ctx.clr1, tex};
+                } else {
+                    g = ungrouped;
+                }
+            }
+            groupOf[index++] = u8(g);
+        }
+        for (unsigned g = 0; g < groupCount; g++) {
+            if (trackEnv) {
+                GXSetTevColor(GX_TEVREG1, groups[g].env);
+            }
+            if (trackTex) {
+                work->mpResMgr->load(res->getTexIdx(groups[g].tex), GX_TEXMAP0);
+            }
+            index = 0;
+            for (JPANode<JPABaseParticle>* n = node; n != list.getEnd(); n = step(n)) {
+                if (groupOf[index++] != g) {
+                    continue;
+                }
+                work->mpCurNode = n;
+                for (int i = funcNum - 1; i >= 0; i--) {
+                    (*funcs[i])(work, n->getObject(), &ctx);
+                }
+                count++;
+            }
+            closeDraw();
+        }
+    }
+
+    // Particles left over (more groups than the limit), or an emitter that
+    // needs no grouping: list order, a new draw at each change.
+    bool envKnown = false;
+    GXColor env = {0, 0, 0, 0};
+    unsigned index = 0;
+    for (; node != list.getEnd(); node = step(node)) {
+        if (grouped && groupOf[index++] != ungrouped) {
+            continue;
+        }
+        work->mpCurNode = node;
+        JPABaseParticle* particle = node->getObject();
+        if (!grouped && offScreen(particle)) {
+            ctx.culled++;
+            count++;
+            continue;
+        }
+        for (int i = funcNum - 1; i >= 1; i--) {
+            (*funcs[i])(work, particle, &ctx);
+        }
+        if (trackEnv && (!envKnown || drift(ctx.clr1.r, env.r, 16) || drift(ctx.clr1.g, env.g, 16) ||
+                         drift(ctx.clr1.b, env.b, 16))) {
+            if (ctx.open) {
+                dusk::native_effects::counters.particleBreaks[0]++;
+            }
+            closeDraw();
+            env = ctx.clr1;
+            envKnown = true;
+            GXSetTevColor(GX_TEVREG1, env);
+        }
+        if (trackTex && ctx.texIdx != texIdx) {
+            if (ctx.open) {
+                dusk::native_effects::counters.particleBreaks[1]++;
+            }
+            closeDraw();
+            texIdx = ctx.texIdx;
+            work->mpResMgr->load(res->getTexIdx(texIdx), GX_TEXMAP0);
+        }
+        // The draw function opens the primitive when its quad is on screen.
+        (*funcs[0])(work, particle, &ctx);
+        count++;
+    }
+    closeDraw();
+    dusk::native_effects::counters.particleBatched += count - ctx.culled;
+    dusk::native_effects::counters.particleCulled += ctx.culled;
+
+    // Back to the per-particle layout the rest of the emitter loop expects.
+    if (clipOff) {
+        GXSetClipMode(GX_CLIP_DISABLE);
+    }
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
+    GXSetVtxDesc(GX_VA_TEX0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT1, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT1, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+    GXSetCurrentMtx(GX_PNMTX0);
+    if (changedTexGen) {
+        if (projected) {
+            GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX3x4, GX_TG_POS, GX_TEXMTX0);
+        } else {
+            GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0);
+        }
+    }
+    // The indirect stage comes back with the next setPTev, which precedes
+    // every particle loop of this resource.
+    if (useClr0) {
+        sNativeTevDirty = true;
+    }
+    return true;
+}
+#endif
+
 void JPAResource::drawP(JPAEmitterWorkData* work) {
 #if !defined(DUSK_TARGET_3DS)
     ZoneScoped;
@@ -1110,6 +1609,21 @@ void JPAResource::drawP(JPAEmitterWorkData* work) {
 
     ParticleDrawCtx ctx{}; // immediate mode
 #elif defined(DUSK_TARGET_3DS)
+    dusk::native_effects::counters.particleEmitters++;
+    if (native_draw_particle_batch(work, false)) {
+        GXSetMisc(GX_MT_XF_FLUSH, 0);
+        if (work->mpEmtr->mpEmtrCallBack != nullptr) {
+            work->mpEmtr->mpEmtrCallBack->drawAfter(work->mpEmtr);
+        }
+        return;
+    }
+    dusk::native_effects::counters.particleSingle += work->mpEmtr->mAlivePtclBase.getNum();
+    if (sNativeTevDirty) {
+        GXSetNumChans(0);
+        pBsp->setGX(work);
+        sNativeTevDirty = false;
+    }
+
     ParticleDrawCtx ctx{}; // original particle attributes, no presentation history
 #endif
 
@@ -1186,6 +1700,21 @@ void JPAResource::drawC(JPAEmitterWorkData* work) {
         (*mpDrawEmitterChildFuncList[i])(work);
     }
 
+#if defined(DUSK_TARGET_3DS)
+    if (native_draw_particle_batch(work, true)) {
+        GXSetMisc(GX_MT_XF_FLUSH, 0);
+        if (work->mpEmtr->mpEmtrCallBack != NULL) {
+            work->mpEmtr->mpEmtrCallBack->drawAfter(work->mpEmtr);
+        }
+        return;
+    }
+    dusk::native_effects::counters.particleSingle += work->mpEmtr->mAlivePtclChld.getNum();
+    if (sNativeTevDirty) {
+        GXSetNumChans(0);
+        pBsp->setGX(work);
+        sNativeTevDirty = false;
+    }
+#endif
 #if TARGET_PC
     ParticleDrawCtx ctx{}; // immediate mode
 #endif

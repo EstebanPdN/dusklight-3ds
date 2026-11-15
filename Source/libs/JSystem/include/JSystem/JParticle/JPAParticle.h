@@ -84,6 +84,11 @@ public:
     virtual ~JPAParticleCallBack() = 0;
     virtual void execute(JPABaseEmitter*, JPABaseParticle*) {}
     virtual void draw(JPABaseEmitter*, JPABaseParticle*) {}
+#if defined(DUSK_TARGET_3DS)
+    // Native particle batch: false when draw() does nothing, so the emitter's
+    // particles can share one draw. Unknown callbacks keep one draw each.
+    virtual bool drawsParticle() const { return true; }
+#endif
 };
 
 // not sure where this belongs

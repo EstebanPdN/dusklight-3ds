@@ -711,9 +711,25 @@ int daBg_c::create() {
             JKRHeap* old = mDoExt_getCurrentHeap();
             this->heap = JKRCreateSolidHeap(-1, room_heap, false);
             JUT_ASSERT(471, heap != NULL);
+#if defined(DUSK_TARGET_3DS)
+            if (heap == NULL) {
+                // The block is already full (its room archive and a neighbour
+                // took all of it): same fallback as a background that does not
+                // fit. Without a background the player never finds ground and
+                // the stage never starts.
+                OSReport("Native room %d background has no room left in its memory block; using the game heap\n", roomNo);
+                u32 size = 0x20040;
+                size |= 0x80000000;
+                if (!fopAcM_entrySolidHeap(this, checkCreateHeap, size)) {
+                    OSReport("Native room %d background does not fit the game heap either\n", roomNo);
+                    return cPhs_ERROR_e;
+                }
+            } else {
+#else
             if (heap == NULL) {
                 return cPhs_ERROR_e;
             }
+#endif
             JKRHEAP_NAME(heap, "d_a_bg Anms");
 
             mDoExt_setCurrentHeap(this->heap);
@@ -728,10 +744,37 @@ int daBg_c::create() {
             JUT_ASSERT(476, rt == 1);
 
             mDoExt_setCurrentHeap(old);
+#if defined(DUSK_TARGET_3DS)
+            if (rt != 1) {
+                // A room memory block has the original console's size, while
+                // actor heap estimates are doubled on this target. When what
+                // is left of the block cannot hold this room's models, build
+                // them in an actor heap from the game heap, exactly as a room
+                // without a memory block does.
+                static int reported;
+                if (reported < 4) {
+                    ++reported;
+                    OSReport("Native room %d background does not fit its memory block (%lu bytes); using the game heap\n",
+                             roomNo, static_cast<unsigned long>(this->heap->getHeapSize()));
+                }
+                mDoExt_destroySolidHeap(this->heap);
+                this->heap = NULL;
+                u32 size = 0x20040;
+                size |= 0x80000000;
+                if (!fopAcM_entrySolidHeap(this, checkCreateHeap, size)) {
+                    OSReport("Native room %d background does not fit the game heap either\n", roomNo);
+                    return cPhs_ERROR_e;
+                }
+            } else {
+                this->heap->adjustSize();
+            }
+            }
+#else
             if (rt != 1) {
                 return cPhs_ERROR_e;
             }
             this->heap->adjustSize();
+#endif
         } else {
             u32 size = 0x20040;
             size |= 0x80000000;

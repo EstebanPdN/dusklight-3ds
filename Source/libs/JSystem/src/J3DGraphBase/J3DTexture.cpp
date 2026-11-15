@@ -6,6 +6,7 @@
 #if defined(DUSK_TARGET_3DS)
 #include "JSystem/JKernel/JKRExpHeap.h"
 #include "../../../../platforms/3ds/runtime/texture_resources.hpp"
+#include "../../../../platforms/3ds/runtime/gx_transform_commands.hpp"
 #include "../../../../platforms/3ds/runtime/gx_state.hpp"
 #endif
 
@@ -25,6 +26,24 @@ J3DTexture::~J3DTexture() {
 }
 
 #if defined(DUSK_TARGET_3DS)
+// Hooks of the GX texture object table (gx_state.cpp). Storage inside an
+// expandable heap is live only while it lies in a used block; solid heaps
+// never free single blocks, and storage outside the game heaps is unknown,
+// so both count as live.
+static bool duskNativeTexObjStorageLive(const void* address) {
+    JKRHeap* heap = JKRHeap::findFromRoot(const_cast<void*>(address));
+    if (!heap || heap->getHeapType() != 'EXPH') return true;
+    return static_cast<JKRExpHeap*>(heap)->getRemainingAllocationSize(address) >= s32(sizeof(GXTexObj));
+}
+static void duskNativeTexObjReclaimed(const void* address) {
+    dusk::native::releaseTextureResources(address);
+}
+static struct NativeTexObjHooks {
+    NativeTexObjHooks() {
+        dusk::native::gx::textureObjectStorageLive = duskNativeTexObjStorageLive;
+        dusk::native::gx::textureObjectReclaimed = duskNativeTexObjReclaimed;
+    }
+} sNativeTexObjHooks;
 void J3DTexture::releaseNativeTexture(u16 index) {
     dusk::native::releaseTextureResources(&mpTexObj[index]);
 }
@@ -34,8 +53,22 @@ void J3DTexture::releaseNativeTextures() {
 void J3DTexture::retainNativeTexture(u16 index, const ResTIMG& source) {
     using namespace dusk::native;
     gx::Texture metadata;
-    if (!collectTextureResources() || !gx::queryTextureObject(&mpTexObj[index], metadata))
+    const bool collected = collectTextureResources();
+    if (!collected || !gx::queryTextureObject(&mpTexObj[index], metadata)) {
+        if (gx::commandSkipUnavailableTextures) {
+            // Game policy: the texture stays unavailable and its draws are left out.
+            static unsigned reported;
+            if (reported < 8 && ++reported) {
+                unsigned used = 0, capacity = 0;
+                gx::textureObjectUsage(used, capacity);
+                // The resource reason is only current when the collection failed.
+                OSReport("Native J3D texture object unavailable (index=%u): %s; GX texture objects %u/%u\n", unsigned(index),
+                    collected ? "no GX texture object for it" : textureResourceFailure(), used, capacity);
+            }
+            return;
+        }
         OSPanic(__FILE__,__LINE__,"Native J3D texture object/retirement: %s",textureResourceFailure());
+    }
     if (retainArchiveTexture(&mpTexObj[index], &source, metadata.handle)) return;
     // ARAM archives can decompress a complete BMD into an independent EXP
     // allocation. Use its actual live extent, never the heap's capacity.

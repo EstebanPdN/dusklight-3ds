@@ -14,6 +14,12 @@
 #include "m_Do/m_Do_mtx.h"
 #if defined(DUSK_TARGET_3DS)
 #include "../../platforms/3ds/runtime/gx_framebuffer.hpp"
+#include "../../platforms/3ds/runtime/gx_copy_images.hpp"
+#include "../../platforms/3ds/runtime/shadow_casters.hpp"
+#include "../../platforms/3ds/runtime/gx_profile.hpp"
+#include "helpers/native_effects.h"
+#include "JSystem/JUtility/JUTTexture.h"
+#include <dolphin/gx/GXAurora.h>
 #endif
 
 #if TARGET_PC
@@ -1179,8 +1185,14 @@ void dDlst_shadowReal_c::draw() {
     mShadowRealPoly.draw();
 }
 
+#if defined(DUSK_TARGET_3DS)
+static unsigned l_realPolygonCalls;
+#endif
 static int psdRealCallBack(cBgS_ShdwDraw* param_0, cBgD_Vtx_t* param_1, int param_2,
                                int param_3, int param_4, cM3dGPla* param_5) {
+#if defined(DUSK_TARGET_3DS)
+    ++l_realPolygonCalls;
+#endif
     ShdwDrawPoly_c* shdwDrawPoly = (ShdwDrawPoly_c*)param_0;
     const cXyz* normal = param_5->GetNP();
     if (shdwDrawPoly->getLightVec()->inprod(*normal) < -0.2f) {
@@ -1245,7 +1257,16 @@ static BOOL realPolygonCheck(cXyz* param_0, f32 param_1, f32 param_2, cXyz* para
     shdwDrawPoly.setCenter(param_0);
     shdwDrawPoly.setLightVec(param_3);
     shdwDrawPoly.setPoly(param_4);
+#if defined(DUSK_TARGET_3DS)
+    l_realPolygonCalls = 0;
+#endif
     dComIfG_Bgsp().ShdwDraw(&shdwDrawPoly);
+#if defined(DUSK_TARGET_3DS)
+    if (dusk::native::gxSparseVertexProfiling) {
+        OSReport("Native real shadow search: size=%.0f height=%.0f box=%.0f x %.0f x %.0f polygons-visited=%u\n", param_1, param_2,
+                 local_98.x - local_8c.x, local_98.y - local_8c.y, local_98.z - local_8c.z, l_realPolygonCalls);
+    }
+#endif
     return TRUE;
 }
 
@@ -1374,6 +1395,9 @@ u32 dDlst_shadowReal_c::set(u32 i_key, J3DModel* i_model, cXyz* param_2, f32 par
         }
 
         mState = 1;
+#if defined(DUSK_TARGET_3DS)
+        field_0x3 = 0xff; // no image tile until imageDraw assigns one
+#endif
         mKey = i_key;
         mModelNum = 0;
         mCameraZ = i_cameraZ;
@@ -1526,7 +1550,140 @@ void dDlst_shadowSimple_c::set(cXyz* param_0, f32 param_1, f32 param_2, cXyz* pa
     mpTexObj = param_6;
 }
 
+#if defined(DUSK_TARGET_3DS)
+// Native shadows. The GameCube sequences are not translated; both kinds are
+// redrawn in the form the PICA handles best, for (nearly) the same picture.
+//
+// Blob shadows. The original adds and subtracts a box volume in the EFB alpha
+// channel, shapes that alpha with the blob texture, darkens through it and
+// clears the box again: five draws and four blend states per shadow. Here a
+// shadow is one quad on the floor plane, depth tested against the scene, and
+// all the quads that share a texture are one draw.
+//
+// Model shadows. The original draws up to four casters into the EFB, one per
+// colour channel, copies the EFB to a texture, and draws the floor triangles
+// under each caster with a projective texture matrix and a channel swap.
+// Here every caster owns a tile of one RGBA8 image that the GPU renders and
+// keeps (no CPU readback); the floor triangles are clipped to the tile on the
+// CPU, so their texture coordinates are plain per-vertex values, and all the
+// casters' triangles are one draw.
+#define SHADOW_REAL_LIMIT 5
+namespace {
+constexpr u16 l_nativeShadowWidth = 256;
+constexpr u16 l_nativeShadowHeight = 128;
+struct NativeShadowTile {
+    u16 x, y, size;
+};
+// The first caster in the list is the player (see setReal): it gets the
+// large tile. 128 pixels on a 240-line screen is the original 192 on 448.
+constexpr NativeShadowTile l_nativeShadowTile[SHADOW_REAL_LIMIT] = {
+    {0, 0, 128}, {128, 0, 64}, {192, 0, 64}, {128, 64, 64}, {192, 64, 64},
+};
+ATTRIBUTE_ALIGN(32) u8 l_nativeShadowImage[0x20 + l_nativeShadowWidth * l_nativeShadowHeight * 4];
+// What a caster needs to become a blob when it loses its tile.
+struct NativeShadowCaster {
+    cXyz pos;
+    f32 size, height;
+};
+NativeShadowCaster l_nativeShadowCaster[8];
+// Shadow geometry is pulled towards the eye by this fraction of its distance
+// so it wins the depth test against the floor it lies on.
+constexpr f32 l_nativeShadowBias = 0.004f;
+
+struct NativeShadowPoint {
+    f32 x, y, z, s, t;
+};
+
+void nativeShadowMaterial(bool textured) {
+    GXSetNumChans(1);
+    GXSetChanCtrl(GX_COLOR0A0, GX_DISABLE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE,
+                  GX_AF_NONE);
+    GXSetNumTevStages(1);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_RASC);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    if (textured) {
+        GXSetNumTexGens(1);
+        GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
+        GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+        GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_TEXA, GX_CA_RASA, GX_CA_ZERO);
+    } else {
+        GXSetNumTexGens(0);
+        GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+        GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA);
+    }
+}
+
+inline void nativeShadowVertex(const Mtx view, const NativeShadowPoint& p, u8 alpha, f32 s,
+                               f32 t) {
+    const f32 k = 1.0f - l_nativeShadowBias;
+    GXPosition3f32(k * (view[0][0] * p.x + view[0][1] * p.y + view[0][2] * p.z + view[0][3]),
+                   k * (view[1][0] * p.x + view[1][1] * p.y + view[1][2] * p.z + view[1][3]),
+                   k * (view[2][0] * p.x + view[2][1] * p.y + view[2][2] * p.z + view[2][3]));
+    GXColor4u8(0, 0, 0, alpha);
+    GXTexCoord2f32(s, t);
+}
+
+// Sutherland-Hodgman against one side of the unit square in (s,t).
+int nativeShadowClip(const NativeShadowPoint* in, int count, NativeShadowPoint* out, int axis,
+                     f32 limit, bool keepBelow) {
+    int n = 0;
+    for (int i = 0; i < count; i++) {
+        const NativeShadowPoint& a = in[i];
+        const NativeShadowPoint& b = in[(i + 1) % count];
+        const f32 da = (axis ? a.t : a.s) - limit;
+        const f32 db = (axis ? b.t : b.s) - limit;
+        const bool ina = keepBelow ? da <= 0.0f : da >= 0.0f;
+        const bool inb = keepBelow ? db <= 0.0f : db >= 0.0f;
+        if (ina) {
+            out[n++] = a;
+        }
+        if (ina != inb) {
+            const f32 f = da / (da - db);
+            NativeShadowPoint& o = out[n++];
+            o.x = a.x + f * (b.x - a.x);
+            o.y = a.y + f * (b.y - a.y);
+            o.z = a.z + f * (b.z - a.z);
+            o.s = a.s + f * (b.s - a.s);
+            o.t = a.t + f * (b.t - a.t);
+        }
+    }
+    return n;
+}
+}  // namespace
+#else
+#define SHADOW_COPY_FILTER GX_TRUE
+#define SHADOW_REAL_LIMIT 8
+#endif
+
 void dDlst_shadowControl_c::init() {
+#if defined(DUSK_TARGET_3DS)
+    // One static RGBA8 image holds every caster tile. It is registered as a
+    // copy destination once; its pixels live in the GPU texture only.
+    static bool l_registered;
+    if (!l_registered) {
+        ResTIMG* timg = reinterpret_cast<ResTIMG*>(l_nativeShadowImage);
+        timg->format = GX_TF_RGBA8;
+        timg->alphaEnabled = true;
+        timg->width = l_nativeShadowWidth;
+        timg->height = l_nativeShadowHeight;
+        timg->minFilter = GX_LINEAR;
+        timg->magFilter = GX_LINEAR;
+        timg->mipmapCount = 1;
+        timg->imageOffset = 0x20;
+        if (!dusk::native::registerCopyImage({l_nativeShadowImage, sizeof(l_nativeShadowImage)},
+                                             l_nativeShadowImage + 0x20)) {
+            OSPanic(__FILE__, __LINE__, "Native shadow image registration failed");
+        }
+        l_registered = true;
+    }
+    mShadowTexObj[0].reset();
+    GXInitTexObj(&mShadowTexObj[0], l_nativeShadowImage + 0x20, l_nativeShadowWidth,
+                 l_nativeShadowHeight, GX_TF_RGBA8, GX_CLAMP, GX_CLAMP, GX_DISABLE);
+    GXInitTexObjLOD(&mShadowTexObj[0], GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE,
+                    GX_ANISO_1);
+    return;
+#endif
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
     mTexResScale = dusk::getSettings().game.shadowResolutionMultiplier;
     // Increase shadow map resolution
@@ -1577,19 +1734,6 @@ void dDlst_shadowControl_c::reset() {
 #endif
 }
 
-#if defined(DUSK_TARGET_3DS)
-#define SHADOW_COPY_FILTER GX_FALSE
-// Native cost reduction: only the four casters nearest the camera keep real
-// shadows (one RGBA image); farther casters already fade out with distance.
-#define SHADOW_REAL_LIMIT 4
-// Native cost reduction: shadows (real and simple) are disabled outright. No
-// caster images, EFB copies, receiver geometry or blob quads are produced.
-#define SHADOW_DISABLED 1
-#else
-#define SHADOW_DISABLED 0
-#define SHADOW_COPY_FILTER GX_TRUE
-#define SHADOW_REAL_LIMIT 8
-#endif
 void dDlst_shadowControl_c::imageDraw(Mtx param_0) {
     ATTRIBUTE_ALIGN(32) static u8 l_matDL[] = {
         0x10, 0x00, 0x00, 0x10, 0x0E, 0x00, 0x00, 0x04, 0x00, 0x10, 0x00, 0x00, 0x10, 0x10,
@@ -1603,9 +1747,29 @@ void dDlst_shadowControl_c::imageDraw(Mtx param_0) {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     };
 
-#if SHADOW_DISABLED
+#if defined(DUSK_TARGET_3DS)
+    // Nothing is drawn here. Each caster gets its tile, and its models are
+    // tagged so that the PICA draws the scene makes for them are remembered;
+    // draw() replays those draws into the shadow image after the scene's
+    // opaque lists (see shadow_casters.hpp).
+    if (dusk::native_effects::shadows < 2) {
+        return;
+    }
+    int tile = 0;
+    for (dDlst_shadowReal_c* caster = field_0x4; caster != NULL; caster = caster->getZsortNext()) {
+        if (caster->isUse() && tile < SHADOW_REAL_LIMIT) {
+            caster->field_0x3 = tile++;
+            const u8 slot = (caster - mReal) + 1;
+            for (u8 i = 0; i < caster->mModelNum; i++) {
+                caster->mpModels[i]->mNativeShadowSlot = slot;
+            }
+        }
+    }
+    if (tile != 0) {
+        dusk::native::armGxShadowCasters();
+    }
     return;
-#endif
+#else
 
     static GXColor l_imageDrawColor[4] = {
         {255, 0, 0, 0},
@@ -1638,13 +1802,7 @@ void dDlst_shadowControl_c::imageDraw(Mtx param_0) {
         if (shadowReal->isUse()) {
             if (chan == 0) {
                 r27 = GXGetTexObjWidth(&mShadowTexObj[tex]);
-#if defined(DUSK_TARGET_3DS)
-                // Native cost reduction: render casters at texture size, not 2x
-                // with a box-filtered copy (1/4 the offscreen fill and readback).
-                r26 = r27;
-#else
                 r26 = r27 * 2;
-#endif
 #ifdef TARGET_PC
                 GXCreateFrameBuffer(r26, r26);
                 needsRestore = true;
@@ -1684,8 +1842,212 @@ void dDlst_shadowControl_c::imageDraw(Mtx param_0) {
 #endif
     GXSetClipMode(GX_CLIP_ENABLE);
     GXSetDither(GX_TRUE);
+#endif
 }
 
+#if defined(DUSK_TARGET_3DS)
+void dDlst_shadowControl_c::draw(Mtx param_0) {
+    if (dusk::native_effects::shadows == 0) {
+        return;
+    }
+    bool real = false;
+    if (dusk::native_effects::shadows >= 2) {
+        for (dDlst_shadowReal_c* i = field_0x4; i != NULL; i = i->getZsortNext()) {
+            if (i->isUse() && i->mShadowRealPoly.mCount != 0) {
+                real = true;
+                break;
+            }
+        }
+    }
+    if (dusk::native_effects::shadows >= 2) {
+        // Caster pass: replay the remembered draws of every tagged model into
+        // its tile, seen from its light.
+        dusk::native::ShadowCasterView views[8] = {};
+        Mtx inverse;
+        MTXInverse(param_0, inverse);
+        bool tagged = false;
+        for (dDlst_shadowReal_c* i = field_0x4; i != NULL; i = i->getZsortNext()) {
+            if (!i->isUse() || i->field_0x3 >= SHADOW_REAL_LIMIT) {
+                continue;
+            }
+            tagged = true;
+            for (u8 n = 0; n < i->mModelNum; n++) {
+                i->mpModels[n]->mNativeShadowSlot = 0;
+            }
+            if (i->mShadowRealPoly.mCount == 0) {
+                continue;
+            }
+            const NativeShadowTile& area = l_nativeShadowTile[i->field_0x3];
+            dusk::native::ShadowCasterView& view = views[i - mReal];
+            Mtx toTile;
+            cMtx_concat(i->mReceiverProjMtx, inverse, toTile);
+            view.used = true;
+            for (int c = 0; c < 4; c++) {
+                view.st[0][c] = toTile[0][c];
+                view.st[1][c] = toTile[1][c];
+            }
+            view.x = area.x;
+            view.y = area.y;
+            view.size = area.size;
+        }
+        if (tagged && !dusk::native::drawGxShadowCasters(l_nativeShadowImage + 0x20,
+                                                          l_nativeShadowWidth,
+                                                          l_nativeShadowHeight, views)) {
+            real = false;
+        }
+    }
+
+    if (!real && mSimpleNum == 0) {
+        return;
+    }
+
+    static Mtx l_identity = {
+        {1.0f, 0.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f, 0.0f},
+    };
+    j3dSys.reinitGX();
+    GXSetNumIndStages(0);
+    dKy_GxFog_set();
+    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
+    GXSetZMode(GX_ENABLE, GX_LEQUAL, GX_DISABLE);
+    GXSetZCompLoc(GX_TRUE);
+    GXSetAlphaCompare(GX_GREATER, 0, GX_AOP_OR, GX_GREATER, 0);
+    GXSetCullMode(GX_CULL_NONE);
+    GXSetClipMode(GX_CLIP_ENABLE);
+    GXSetColorUpdate(GX_ENABLE);
+    GXSetAlphaUpdate(GX_DISABLE);
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+    GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+    GXLoadPosMtxImm(l_identity, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
+
+    if (real) {
+        // Floor triangles of every caster, cut to the caster's tile: outside
+        // it the original samples the clamped (empty) border, so nothing is
+        // lost, and a triangle never reaches a neighbouring tile.
+        nativeShadowMaterial(true);
+        GXLoadTexObj(&mShadowTexObj[0], GX_TEXMAP0);
+        const f32 invW = 1.0f / l_nativeShadowWidth;
+        const f32 invH = 1.0f / l_nativeShadowHeight;
+        bool open = false;
+        for (dDlst_shadowReal_c* i = field_0x4; i != NULL; i = i->getZsortNext()) {
+            if (!i->isUse() || i->mShadowRealPoly.mCount == 0 || i->field_0x3 >= SHADOW_REAL_LIMIT) {
+                continue;
+            }
+            dusk::native_effects::counters.realShadows++;
+            const NativeShadowTile& area = l_nativeShadowTile[i->field_0x3];
+            const f32 margin = 1.0f / area.size;
+            const u8 alpha = i->field_0x1;
+            const MtxP m = i->mReceiverProjMtx;
+            const dDlst_shadowTri_c* tri = i->mShadowRealPoly.getTri();
+            for (int n = 0; n < i->mShadowRealPoly.mCount; n++, tri++) {
+                NativeShadowPoint a[8], b[8];
+                for (int v = 0; v < 3; v++) {
+                    // Same winding as the original draw (2, 1, 0).
+                    const cXyz& p = tri->mPos[2 - v];
+                    a[v].x = p.x;
+                    a[v].y = p.y;
+                    a[v].z = p.z;
+                    a[v].s = m[0][0] * p.x + m[0][1] * p.y + m[0][2] * p.z + m[0][3];
+                    a[v].t = m[1][0] * p.x + m[1][1] * p.y + m[1][2] * p.z + m[1][3];
+                }
+                int count = nativeShadowClip(a, 3, b, 0, margin, false);
+                if (count >= 3) {
+                    count = nativeShadowClip(b, count, a, 0, 1.0f - margin, true);
+                }
+                if (count >= 3) {
+                    count = nativeShadowClip(a, count, b, 1, margin, false);
+                }
+                if (count >= 3) {
+                    count = nativeShadowClip(b, count, a, 1, 1.0f - margin, true);
+                }
+                if (count < 3) {
+                    continue;
+                }
+                if (!open) {
+                    GXBegin(GX_TRIANGLES, GX_VTXFMT0, GX_AUTO);
+                    open = true;
+                }
+                for (int v = 1; v + 1 < count; v++) {
+                    const NativeShadowPoint* corner[3] = {&a[0], &a[v], &a[v + 1]};
+                    for (int c = 0; c < 3; c++) {
+                        nativeShadowVertex(param_0, *corner[c], alpha,
+                                           (area.x + corner[c]->s * area.size) * invW,
+                                           (area.y + corner[c]->t * area.size) * invH);
+                    }
+                    dusk::native_effects::counters.realShadowTriangles++;
+                }
+            }
+        }
+        if (open) {
+            GXEnd();
+        }
+    }
+
+    // Blob shadows: one draw for every run of quads with the same texture.
+    static u8 l_done[128];
+    for (int i = 0; i < mSimpleNum; i++) {
+        l_done[i] = 0;
+    }
+    for (int first = 0; first < mSimpleNum; first++) {
+        if (l_done[first]) {
+            continue;
+        }
+        TGXTexObj* tex = mSimple[first].mpTexObj;
+        int count = 0;
+        for (int i = first; i < mSimpleNum; i++) {
+            count += mSimple[i].mpTexObj == tex;
+        }
+        f32 repeat = 1.0f;
+        nativeShadowMaterial(tex != NULL);
+        if (tex != NULL) {
+            GXLoadTexObj(tex, GX_TEXMAP0);
+            if (GXGetTexObjWidth(tex) != GXGetTexObjHeight(tex)) {
+                repeat = 2.0f;
+            }
+        }
+        GXBegin(GX_QUADS, GX_VTXFMT0, count * 4);
+        for (int i = first; i < mSimpleNum; i++) {
+            dDlst_shadowSimple_c& simple = mSimple[i];
+            if (simple.mpTexObj != tex) {
+                continue;
+            }
+            l_done[i] = 1;
+            // The quad is the original "seal": the unit square of the floor
+            // frame, one unit above the floor.
+            Mtx frame;
+            cMtx_concat(param_0, simple.mMtx, frame);
+            static const f32 l_corner[4][4] = {
+                {-1.0f, -1.0f, 0.0f, 0.0f},
+                {1.0f, -1.0f, 1.0f, 0.0f},
+                {1.0f, 1.0f, 1.0f, 1.0f},
+                {-1.0f, 1.0f, 0.0f, 1.0f},
+            };
+            for (int c = 0; c < 4; c++) {
+                NativeShadowPoint p;
+                p.x = l_corner[c][0];
+                p.y = 1.0f;
+                p.z = l_corner[c][1];
+                nativeShadowVertex(frame, p, simple.mAlpha, l_corner[c][2] * repeat,
+                                   l_corner[c][3]);
+            }
+        }
+        GXEnd();
+        dusk::native_effects::counters.simpleShadows += count;
+        dusk::native_effects::counters.simpleShadowDraws++;
+    }
+
+    J3DShape::resetVcdVatCache();
+    GXSetColorUpdate(GX_ENABLE);
+    GXSetAlphaUpdate(GX_DISABLE);
+}
+#else
 void dDlst_shadowControl_c::draw(Mtx param_0) {
 #if !defined(DUSK_TARGET_3DS)
     ZoneScoped;
@@ -1696,10 +2058,6 @@ void dDlst_shadowControl_c::draw(Mtx param_0) {
         GX_CH_BLUE,
         GX_CH_ALPHA,
     };
-
-#if SHADOW_DISABLED
-    return;
-#endif
 
     j3dSys.reinitGX();
     GXSetNumIndStages(0);
@@ -1761,6 +2119,7 @@ void dDlst_shadowControl_c::draw(Mtx param_0) {
     GXSetColorUpdate(GX_ENABLE);
     GXSetAlphaUpdate(GX_DISABLE);
 }
+#endif
 
 int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, cXyz* param_4,
                                        f32 param_5, f32 param_6, dKy_tevstr_c* param_7) {
@@ -1770,8 +2129,45 @@ int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, c
         {0.0f, 0.0f, 1.0f, 0.0f},
     };
 
-#if SHADOW_DISABLED
-    return 0;
+#if defined(DUSK_TARGET_3DS)
+    if (dusk::native_effects::shadows == 0) {
+        return 0;
+    }
+    // A caster as large as a landscape (the wall of light of the title screen
+    // asks for a shadow 658 000 units wide) cannot be drawn into a shadow
+    // tile, but its ground search walks every collision polygon of the stage:
+    // 5 230 polygons and 40 ms per picture there, on the console too. No
+    // character or boss comes near this size.
+    if (param_5 > 20000.0f) {
+        dusk::native_effects::counters.realShadowDemoted++;
+        return 0;
+    }
+    // A caster without a tile (blob-only mode, far from the camera, or over
+    // the limit below) is drawn as a blob on the floor under it, as dark as
+    // its model shadow would be, instead of losing its shadow.
+    const auto demote = [this](const cXyz& pos, f32 size, f32 height, f32 darkness) {
+        if (darkness <= 0.0f) {
+            return;
+        }
+        cXyz up(0.0f, 1.0f, 0.0f);
+        cXyz at = pos;
+        f32 radius = size * 0.07f;
+        if (radius < 25.0f) {
+            radius = 25.0f;
+        } else if (radius > 110.0f) {
+            radius = 110.0f;
+        }
+        // A negative last argument is an explicit darkness (see set()).
+        if (setSimple(&at, pos.y - height, radius, &up, 0, -darkness, &mSimpleTexObj)) {
+            dusk::native_effects::counters.realShadowDemoted++;
+        }
+    };
+    // Darkness of the model shadow this call would make (setShadowRealMtx).
+    const auto darknessOf = [param_7](f32 strength) {
+        setkankyoShadow(param_7, &strength);
+        return g_envHIO.mOther.mShadowDensity * strength * (1.0f / 255.0f);
+    };
+    bool nativeFar = false;
 #endif
 
     f32 fVar1;
@@ -1794,10 +2190,22 @@ int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, c
             return 0;
         }
         dVar16 = (dVar16 * (1.0f - fVar1));
+#if defined(DUSK_TARGET_3DS)
+        // The original fades a model shadow out between 1000 and 2000 units
+        // from the camera. Past 40% of that fade the shadow is a few faint
+        // pixels: a blob of the same darkness replaces the caster's image.
+        nativeFar = param_2 != 0 && fVar1 > 0.4f;
+#endif
     }
     if (param_2 == 0) {
         dVar17 = FLT_MAX;
     }
+#if defined(DUSK_TARGET_3DS)
+    if (dusk::native_effects::shadows < 2 || nativeFar) {
+        demote(*param_4, param_5, param_6, darknessOf(dVar16));
+        return 0;
+    }
+#endif
     dDlst_shadowReal_c* pdVar11;
     dDlst_shadowReal_c* pdVar10 = NULL;
     dDlst_shadowReal_c* local_98 = field_0x4;
@@ -1814,9 +2222,18 @@ int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, c
     dDlst_shadowReal_c* pdVar12;
     if (mRealNum >= SHADOW_REAL_LIMIT) {
         if (pdVar10 == NULL) {
+#if defined(DUSK_TARGET_3DS)
+            demote(*param_4, param_5, param_6, darknessOf(dVar16));
+#endif
             return 0;
         }
         pdVar12 = field_0x8;
+#if defined(DUSK_TARGET_3DS)
+        {
+            const NativeShadowCaster& lost = l_nativeShadowCaster[pdVar12 - mReal];
+            demote(lost.pos, lost.size, lost.height, pdVar12->field_0x1 * (1.0f / 255.0f));
+        }
+#endif
         field_0x8 = pdVar12->getZsortPre();
         field_0x8->setZsortNext(NULL);
         if (pdVar12 == pdVar10) {
@@ -1840,6 +2257,9 @@ int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, c
     if (!rv) {
         return 0;
     }
+#if defined(DUSK_TARGET_3DS)
+    l_nativeShadowCaster[pdVar12 - mReal] = {*param_4, param_5, param_6};
+#endif
     mRealNum++;
     if (pdVar10 == NULL) {
         if (pdVar11 == NULL) {
@@ -1879,8 +2299,10 @@ bool dDlst_shadowControl_c::addReal(u32 i_key, J3DModel* param_1) {
 
 int dDlst_shadowControl_c::setSimple(cXyz* param_0, f32 param_1, f32 param_2, cXyz* param_3,
                                      s16 param_4, f32 param_5, TGXTexObj* param_6) {
-#if SHADOW_DISABLED
-    return 0;
+#if defined(DUSK_TARGET_3DS)
+    if (dusk::native_effects::shadows == 0) {
+        return 0;
+    }
 #endif
     if (param_3 == NULL || mSimpleNum >= 128) {
         return 0;

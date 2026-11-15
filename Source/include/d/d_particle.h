@@ -59,6 +59,9 @@ public:
 class dPa_windPcallBack : public JPAParticleCallBack {
 public:
     virtual ~dPa_windPcallBack() {}
+#if defined(DUSK_TARGET_3DS)
+    virtual bool drawsParticle() const { return false; }
+#endif
     virtual void execute(JPABaseEmitter*, JPABaseParticle*);
 };
 
@@ -181,6 +184,9 @@ public:
 class dPa_fsenthPcallBack : public JPAParticleCallBack {
 public:
     virtual ~dPa_fsenthPcallBack() {}
+#if defined(DUSK_TARGET_3DS)
+    virtual bool drawsParticle() const { return false; }
+#endif
     virtual void execute(JPABaseEmitter*, JPABaseParticle*);
     virtual void draw(JPABaseEmitter*, JPABaseParticle*);
 };
@@ -239,12 +245,18 @@ public:
 class dPa_wbPcallBack_c : public JPAParticleCallBack {
 public:
     virtual ~dPa_wbPcallBack_c() {}
+#if defined(DUSK_TARGET_3DS)
+    virtual bool drawsParticle() const { return false; }
+#endif
     virtual void execute(JPABaseEmitter*, JPABaseParticle*);
 };
 
 class dPa_particleTracePcallBack_c : public JPAParticleCallBack {
 public:
     virtual ~dPa_particleTracePcallBack_c() {}
+#if defined(DUSK_TARGET_3DS)
+    virtual bool drawsParticle() const { return false; }
+#endif
     virtual void execute(JPABaseEmitter*, JPABaseParticle*);
 };
 

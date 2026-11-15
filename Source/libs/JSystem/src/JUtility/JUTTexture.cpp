@@ -13,6 +13,7 @@
 #include "JSystem/JKernel/JKRExpHeap.h"
 #include "JSystem/JKernel/JKRSolidHeap.h"
 #include "../../../../platforms/3ds/runtime/texture_resources.hpp"
+#include "../../../../platforms/3ds/runtime/gx_transform_commands.hpp"
 #include "../../../../platforms/3ds/runtime/gx_state.hpp"
 #include "../../../../platforms/3ds/runtime/gx_copy_images.hpp"
 #endif
@@ -205,8 +206,15 @@ void JUTTexture::load(GXTexMapID param_0) {
     dusk::native::gx::Texture metadata;
     if(!dusk::native::collectTextureResources())
         OSPanic(__FILE__,__LINE__,"Native texture retirement: %s",dusk::native::textureResourceFailure());
-    if(!dusk::native::gx::queryTextureObject(&mTexObj,metadata))
+    if(!dusk::native::gx::queryTextureObject(&mTexObj,metadata)){
+        if(dusk::native::gx::commandSkipUnavailableTextures){
+            // Game policy: nothing to bind; the unit keeps its previous image.
+            static unsigned reported;
+            if(reported<8&&++reported)OSReport("Native JUT texture object is missing; load skipped\n");
+            return;
+        }
         OSPanic(__FILE__,__LINE__,"Native JUT texture object is missing");
+    }
     if(!dusk::native::retainArchiveTexture(this,mTexInfo,metadata.handle)) {
         // ARAM/JPA resources may be independently expanded into a real game
         // allocation rather than retained in a mounted memory archive.
@@ -217,10 +225,21 @@ void JUTTexture::load(GXTexMapID param_0) {
         else if(heap&&heap->getHeapType()=='SLID')
             remaining=static_cast<JKRSolidHeap*>(heap)->getRemainingUsedSize(mTexInfo);
         if(remaining<32||!dusk::native::retainTextureResource(this,
-            {reinterpret_cast<const u8*>(mTexInfo),static_cast<std::size_t>(remaining)},mTexData))
+            {reinterpret_cast<const u8*>(mTexInfo),static_cast<std::size_t>(remaining)},mTexData)){
+            if(dusk::native::gx::commandSkipUnavailableTextures){
+                // Game policy: an image this port has no provider for (the
+                // full map is drawn into a texture at run time) is not bound;
+                // the unit keeps its previous image instead of ending the game.
+                static unsigned reported;
+                if(reported<8&&++reported)OSReport("Native JUT texture left unbound: %s info=%p format=%u size=%ux%u allocation=%ld caller=%p\n",
+                    dusk::native::textureResourceFailure(),mTexInfo,unsigned(mTexInfo->format),unsigned(mTexInfo->width),
+                    unsigned(mTexInfo->height),long(remaining),__builtin_return_address(0));
+                return;
+            }
             OSPanic(__FILE__,__LINE__,"Native JUT texture: %s info=%p format=%u size=%ux%u allocation=%ld caller=%p",
                 dusk::native::textureResourceFailure(),mTexInfo,unsigned(mTexInfo->format),unsigned(mTexInfo->width),
                 unsigned(mTexInfo->height),long(remaining),__builtin_return_address(0));
+        }
     }
 #endif
     if (mPalette) {

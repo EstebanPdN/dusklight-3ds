@@ -42,6 +42,11 @@ struct mDoLib_clipper {
 void mDoLib_project(Vec* src, Vec* dst);
 u32 mDoLib_setResTimgObj(ResTIMG const* res, TGXTexObj* o_texObj, u32 tlut_name,
                          TGXTlutObj* o_tlutObj);
+#if defined(DUSK_TARGET_3DS)
+// A GX texture object initialized directly over an archive BTI: keep the
+// native copy of that image for the archive's lifetime (render owner only).
+void mDoLib_retainNativeTexture(const ResTIMG* i_img, const void* i_texObj);
+#endif
 void mDoLib_pos2camera(Vec* src, Vec* dst);
 
 #if PLATFORM_WII

@@ -217,7 +217,18 @@ JKRHeap* JKRHeap::becomeCurrentHeap() {
     return prev;
 }
 
+#if defined(DUSK_TARGET_3DS)
+// Bumped by every operation that can end or shrink an allocation. The native
+// renderer keeps array-liveness proofs only while this value stands. Loader
+// threads free memory too, so the counter is updated atomically.
+extern "C" { std::uint32_t duskNativeHeapEpoch = 1; }
+#define DUSK_HEAP_MUTATION() ((void)__atomic_fetch_add(&duskNativeHeapEpoch, 1, __ATOMIC_RELAXED))
+#else
+#define DUSK_HEAP_MUTATION() ((void)0)
+#endif
+
 void JKRHeap::destroy() {
+    DUSK_HEAP_MUTATION();
     do_destroy();
 }
 
@@ -276,6 +287,7 @@ void JKRHeap::free(void* ptr) {
         sFreeCallback(ptr, this);
     }
 #endif
+    DUSK_HEAP_MUTATION();
     do_free(ptr);
 }
 
@@ -291,6 +303,7 @@ void JKRHeap::freeAll() {
     if (mInitFlag) {
         JUT_WARN(493, "freeAll in heap %x", this);
     }
+    DUSK_HEAP_MUTATION();
     do_freeAll();
 }
 
@@ -298,6 +311,7 @@ void JKRHeap::freeTail() {
     if (mInitFlag) {
         JUT_WARN(507, "freeTail in heap %x", this);
     }
+    DUSK_HEAP_MUTATION();
     do_freeTail();
 }
 
@@ -316,6 +330,7 @@ s32 JKRHeap::resize(void* ptr, u32 size, JKRHeap* heap) {
 }
 
 s32 JKRHeap::resize(void* ptr, u32 size) {
+    DUSK_HEAP_MUTATION();
     if (mInitFlag) {
         JUT_WARN(567, "resize block %x into %x in heap %x", ptr, size, this);
     }

@@ -41,7 +41,10 @@ GDOverflowCb GDGetOverflowCallback(void);
 
 inline static void GDOverflowCheck(u32 size) {
 #if defined(DUSK_TARGET_3DS)
-    GDNativeCheck(size);
+    // Inline bound test; the out-of-line check (full validation, overflow
+    // callback) only runs when the list is missing or the bytes do not fit.
+    GDLObj* const dl = __GDCurrentDL;
+    if (!dl || size > (u32)(dl->top - dl->ptr)) GDNativeCheck(size);
 #else
     if (__GDCurrentDL->ptr + size > __GDCurrentDL->top) {
         GDOverflowed();
@@ -52,9 +55,14 @@ inline static void GDOverflowCheck(u32 size) {
 inline static void __GDWrite(u8 data) {
 #if defined(DUSK_TARGET_3DS)
     // J3D also writes directly, bypassing the ordinary GDWrite_* wrappers.
-    GDNativeCheck(1);
-#endif
+    // One thread-local read and one compare per byte (was a call with the
+    // complete bounds validation per byte).
+    GDLObj* dl = __GDCurrentDL;
+    if (!dl || dl->ptr >= dl->top) { GDNativeCheck(1); dl = __GDCurrentDL; }
+    *dl->ptr++ = data;
+#else
     *__GDCurrentDL->ptr++ = data;
+#endif
 }
 
 inline static void GDWrite_data(const void* data, u32 length) {
@@ -190,14 +198,14 @@ static inline void GDSetCurrOffset(u32 offset) {
 
 static inline void* GDGetCurrPointer(void) {
 #if defined(DUSK_TARGET_3DS)
-    GDNativeCheck(0);
+    if (!__GDCurrentDL) GDNativeCheck(0);
 #endif
     return (void*)__GDCurrentDL->ptr;
 }
 
 static inline u8* GDGetCurrPointer2(void) {
 #if defined(DUSK_TARGET_3DS)
-    GDNativeCheck(0);
+    if (!__GDCurrentDL) GDNativeCheck(0);
 #endif
     return __GDCurrentDL->ptr;
 }

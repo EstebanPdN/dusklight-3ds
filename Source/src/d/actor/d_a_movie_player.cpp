@@ -4167,8 +4167,17 @@ static u32 daMP_DrawPosY;
 static void* daMP_buffer;
 
 static BOOL daMP_ActivePlayer_Init(char const* moviePath) {
+#if defined(DUSK_TARGET_3DS)
+    // No THP playback on 3DS yet: its audio decoder thread cannot start and
+    // the prepare step then waits for it forever (Alpha 1 gate: the title
+    // stalled when it went idle into the demo movie, stage S_MV000). Report a
+    // failed player instead: the scene reads zero remaining movie frames and
+    // carries on, as the original does when a movie cannot be loaded.
+    OSReport("Native movie: %s skipped (THP playback not supported on 3DS)\n", moviePath);
+    return 0;
+#endif
     daMP_THPPlayerInit(0);
-    
+
     if (!daMP_THPPlayerOpen(moviePath, 0)) {
         OSReport("Fail to open the thp file\n");
         #if DEBUG

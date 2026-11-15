@@ -12,6 +12,10 @@
 #include "JSystem/JKernel/JKRHeap.h"
 #include "Z2AudioLib/Z2Instances.h"
 #include <cstring>
+#if defined(DUSK_TARGET_3DS)
+#include <cmath>
+#include "helpers/native_effects.h"
+#endif
 
 struct daYkgr_HIO_c : public mDoHIO_entry_c {
     daYkgr_HIO_c();
@@ -257,6 +261,17 @@ inline bool daYkgr_c::_draw() {
             m_alpha++;
         }
     }
+#if defined(DUSK_TARGET_3DS)
+    // Native heat haze: the particles of this emitter are not drawn (see
+    // JPAResource::draw); the screen-effect pass sways the frame instead.
+    // The original warp reaches 2^exponent * 127 texels of the 304-wide copy;
+    // the sway takes about a third of that peak, the size of a typical texel
+    // of the warp texture.
+    if (m_alpha != 0 && m_emitter != NULL && dusk::native_effects::particles != 0) {
+        dusk::native_effects::haze.alpha = m_alpha;
+        dusk::native_effects::haze.amplitude = ldexpf(48.0f / 304.0f, YkgrCB.field_0x1c);
+    }
+#endif
     if (m_alpha == 0) {
         return true;
     } else {

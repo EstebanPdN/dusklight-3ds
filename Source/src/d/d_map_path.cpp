@@ -418,7 +418,18 @@ void dRenderingMap_c::makeResTIMG(ResTIMG* p_image, u16 width, u16 height, u8* p
     p_image->imageOffset = p_data - (u8*)p_image;
 }
 
+#if defined(DUSK_TARGET_3DS)
+// GPU guard (gpu_canary_ctru.cpp): the transfer engine stopped twice on this
+// console; offscreen targets are left alone and the map keeps its texture.
+extern "C" bool duskNativeOffscreenRefused();
+#endif
+
 void dRenderingMap_c::renderingMap() {
+#if defined(DUSK_TARGET_3DS)
+    if (duskNativeOffscreenRefused()) {
+        return;
+    }
+#endif
     preRenderingMap();
     if (isDrawPath()) {
         preDrawPath();

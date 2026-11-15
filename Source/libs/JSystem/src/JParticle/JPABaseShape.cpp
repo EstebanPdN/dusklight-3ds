@@ -408,6 +408,12 @@ void JPALoadTexAnm(JPAEmitterWorkData* work) {
 void JPALoadTexAnm(JPAEmitterWorkData* work, JPABaseParticle* ptcl JPA_DRAW_CTX_PARAM) {
 #if !defined(DUSK_TARGET_3DS)
     ZoneScoped;
+#else
+    if (ctx->batch) {
+        // The batch loop loads the texture when it changes.
+        ctx->texIdx = ptcl->mTexAnmIdx;
+        return;
+    }
 #endif
     work->mpResMgr->load(work->mpRes->getTexIdx(ptcl->mTexAnmIdx), GX_TEXMAP0);
 }
@@ -518,6 +524,44 @@ static void loadPrjAnm(JPAEmitterWorkData const* work, const Mtx srt) {
     GXLoadTexMtxImm(local_108, 0x1e, GX_MTX3x4);
 }
 
+#if defined(DUSK_TARGET_3DS)
+// Native particle batch: the projection of loadPrj/loadPrjAnm without the
+// particle's own matrix (view space -> s, t, q). The batch applies it to the
+// transformed corners.
+void JPANativePrjTexMtx(JPAEmitterWorkData const* work, Mtx out) {
+    if (work->mPrjType != 2) {
+        MTXCopy(work->mPrjMtx, out);
+        return;
+    }
+    // The animation part of loadPrjAnm.
+    JPABaseShape* shape = work->mpRes->getBsp();
+    f32 age = work->mpEmtr->getAge();
+    f32 halfS = 0.5f * (1.0f + shape->getTilingS());
+    f32 halfT = 0.5f * (1.0f + shape->getTilingT());
+    f32 transX = (age * shape->getIncTransX()) + shape->getInitTransX();
+    f32 transY = (age * shape->getIncTransY()) + shape->getInitTransY();
+    f32 scaleX = (age * shape->getIncScaleX()) + shape->getInitScaleX();
+    f32 scaleY = (age * shape->getIncScaleY()) + shape->getInitScaleY();
+    s32 rot = (age * shape->getIncRot()) + shape->getInitRot();
+    f32 sinRot = JMASSin(rot);
+    f32 cosRot = JMASCos(rot);
+    Mtx anm;
+    anm[0][0] = scaleX * cosRot;
+    anm[0][1] = -scaleX * sinRot;
+    anm[0][2] = halfS + (scaleX * ((sinRot * (halfT + transY)) - (cosRot * (halfS + transX))));
+    anm[0][3] = 0.0f;
+    anm[1][0] = scaleY * sinRot;
+    anm[1][1] = scaleY * cosRot;
+    anm[1][2] = halfT + (-scaleY * ((sinRot * (halfS + transX)) + (cosRot * (halfT + transY))));
+    anm[1][3] = 0.0f;
+    anm[2][0] = 0.0f;
+    anm[2][1] = 0.0f;
+    anm[2][2] = 1.0f;
+    anm[2][3] = 0.0f;
+    MTXConcat(anm, work->mPrjMtx, out);
+}
+#endif
+
 static u8 jpa_dl[32] = {
     0x80, 0x00, 0x04, 0x00, 0x00, 0x01, 0x01, 0x02, 0x02, 0x03, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -537,17 +581,65 @@ static projectionFunc p_prj[3] = {
 };
 
 #if TARGET_PC
-static void emit_batch_quad(JPAEmitterWorkData* work, const ParticleDrawCtx* ctx,
+static void emit_batch_quad(JPAEmitterWorkData* work, ParticleDrawCtx* ctx,
                             const Mtx posMtx) {
-    const JPAResource::BatchInfo& info = work->mpRes->mBatchInfo;
+    const JPAResource::BatchInfo& info =
+        ctx->child ? work->mpRes->mChildBatchInfo : work->mpRes->mBatchInfo;
+
+#if defined(DUSK_TARGET_3DS)
+    // Native batch: a quad with every corner outside one side of the view is
+    // not sent at all. mPrjMtx maps view space to (s*q, t*q, q) with the
+    // screen at 0..1, for perspective and orthographic groups alike.
+    Vec corners[8];
+    unsigned outside = 0x1f;
+    for (int i = 0; i < info.vtxCount; i++) {
+        Vec localPos = {info.vtxPos[i][0], info.vtxPos[i][1], info.vtxPos[i][2]};
+        MTXMultVec(posMtx, &localPos, &corners[i]);
+        const Vec& p = corners[i];
+        const f32 (*m)[4] = work->mPrjMtx;
+        const f32 q = m[2][0] * p.x + m[2][1] * p.y + m[2][2] * p.z + m[2][3];
+        const f32 sq = m[0][0] * p.x + m[0][1] * p.y + m[0][2] * p.z + m[0][3];
+        const f32 tq = m[1][0] * p.x + m[1][1] * p.y + m[1][2] * p.z + m[1][3];
+        outside &= (q <= 0.0f ? 1u : 0u) | (sq < 0.0f ? 2u : 0u) | (sq > q ? 4u : 0u) |
+                   (tq < 0.0f ? 8u : 0u) | (tq > q ? 16u : 0u);
+    }
+    if (outside != 0) {
+        ctx->culled++;
+        return;
+    }
+    if (!ctx->open) {
+        GXBegin(GX_QUADS, GX_VTXFMT1, GX_AUTO);
+        ctx->open = true;
+    }
+#endif
 
     for (int i = 0; i < info.vtxCount; i++) {
+#if defined(DUSK_TARGET_3DS)
+        const Vec drawPos = corners[i];
+#else
         Vec localPos = {info.vtxPos[i][0], info.vtxPos[i][1], info.vtxPos[i][2]};
         Vec drawPos;
         MTXMultVec(posMtx, &localPos, &drawPos);
+#endif
 
         f32 texS = info.vtxUv[i][0];
         f32 texT = info.vtxUv[i][1];
+#if defined(DUSK_TARGET_3DS)
+        if (ctx->prj) {
+            // Projected texture: the divide is done per corner here; across
+            // one small quad the difference from a per-pixel divide is nil.
+            const f32 q = ctx->texMtx[2][0] * drawPos.x + ctx->texMtx[2][1] * drawPos.y +
+                          ctx->texMtx[2][2] * drawPos.z + ctx->texMtx[2][3];
+            if (q > 1.0e-6f || q < -1.0e-6f) {
+                texS = (ctx->texMtx[0][0] * drawPos.x + ctx->texMtx[0][1] * drawPos.y +
+                        ctx->texMtx[0][2] * drawPos.z + ctx->texMtx[0][3]) / q;
+                texT = (ctx->texMtx[1][0] * drawPos.x + ctx->texMtx[1][1] * drawPos.y +
+                        ctx->texMtx[1][2] * drawPos.z + ctx->texMtx[1][3]) / q;
+            } else {
+                texS = texT = 0.0f;
+            }
+        } else
+#endif
         if (ctx->useTexMtx) {
             f32 srcS = texS;
             f32 srcT = texT;
@@ -559,9 +651,12 @@ static void emit_batch_quad(JPAEmitterWorkData* work, const ParticleDrawCtx* ctx
         if (ctx->useClr0) {
             GXColor4u8(ctx->clr0.r, ctx->clr0.g, ctx->clr0.b, ctx->clr0.a);
         }
+#if !defined(DUSK_TARGET_3DS)
+        // Native 3DS batch: the environment colour stays in TEV register 1.
         if (ctx->useClr1) {
             GXColor4u8(ctx->clr1.r, ctx->clr1.g, ctx->clr1.b, ctx->clr1.a);
         }
+#endif
         GXTexCoord2f32(texS, texT);
     }
 }
@@ -1033,9 +1128,13 @@ void JPADrawDBillboard(JPAEmitterWorkData* param_0, JPABaseParticle* param_1 JPA
     local_60[2][2] = 1.0f;
     local_60[2][3] = local_88.z;
     local_60[0][2] = local_60[1][2] = local_60[2][0] = local_60[2][1] = 0.0f;
+#if defined(DUSK_TARGET_3DS)
+    submit_particle_quad(param_0, ctx, local_60, jpa_dl, sizeof(jpa_dl));
+#else
     GXLoadPosMtxImm(local_60, 0);
     p_prj[param_0->mPrjType](param_0, local_60);
     GXCallDisplayList(jpa_dl, sizeof(jpa_dl));
+#endif
 }
 
 void JPADrawRotation(JPAEmitterWorkData* param_0, JPABaseParticle* param_1 JPA_DRAW_CTX_PARAM) {

@@ -42,4 +42,9 @@ float consume_interval(double& lastSample);
 void set_sim_rate(float hz);
 float get_sim_rate();
 
+// 3DS: number of original ticks the picture being drawn or painted stands
+// for (a slow frame runs several logic ticks per picture). Frame-scaled
+// draw-time animations (original_frames) advance by it; 1 outside those phases.
+void set_presentation_frames(float frames);
+
 }  // namespace dusk::game_clock

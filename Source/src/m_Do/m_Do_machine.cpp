@@ -873,10 +873,14 @@ int mDoMch_Create() {
 #endif
 
 #if defined(DUSK_TARGET_3DS)
-    // DEFAULT OFF: transfer a bounded share from System/Zelda staging into
-    // Game before either child exists. Total JKR arena/ctru/linear bytes do
-    // not grow. Never borrow from an already live heap or hide an error.
-    u32 requestedGame=0;
+    // Transfer a bounded share from System/Zelda staging into Game before
+    // either child exists. Total JKR arena/ctru/linear bytes do not grow.
+    // Default 12 MiB: the automatic test measured 28 MiB of the Zelda heap
+    // free in every zone while the game heap kept under 1 MiB, and large
+    // fields need the game heap for room backgrounds that do not fit their
+    // original memory block. heap-partition.txt overrides it (game=0 keeps
+    // the original split).
+    u32 requestedGame=dusk::native::heap64::maxGame;
     if(auto* config=std::fopen("sdmc:/3ds/DuskLight/heap-partition.txt","rb")){
         char bytes[32];const auto count=std::fread(bytes,1,sizeof(bytes),config);
         bool okay=!std::ferror(config);if(std::fclose(config))okay=false;
@@ -890,6 +894,19 @@ int mDoMch_Create() {
         unsigned(requestedGame!=0),static_cast<unsigned long>(arenaSize),static_cast<unsigned long>(gameHeapSize),
         static_cast<unsigned long>(split.system),static_cast<unsigned long>(split.game),static_cast<unsigned long>(split.transferred));
     arenaSize=split.system;gameHeapSize=split.game;
+    {
+        // Experiment switch: whole MiB moved from the System/Zelda heap (which
+        // keeps tens of MiB free in every measured zone) to the archive heap.
+        u32 extraMiB=0;
+        if(auto* config=std::fopen("sdmc:/3ds/DuskLight/archive-heap-extra.txt","rb")){
+            unsigned value=0;if(std::fscanf(config,"%u",&value)==1&&value<=16)extraMiB=value;
+            std::fclose(config);
+        }
+        const u32 extra=extraMiB<<20;
+        if(extra&&arenaSize>extra+(16u<<20)){arenaSize-=extra;archiveHeapSize+=extra;}
+        OSReport("Native archive heap: %lu bytes (extra %lu MiB), system heap %lu bytes\n",
+            static_cast<unsigned long>(archiveHeapSize),static_cast<unsigned long>(extraMiB),static_cast<unsigned long>(arenaSize));
+    }
 #endif
 
     JFWSystem::setSysHeapSize(arenaSize);
