@@ -214,7 +214,10 @@ def inspect_packed(path, extract=None):
         if kind == 'zstd':
             if stored >= logical: raise ValueError('Compressed block is not smaller')
             if decompress is None:
-                from compression import zstd
+                try:
+                    from compression import zstd  # standard library since Python 3.14
+                except ImportError:
+                    raise ValueError('Packed dumps need Python 3.14 or later (compression.zstd)') from None
                 decompress = zstd.decompress
             raw = decompress(raw)
         if len(raw) != logical: raise ValueError('Block length mismatch')

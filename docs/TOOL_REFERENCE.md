@@ -151,7 +151,7 @@ arguments and prerequisites before running historical workflows.
 | [texture_lab_formats.py](../Tools/3ds/texture_lab_formats.py) | Host lab formats. Independent ETC1 decoder follows the Khronos bit grammar. |
 | [twilight_pack.py](../Tools/3ds/twilight_pack.py) | Private, bounded GameCube USA/PAL r0 -> DuskLight indexed asset container v1. |
 | [validate_texture_compression_lab.py](../Tools/3ds/validate_texture_compression_lab.py) | Reopen a lab run, validate every actual PICA payload, and retain receipts. |
-| [verify_application_dump.py](../Tools/3ds/verify_application_dump.py) | Read-only verification of a private DUSKLIGHT_APPLICATION_DUMP_1 directory. |
+| [verify_application_dump.py](../Tools/3ds/verify_application_dump.py) | Read-only verification of a private application dump: a DUMP_1 directory or a packed DUMP_2 `.dpk` file (Python 3.14+); `--extract` writes its screens and memory regions. |
 | [verify_diagnostic_package.py](../Tools/3ds/verify_diagnostic_package.py) | Validate this diagnostic CIA's structure and hashes, not signatures or hardware. |
 | [verify_gpu_queue_gate.py](../Tools/3ds/verify_gpu_queue_gate.py) | Verify the actual linked ARM queue/callback gate; never infer interception from flags. |
 

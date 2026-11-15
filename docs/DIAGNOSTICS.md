@@ -48,7 +48,8 @@ RAM, VRAM, both LCD buffers, the PICA state sent, shared system pages, recent
 frame times and the last GPU jobs), `top-screen.bmp`, `bottom-screen.bmp` and
 `info.txt` (build, stage, camera, cutscene, player, heaps and actors). Read it
 on a computer with `python3 -I Tools/3ds/verify_application_dump.py dump.dpk
---extract <new folder>`. Input is suppressed while the capture owns the
+--extract <new folder>` (Python 3.14 or later: the blocks are zstd-compressed
+and read with the standard `compression.zstd` module). Input is suppressed while the capture owns the
 application flow. Keep ample SD space for repeated full dumps, and do not save
 a game after the tour has replaced in-memory story state with its test loadout;
 exit and relaunch to resume normal play.

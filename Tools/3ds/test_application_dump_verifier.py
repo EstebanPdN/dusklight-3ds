@@ -106,6 +106,13 @@ class DumpVerifierTests(unittest.TestCase):
 
 
 
+try:
+    from compression import zstd as _zstd  # standard library since Python 3.14
+except ImportError:
+    _zstd = None
+
+
+@unittest.skipIf(_zstd is None, 'packed dumps need compression.zstd (Python 3.14 or later)')
 class PackedDumpTests(unittest.TestCase):
     """DUSKLIGHT_APPLICATION_DUMP_2: one file of blocks, a text index and a trailer."""
     def build(self, corrupt=None, drop_trailer=False, extras=()):

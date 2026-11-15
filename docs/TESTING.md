@@ -14,6 +14,10 @@ boot-stage parsing, bootstrap/controller integration, USA/PAL bundle round trips
 dump verification and card-permission consumer recovery. Generated binaries and
 fixtures stay in `Build/public-host/`; no original disc is opened.
 
+The packed-dump cases of `dump-verifier` need Python 3.14 or later (the
+standard `compression.zstd` module); older versions report them as skipped.
+CI runs Python 3.14.
+
 Use `--compiler PATH` to choose a host compiler and `--output PATH` to choose
 an output directory. The runner fails on compilation, assertion, sanitizer or
 Python test failure. It records commands and outcomes in `results.json`.
