@@ -99,7 +99,10 @@ def player_points(dzr):
             name = dzr[at:at + 8].split(b'\0')[0].decode('ascii', 'replace')
             x, y, z = struct.unpack_from('>fff', dzr, at + 12)
             angle_z = struct.unpack_from('>h', dzr, at + 28)[0]
-            points.append({'point': angle_z & 0xff, 'name': name, 'position': [round(x, 1), round(y, 1), round(z, 1)]})
+            # Player start mode (bits 12-16 of the actor parameters): 2 starts on the horse.
+            mode = (be32(dzr, at + 8) >> 12) & 0x1f
+            points.append({'point': angle_z & 0xff, 'mode': mode, 'name': name,
+                           'position': [round(x, 1), round(y, 1), round(z, 1)]})
     return points
 
 
