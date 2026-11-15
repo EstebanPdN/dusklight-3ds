@@ -60,6 +60,13 @@ void GPUCMD_GetBuffer(u32**,u32*,u32*);
 #include <sys/stat.h>
 extern "C" void OSReport(const char*,...);
 extern "C" void OSPanic(const char*,int,const char*,...);
+#include "helpers/native_effects.h"
+// Development switches set by loadDeveloperScripts; this fixture checks the
+// depth probe only, so the switches have no effect here.
+namespace dusk::native {
+namespace gx {void setCompiledLists(bool,bool){}void setTextureObjectSoftLimit(unsigned){}}
+void setTriangleFogMeshPass(bool){}void setRigidTriangleFog(bool){}void setImmediateDrawRecords(bool){}
+}
 ''' + initial + '\n' + function(script, 'void setDeveloperFrame(') + '\n' +
                          function(script, 'bool developerCaptureRequested(') + '\n' + tail)
     inputs = [RUNTIME / x for x in ('gx_framebuffer_ctru.cpp', 'gx_framebuffer.hpp', 'developer_script.cpp', 'developer_script.hpp', 'game_startup.cpp', 'dump_io.cpp', 'dump_io.hpp')]
@@ -67,7 +74,7 @@ extern "C" void OSPanic(const char*,int,const char*,...);
     hashes = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     cmd = ['clang++', '-std=c++20', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
            '-Wno-unused-variable', '-Wno-unused-function', '-Wno-format-security', '-fsanitize=address,undefined',
-           '-fno-omit-frame-pointer', '-I' + str(stub), '-I' + str(RUNTIME),
+           '-fno-omit-frame-pointer', '-I' + str(stub), '-I' + str(RUNTIME), '-I' + str(ROOT / 'Source/include'),
            str(RUNTIME / 'gx_framebuffer_ctru.cpp'), str(RUNTIME / 'dump_io.cpp'),
            str(extracted), str(Path(__file__).with_name('depth_retained_probe_host.cpp')),
            '-o', str(out / 'host-test')]
@@ -81,6 +88,9 @@ extern "C" void OSPanic(const char*,int,const char*,...);
         for mode in modes:
             case = out / mode
             (case / 'sdmc:/3ds/dusklight').mkdir(parents=True)
+            # The fixture models transfer-engine depth copies; the game reads
+            # with the CPU unless this SD switch selects the transfer engine.
+            (case / 'sdmc:/3ds/dusklight/readback-transfer.txt').write_text('')
             p = subprocess.run([str(out / 'host-test'), mode], cwd=case, capture_output=True,
                                text=True, timeout=30, env={**os.environ, 'ASAN_OPTIONS': 'halt_on_error=1:abort_on_error=1', 'UBSAN_OPTIONS': 'halt_on_error=1:print_stacktrace=1'})
             (case / 'test.log').write_text(p.stdout + p.stderr)
@@ -123,12 +133,11 @@ extern "C" void OSPanic(const char*,int,const char*,...);
         # Verify integration ordering against the actual startup body. Native
         # FrameBegin/FrameEnd and console behavior still require parent testing.
         startup = (RUNTIME / 'game_startup.cpp').read_text()
-        anchors = ['if(!C3D_FrameBegin(C3D_FRAME_SYNCDRAW))continue;', 'finishDeveloperRetainedDepth(true);',
+        anchors = ['platformBeginGpuFrame(', 'finishDeveloperRetainedDepth(true);',
                    'captureDeveloperDepthBoundary(false);', 'captureDeveloperDepthBoundary(true);',
-                   'captureMainFramebuffer(frame+1)', 'RetainedDepthStage::afterColor', 'C3D_FrameEnd(0);',
+                   'captureMainFramebuffer(frame+1)', 'RetainedDepthStage::afterColor', 'platformEndGpuFrame(',
                    'RetainedDepthStage::afterFrameEnd', 'RetainedDepthStage::beforeConsole',
-                   'RetainedDepthStage::afterConsoleWrites', 'GSPGPU_FlushDataCache(gfxGetFramebuffer(GFX_BOTTOM',
-                   'RetainedDepthStage::afterConsoleFlush', 'RetainedDepthStage::afterReporting']
+                   'RetainedDepthStage::afterConsoleWrites', 'RetainedDepthStage::afterConsoleFlush', 'RetainedDepthStage::afterReporting']
         positions = [startup.index(a) for a in anchors]
         assert positions == sorted(positions)
         assert hashes == {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}

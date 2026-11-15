@@ -27,6 +27,7 @@ std::deque<unsigned> device;
 u32 commands[16384]{}, offset{};
 u64 tick{};
 unsigned submitted{}, completed{}, slept{}, flushes{};
+u32 retraces{}; unsigned retraceWaits{};
 bool stalled{}, flushOkay = true, unrelatedIrq{};
 std::atomic<bool> callbackActive{},releaseCallback{},callbackWaitMode{};
 bool inFrame{},tailAssembled{};
@@ -60,6 +61,8 @@ extern "C" void LightLock_Lock(LightLock* p) {mutexFor(p).lock();}
 extern "C" int LightLock_TryLock(LightLock* p) {return mutexFor(p).try_lock()?0:1;}
 extern "C" void LightLock_Unlock(LightLock* p) {mutexFor(p).unlock();}
 extern "C" void gspWaitForAnyEvent() { event(); }
+extern "C" void gspWaitForVBlank0() { ++retraces; ++retraceWaits; }
+extern "C" u32 C3D_FrameCounter(int) { return retraces; }
 extern "C" Result gspSubmitGxCommand(const u32* data) {
     ++submitted; device.push_back(data[0] & 0xff); return 0;
 }
@@ -80,13 +83,22 @@ extern "C" bool C3D_FrameBegin(u8 flags) {
 }
 extern "C" void C3D_FrameEnd(u8) {
     assert(!callbackActive);C3D_FrameSplit(GX_CMDLIST_FLUSH);
-    const auto before=submitted;
+    const auto before=submitted;const auto pending=device.size();
     add(4);add(4);add(4);
-    assert(submitted==before&&device.empty()); // stopped until all swap state is assembled
+    assert(submitted==before&&device.size()==pending); // stopped until all swap state is assembled
     tailAssembled=true;inFrame=false;gxCmdQueueRun(&queue);
 }
+// Production command-list submission wraps this SDK call (--wrap on ARM).
+extern "C" Result __real_GX_ProcessCommandList(u32*, u32, u8) { return 0; }
 namespace dusk::native {
 bool flushGxGeometry() { ++flushes; return flushOkay; }
+// GPU guard hooks (gpu_canary_ctru.cpp); no case here reaches a hang.
+void gpuCanaryListSubmitted(const u32*, u32) {}
+void gpuSlowJob(const std::uint32_t*, unsigned) {}
+// A command list silent past the patience window is a hang: the guard saves
+// evidence and never returns. Here it reports the silent job's type instead.
+struct GpuHangRecorded { unsigned type; };
+[[noreturn]] void gpuHang(const std::uint32_t* entry, unsigned, unsigned, unsigned) { throw GpuHangRecorded{entry[0] & 0xffu}; }
 void invalidateGxTextures() {}
 }
 int main(int argc, char** argv) {
@@ -103,9 +115,11 @@ int main(int argc, char** argv) {
         result = platformCompleteGpu(500000000);
         assert(result == GpuCompletion::complete && submitted == 1 && completed == 1 && slept);
     } else if (!std::strcmp(name, "timeout")) {
+        // A texture copy silent for one second is counted complete (GSP can
+        // drop its interrupt); the device still holds the unfinished job.
         add(4); stalled = true;
         result = platformCompleteGpu(1000000);
-        assert(result == GpuCompletion::timedOut && completed == 0 && device.size() == 1);
+        assert(result == GpuCompletion::complete && completed == 0 && device.size() == 1 && tick >= nativeTickFrequency);
     } else if (!std::strcmp(name, "flushfailure")) {
         flushOkay = false; offset = 8;
         result = platformCompleteGpu(500000000);
@@ -145,11 +159,15 @@ int main(int argc, char** argv) {
         assert(platformCompleteGpu(500000000)==GpuCompletion::complete);
         assert(submitted==33&&completed==33);
     } else if (!std::strcmp(name, "reserve-timeout")) {
+        // A command list silent past the patience window is a GPU hang: the
+        // guard is called with the silent job; nothing is cleared or reused.
         for(unsigned i=0;i<32;++i)add(1);
         stalled=true;offset=8;
-        assert(platformReserveGpuEntries(4,1000000)==GpuCompletion::timedOut);
+        bool hang=false;
+        try{(void)platformReserveGpuEntries(4,1000000);}catch(const GpuHangRecorded& recorded){hang=recorded.type==1;}
+        assert(hang&&tick>=6*nativeTickFrequency);
         assert(queue.numEntries==32&&queue.lastEntry==0&&offset==8&&completed==0);
-        assert(submitted==3); // retained, not cleared or reused after timeout
+        assert(submitted==1); // one job in flight (MAX_PARALLEL_CMDS)
     } else if (!std::strcmp(name, "bad-reserve")) {
         assert(platformReserveGpuEntries(0,500000000)==GpuCompletion::exhausted);
         assert(platformReserveGpuEntries(33,500000000)==GpuCompletion::exhausted);
@@ -177,8 +195,51 @@ int main(int argc, char** argv) {
         assert(queue.numEntries==1&&submitted==0&&!platformGpuFailurePending());
         assert(platformBeginGpuFrame(0)&&inFrame&&completed==1&&queue.numEntries==0);
     } else if (!std::strcmp(name,"frame-timeout")) {
+        // A texture copy silent for one second is counted complete; the frame
+        // then ends normally. The stalled device still holds that copy and now
+        // also the first job of the frame tail.
         add(4);stalled=true;offset=8;
-        assert(!platformEndGpuFrame(0)&&!tailAssembled&&queue.numEntries==1&&offset==8&&platformGpuFailurePending());
+        assert(platformEndGpuFrame(0)&&tailAssembled&&device.size()==2&&tick>=nativeTickFrequency);
+    } else if (!std::strcmp(name,"submit")) {
+        // Incremental submission: assembled commands start on the PICA without
+        // any wait; the frame keeps building and a later completion drains it.
+        assert(platformBeginGpuFrame(0)&&inFrame&&platformBeginGpuCommands());
+        offset=8;const auto sleeps=slept;
+        assert(platformSubmitGpu()&&offset==0&&flushes==1&&submitted==1&&completed==0&&slept==sleeps);
+        assert(platformSubmitGpu()&&submitted==1); // nothing new: no empty command list
+        offset=8;assert(platformCompleteGpu(500000000)==GpuCompletion::complete&&submitted==2&&completed==2);
+        const auto telemetry=platformTakeGpuTelemetry();
+        assert(telemetry.chunks==1&&telemetry.completes==1);
+    } else if (!std::strcmp(name,"submit-backlog")) {
+        // A PICA slower than the CPU: two lists ahead is the limit; further
+        // commands accumulate instead of filling the bounded queue.
+        assert(platformBeginGpuFrame(0)&&platformBeginGpuCommands());
+        stalled=true;
+        offset=8;assert(platformSubmitGpu()&&queue.numEntries==1);
+        offset=8;assert(platformSubmitGpu()&&queue.numEntries==2);
+        offset=8;assert(platformSubmitGpu()&&queue.numEntries==2&&offset==8&&slept==0);
+        stalled=false;
+        assert(platformCompleteGpu(500000000)==GpuCompletion::complete&&completed==3);
+    } else if (!std::strcmp(name,"present-guard")) {
+        // No retrace since the previous frame was seen complete: wait for one
+        // before queueing another LCD transfer.
+        assert(platformBeginGpuFrame(0)&&inFrame);offset=8;
+        assert(platformEndGpuFrame(GX_CMDLIST_FLUSH)&&retraceWaits==1&&tailAssembled);
+        assert(platformTakeGpuTelemetry().presentWaitTicks>0);
+    } else if (!std::strcmp(name,"present-paced")) {
+        // The display wait already crossed a retrace: the frame end adds none.
+        assert(platformBeginGpuFrame(0)&&inFrame);offset=8;++retraces;
+        assert(platformEndGpuFrame(GX_CMDLIST_FLUSH)&&retraceWaits==0&&tailAssembled);
+        assert(platformTakeGpuTelemetry().presentWaitTicks==0);
+    } else if (!std::strcmp(name,"chunk-draws")) {
+        // Every second prepared draw hands the assembled commands to the PICA.
+        assert(platformBeginGpuFrame(0)&&platformBeginGpuCommands());
+        platformSetGpuChunkDraws(2);
+        offset=8;assert(platformPrepareGpuDraw()&&submitted==0&&offset==8);
+        assert(platformPrepareGpuDraw()&&submitted==1&&offset==0&&slept==0);
+        platformSetGpuChunkDraws(0);
+        offset=8;assert(platformPrepareGpuDraw()&&platformPrepareGpuDraw()&&submitted==1);
+        assert(platformCompleteGpu(500000000)==GpuCompletion::complete);
     } else std::abort();
     std::printf("%s result=%d submitted=%u completed=%u remaining=%zu queue=%u/%u/%u polls=%u\n",
                 name, int(result), submitted, completed, device.size(), queue.lastEntry, queue.curEntry, queue.numEntries, slept);

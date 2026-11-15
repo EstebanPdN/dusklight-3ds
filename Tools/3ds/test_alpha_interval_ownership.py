@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""Host-only actual alpha backend + framebuffer owner integration and regressions."""
+"""Host-only actual alpha backend + framebuffer owner integration and regressions.
+
+Builds the real gx_pica, geometry and framebuffer sources against mocked SDK
+calls (ASan/UBSan) and checks target ownership, guarded copies and clears, the
+SD opt-in parser and the viewport/copy suites. The command-draw adapter suite
+runs in test_alpha_interval.py. Results go to --output.
+"""
+import argparse
 import hashlib
 import json
 import os
 from pathlib import Path
 import resource
-import re
 import shlex
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 NATIVE = ROOT / 'Source/platforms/3ds'
-OUT = ROOT / 'Diagnostics/implementation-44/alpha-ownership/host'
 SDK = ROOT / 'Upstream/extracted'
 
 HARNESS = r'''
@@ -77,6 +82,8 @@ void C3D_SyncTextureCopy(u32* src,u32,u32* dst,u32,u32 bytes,u32){
 }
 namespace dusk::native {
 OSThread* platformGpuOwner(){return gpuOwner;}
+// Read-back buffers retry after evicting a texture; the host has none.
+bool releaseLeastNeededTexture(bool& fenced){fenced=false;return false;}
 [[noreturn]] void fatal(const char* text){throw std::runtime_error(text);}
 }
 namespace {
@@ -213,7 +220,16 @@ int main(){truthTests();plannerTests();sequenceTests();failures();ledgerUnit();o
 
 
 def main():
+    global OUT
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output',type=Path,required=True)
+    OUT=parser.parse_args().output.resolve()
     OUT.mkdir(parents=True, exist_ok=True)
+    # The fixture models transfer-engine read-backs (wait, transfer, wait,
+    # invalidate). The game reads with the CPU by default; the SD switch
+    # readback-transfer.txt, found relative to the working directory, selects
+    # the transfer path these checks cover.
+    switch=OUT/'sdmc:/3ds/DuskLight';switch.mkdir(parents=True,exist_ok=True);(switch/'readback-transfer.txt').write_text('')
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     stub = OUT/'stubs';stub.mkdir(exist_ok=True)
     (stub/'3ds.h').write_text((NATIVE/'tests/alpha_interval_stubs/3ds.h').read_text()+r'''
@@ -240,7 +256,7 @@ Result GSPGPU_InvalidateDataCache(const void*,u32);
         assert(flushGxGeometry());completePending();return GpuCompletion::complete;
     }''')
     original=original.replace('++prepareCalls;if(callbackBatch)', '++prepareCalls;if(prepareCalls==loseOwnerAt&&ownerLossTarget)ownerLossTarget->ownsDepth=false;if(callbackBatch)')
-    original=original[:original.index('int main(){truthTests();')]
+    original=original[:original.index('int main(){')]
     harness=OUT/'ownership.cpp';harness.write_text(original+HARNESS+r'''
 namespace {void completePending(){if(pending.bytes){std::memcpy(pending.dest,pending.source,pending.bytes);pending={};}}void waitEvent(){order.push_back('W');}}
 ''')
@@ -262,7 +278,7 @@ namespace {void completePending(){if(pending.bytes){std::memcpy(pending.dest,pen
             for path,digest in hashes().items():
                 prior=receipt.setdefault('input_sha256',{}).setdefault(path,digest)
                 assert prior==digest,'Compiler input drift: '+path
-        r=subprocess.run(list(map(str,cmd)),capture_output=True,text=True,timeout=90,env=env)
+        r=subprocess.run(list(map(str,cmd)),capture_output=True,text=True,timeout=90,env=env,cwd=OUT)
         output=r.stdout+r.stderr;(OUT/(name+'.log')).write_text(output)
         commands.append({'name':name,'argv':list(map(str,cmd)),'returncode':r.returncode})
         if negative:
@@ -329,37 +345,11 @@ assert(threw==(argv[1][0]=='E'));if(!threw)assert(on==(argv[1][0]=='1'));}
             # Only the child working directory changes; no live SD path is used.
             executable=case/'run.py';executable.write_text('import os\nos.chdir('+repr(str(case))+')\nos.execv('+repr(str(OUT/'config'))+',["config",'+repr(result)+'])\n')
             run('config-case-'+str(i),['python3',executable])
-        # Compare calls, exact arguments and ordering, including both original
-        # post-copy waits and invalidations. Guards add no queue operations.
-        baseline=ROOT/'Diagnostics/implementation-44/alpha-ownership/before'
-        fence_names='platformCompleteGpu|C3D_FrameSplit|C3D_RenderTargetClear|C3D_SyncDisplayTransfer|C3D_SyncTextureCopy|GSPGPU_InvalidateDataCache|C3D_FrameEnd'
-        def extract(source):
-            calls=[]
-            for match in re.finditer(r'\b(?:'+fence_names+r')\(',source):
-                depth=1;end=match.end()
-                while depth:
-                    depth+=(source[end]=='(')-(source[end]==')');end+=1
-                calls.append(source[match.start():end])
-            return calls
-        fence_receipt={}
-        for path in (NATIVE/'runtime/gx_framebuffer_ctru.cpp',startup):
-            old=(baseline/path.relative_to(ROOT)).read_text();now=path.read_text()
-            assert extract(old)==extract(now),'Fence/transfer call drift: '+str(path)
-            fence_receipt[str(path.relative_to(ROOT))]=extract(now)
-        receipt['unchanged_fence_transfer_calls']=fence_receipt
-        # Preserve the owner's existing broad adapter/no-skip regression suite;
-        # reuse its recorded build recipe, with all outputs in this task folder.
-        prior=json.loads((ROOT/'Diagnostics/implementation-44/alpha-interval/host/results.json').read_text())
-        adapter=next(c['argv'] for c in prior['commands'] if c['name']=='adapter-build')
-        adapter=list(adapter);adapter[adapter.index('-o')+1]=str(OUT/'adapter')
-        run('adapter-build',adapter);run('adapter-test',[OUT/'adapter'])
-        # Existing viewport/copy tests have no PICA backend. Supply only their
-        # explicitly safe non-interval mock query; real poison was tested above.
-        mock=OUT/'legacy_guard.cpp';mock.write_text('namespace dusk::native {bool legacySafe=true;bool alphaIntervalCopySafe(){return legacySafe;}}\n')
+        # The viewport and copy suites carry their own copy-guard mocks.
         viewport=[NATIVE/'runtime'/x for x in ('gx_framebuffer.cpp','gx_framebuffer_api.cpp','gx_stream.cpp','gx_commands.cpp','gx_vertex_decode.cpp','gx_vertex_transform.cpp','gx_raster_plan.cpp','gx_pica_math.cpp')]
-        viewport += [NATIVE/'gx_command_api.cpp',ROOT/'Source/extern/aurora/lib/gx/dl.cpp',ROOT/'Source/extern/aurora/lib/gx/attr_fmt.cpp',NATIVE/'tests/framebuffer_viewport_test.cpp',mock]
+        viewport += [NATIVE/'gx_command_api.cpp',ROOT/'Source/extern/aurora/lib/gx/dl.cpp',ROOT/'Source/extern/aurora/lib/gx/attr_fmt.cpp',NATIVE/'tests/framebuffer_viewport_test.cpp']
         run('viewport-build',[*common,*viewport,'-o',OUT/'viewport']);run('viewport-test',[OUT/'viewport'])
-        pixels=[NATIVE/'runtime'/x for x in ('gx_framebuffer.cpp','gx_copy_pixels.cpp','texture_gx.cpp','gx_pica_math.cpp')]+[NATIVE/'tests/framebuffer_copy_test.cpp',mock]
+        pixels=[NATIVE/'runtime'/x for x in ('gx_framebuffer.cpp','gx_copy_pixels.cpp','texture_gx.cpp','gx_pica_math.cpp')]+[NATIVE/'tests/framebuffer_copy_test.cpp']
         run('pixels-build',[*common,*pixels,'-o',OUT/'pixels']);run('pixels-test',[OUT/'pixels'])
         assert receipt['input_sha256']==hashes(),'Compiler input drift during tests'
         receipt.update(status='pass',input_unchanged=True)

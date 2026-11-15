@@ -30,6 +30,7 @@ namespace dusk::native {
 u32 platformVideoRetraceCount(){return count;}
 void platformWaitVideoRetrace(){++waits;if(spurious)--spurious;else ++count;}
 void platformSleepNanoseconds(std::int64_t n){slept=n;}
+std::uint64_t platformPaceTick(){return 0;}
 }
 template<class F>void rejected(F f){bool caught=false;try{f();}catch(const std::runtime_error&){caught=true;}assert(caught);}
 int main(){

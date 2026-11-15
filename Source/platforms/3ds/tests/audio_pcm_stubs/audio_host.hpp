@@ -76,6 +76,12 @@ inline void svcSleepThread(std::int64_t){
     if(audioWorker&&!devicePaused.load()){for(auto* w:queued)w->status=NDSP_WBUF_DONE;queued.clear();}
     std::this_thread::sleep_for(std::chrono::microseconds(200));
 }
+// The game runs ndspInit on a detached helper under a 3 s watchdog. The host
+// runs the helper to completion inside threadCreate: a DSP that answers at once.
+using Thread=struct HostThread*;
+inline Thread threadCreate(void (*entry)(void*),void* arg,std::size_t,int,int,bool){
+    static int helper;entry(arg);return reinterpret_cast<Thread>(&helper);
+}
 struct FS_ArchiveResource {u32 clusterSize;u64 freeClusters;};
 inline Result FSUSER_GetSdmcArchiveResource(FS_ArchiveResource* p){++spaceChecks;p->clusterSize=4096;p->freeClusters=4096;return 0;}
 inline bool R_SUCCEEDED(Result r){return r>=0;}inline bool R_FAILED(Result r){return r<0;}

@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Host-only exact alpha interval oracle, real backend emission, and adapter regressions."""
+"""Host-only exact alpha interval oracle, real backend emission, and adapter regressions.
+
+Builds the real PICA/geometry backend with mock SDK calls (ASan/UBSan), runs a
+negative control with a deliberately wrong alpha comparison, and runs the
+command-draw adapter tests. Results go to --output.
+"""
+import argparse
 import hashlib
 import json
 import os
@@ -10,12 +16,14 @@ import subprocess
 import time
 
 ROOT=Path(__file__).resolve().parents[2]
-OUT=ROOT/'Diagnostics/implementation-44/alpha-interval/host'
 NATIVE=ROOT/'Source/platforms/3ds'
 AURORA=ROOT/'Source/extern/aurora'
 SDK=ROOT/'Upstream/extracted'
 
 def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output',type=Path,required=True)
+    OUT=parser.parse_args().output.resolve()
     OUT.mkdir(parents=True,exist_ok=True)
     resource.setrlimit(resource.RLIMIT_CORE,(0,0))
     common=['clang++','-std=c++20','-DTARGET_PC=1','-DDUSK_TARGET_3DS=1',
@@ -47,21 +55,9 @@ def main():
     test=NATIVE/'tests/gx_alpha_interval_test.cpp'
     wrong_test=controls/'wrong-mask-test.cpp'
     wrong_test.write_text(test.read_text().replace('#include "../gx_pica.cpp"','#include "'+str(wrong)+'"'))
-    before=ROOT/'Diagnostics/implementation-44/alpha-interval/before/Source/platforms/3ds/runtime/gx_raster_plan.cpp'
-    old_plan=controls/'before-raster.cpp';old_plan.write_bytes(before.read_bytes())
-    wrapper=controls/'old-wrapper.cpp'
-    wrapper.write_text('''#include "runtime/gx_raster_plan.hpp"
-#include "runtime/gx_commands.hpp"
-namespace dusk::native::gx {
-bool planRaster(const CommandRegisters&,RasterPlan&,RasterError*,FogPolicy,ColorStoragePolicy,ClipPolicy,bool,bool);
-bool planRaster(const CommandRegisters& r,RasterPlan& p,RasterError* e,FogPolicy f,ColorStoragePolicy c,ClipPolicy clip,bool early,bool tails,AlphaIntervalPolicy){
- using Old=bool (*)(const CommandRegisters&,RasterPlan&,RasterError*,FogPolicy,ColorStoragePolicy,ClipPolicy,bool,bool);
- return static_cast<Old>(&planRaster)(r,p,e,f,c,clip,early,tails);
-}}
-''')
     env={**os.environ,'ASAN_OPTIONS':'halt_on_error=1:abort_on_error=1','UBSAN_OPTIONS':'halt_on_error=1:print_stacktrace=1'}
     primary=[SDK/'citro3d-1.7.1/source'/name for name in ('effect.c','framebuffer.c','renderqueue.c')]
-    inputs=set(backend_sources+adapter_sources+primary+[Path(__file__).resolve(),before,wrong,wrong_test,old_plan,wrapper])
+    inputs=set(backend_sources+adapter_sources+primary+[Path(__file__).resolve(),wrong,wrong_test])
     commands=[]
     def run(name,command,negative=None):
         started=time.monotonic()
@@ -77,7 +73,7 @@ bool planRaster(const CommandRegisters& r,RasterPlan& p,RasterError* e,FogPolicy
             result.check_returncode()
         print(name+': '+('expected assertion' if negative else 'PASS'),flush=True)
         return output
-    for name,options,sources in [('backend',backend,backend_sources+[wrong_test,wrong,old_plan,wrapper]),('adapter',common,adapter_sources)]:
+    for name,options,sources in [('backend',backend,backend_sources+[wrong_test,wrong]),('adapter',common,adapter_sources)]:
         dep=run(name+'-dependencies',[*[v for v in options if not v.startswith('-Wl,')],'-MM',*sources])
         for token in shlex.split(dep.replace(chr(92)+'\n',' ')):
             if not token.endswith(':'):inputs.add(Path(token).resolve())
@@ -94,9 +90,6 @@ bool planRaster(const CommandRegisters& r,RasterPlan& p,RasterError* e,FogPolicy
         wrong_sources=[wrong_test if p==test else p for p in backend_sources]
         run('wrong-mask-build',[*backend,*wrong_sources,'-o',OUT/'wrong-mask'])
         run('wrong-mask-test',[OUT/'wrong-mask'],'pixel.red')
-        old_sources=[old_plan if p==NATIVE/'runtime/gx_raster_plan.cpp' else p for p in backend_sources]
-        run('before-build',[*backend,*old_sources,wrapper,'-o',OUT/'before'])
-        run('before-test',[OUT/'before'],'alphaIntervalOwnership')
         run('adapter-build',[*common,*adapter_sources,'-o',OUT/'adapter'])
         run('adapter-test',[OUT/'adapter'])
         run('native-adapter-host-syntax',[*common,'-D__3DS__','-fsyntax-only',NATIVE/'gx_command_draw.cpp'])

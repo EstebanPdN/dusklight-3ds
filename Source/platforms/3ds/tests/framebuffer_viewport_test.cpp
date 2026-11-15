@@ -2,6 +2,8 @@
 #include "../runtime/gx_stream.hpp"
 #include "../runtime/gx_vertex_transform.hpp"
 #include "../runtime/gx_raster_plan.hpp"
+#include "../runtime/gx_compact_cache.hpp"
+#include "../runtime/gx_state.hpp"
 #include <dolphin/gx/GXAurora.h>
 #include <dolphin/os.h>
 #include <array>
@@ -97,6 +99,11 @@ bool dusk::native::platformBindFramebuffer(FramebufferHandle handle){assert(hand
 bool dusk::native::platformClearFramebuffer(FramebufferHandle handle,u32,u32){assert(handle);++clears;return !failClear;}
 bool dusk::native::platformReadFramebufferDepth(FramebufferHandle,unsigned,unsigned,u32& value){value=0x123456;return true;}
 bool dusk::native::platformReadFramebufferDepthImage(FramebufferHandle,std::span<const std::byte>&){assert(false);return false;}
+bool dusk::native::platformReadFramebufferDepthView(FramebufferHandle,std::span<const std::byte>&){assert(false);return false;}
+// No alpha-interval backend, static geometry cache or state observer here.
+bool dusk::native::alphaIntervalCopySafe(){return true;}
+dusk::native::gx::StaticGeometryHint dusk::native::gx::staticGeometryHint{};
+void dusk::native::gx::setStateResetObserver(void (*)()){}
 int main(){
     CommandMemory memory;CommandProcessor processor(memory);std::array<u8,256> scratch{};
     CommandStream stream(processor,scratch);assert(setCommandStream(&stream));

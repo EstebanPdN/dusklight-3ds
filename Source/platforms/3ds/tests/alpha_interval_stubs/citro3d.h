@@ -6,5 +6,8 @@ extern "C" {
 #include <c3d/effect.h>
 #include <c3d/fog.h>
 #include <c3d/uniforms.h>
+#include <c3d/texenv.h>
+#include <c3d/texture.h>
 #include <c3d/framebuffer.h>
+#include <c3d/renderqueue.h>
 }

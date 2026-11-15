@@ -40,7 +40,7 @@ void LightLock_Lock(LightLock*); int LightLock_TryLock(LightLock*); void LightLo
 #include <3ds/types.h>
 typedef enum {GSPGPU_EVENT_PSC0, GSPGPU_EVENT_PSC1, GSPGPU_EVENT_VBlank0,
 GSPGPU_EVENT_VBlank1, GSPGPU_EVENT_PPF, GSPGPU_EVENT_P3D, GSPGPU_EVENT_DMA} GSPGPU_Event;
-Result gspSubmitGxCommand(const u32*); void gspWaitForAnyEvent(void);
+Result gspSubmitGxCommand(const u32*); void gspWaitForAnyEvent(void); void gspWaitForVBlank0(void);
 ''',
         '3ds.h': '''#pragma once
 #ifdef __cplusplus
@@ -63,6 +63,7 @@ extern "C" void C3D_FrameSplit(u8);
 extern "C" void C3D_FrameSync();
 extern "C" bool C3D_FrameBegin(u8);
 extern "C" void C3D_FrameEnd(u8);
+extern "C" u32 C3D_FrameCounter(int);
 ''',
     }
     for name, content in stubs.items():
@@ -92,7 +93,8 @@ extern "C" void C3D_FrameEnd(u8);
                 subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=45)
         receipt['cases'] = []
         for name in ('delayed', 'postcopy', 'timeout', 'flushfailure', 'foreign',
-                     'stoppedfull', 'stoppedquery', 'unrelatedirq', 'headroom', 'tail', 'reserve-timeout', 'bad-reserve', 'callback', 'frame-tail', 'begin', 'frame-timeout'):
+                     'stoppedfull', 'stoppedquery', 'unrelatedirq', 'headroom', 'tail', 'reserve-timeout', 'bad-reserve', 'callback', 'frame-tail', 'begin', 'frame-timeout',
+                     'submit', 'submit-backlog', 'present-guard', 'present-paced', 'chunk-draws'):
             result = subprocess.run([str(out / 'probe'), name], capture_output=True, text=True,
                                     timeout=5, env={**os.environ, 'ASAN_OPTIONS': 'halt_on_error=1',
                                                     'UBSAN_OPTIONS': 'halt_on_error=1'})

@@ -5,6 +5,7 @@ using u8=std::uint8_t;
 using u16=std::uint16_t;
 using u32=std::uint32_t;
 #define R_FAILED(x) ((x)<0)
+#define R_SUCCEEDED(x) ((x)>=0)
 enum {GFX_TOP,GFX_LEFT};
 void* linearAlloc(std::size_t);
 void linearFree(void*);

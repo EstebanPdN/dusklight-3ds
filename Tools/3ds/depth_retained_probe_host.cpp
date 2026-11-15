@@ -3,6 +3,9 @@
 #include "gpu_sync.hpp"
 #include "developer_script.hpp"
 #include "../../Source/platforms/3ds/gx_geometry_pica.hpp"
+#include "../../Source/platforms/3ds/gx_pica.hpp"
+#include "../../Source/platforms/3ds/gx_texture_pica.hpp"
+#include "bootstrap.hpp"
 #include <3ds.h>
 #include <citro3d.h>
 #include <array>
@@ -70,6 +73,8 @@ void C3D_FrameSplit(unsigned){}
 void C3D_RenderTargetClear(C3D_RenderTarget*,unsigned,u32,u32){}
 void C3D_RenderTargetDetachOutput(C3D_RenderTarget*){}
 void C3D_RenderTargetSetOutput(C3D_RenderTarget*,int,int,u32){}
+void C3D_StencilTest(bool,GPU_TESTFUNC,int,int,int){}
+void C3D_StencilOp(GPU_STENCILOP,GPU_STENCILOP,GPU_STENCILOP){}
 void C3D_SyncDisplayTransfer(u32* source,u32 dim,u32* dest,u32,u32){assert(!pending.bytes);pending={dest,source,std::size_t(dim>>16)*(dim&0xffff)*4};}
 void C3D_SyncTextureCopy(u32* source,u32,u32* dest,u32,std::size_t size,u32 flags){
     assert(!pending.bytes&&flags==8&&size==retainedDepthProbeBytes);++copies;
@@ -92,6 +97,13 @@ GpuCompletion dusk::native::platformCompleteGpu(std::uint64_t timeout){
     }
     return GpuCompletion::complete;
 }
+// No PICA backend, texture cache or offscreen targets in this fixture.
+bool dusk::native::alphaIntervalCopySafe(){return true;}
+void dusk::native::invalidatePicaCommandState(){}
+bool dusk::native::releaseLeastNeededTexture(bool& fenced){fenced=false;return false;}
+std::size_t dusk::native::offscreenFramebufferBytes(){return 0;}
+GpuCompletion dusk::native::platformReserveGpuEntries(unsigned,std::uint64_t){return GpuCompletion::complete;}
+void dusk::native::fatal(const char* text){throw std::runtime_error(text);}
 bool dusk::native::sampleFramebufferDepthImage(const gx::TargetExtent&,std::span<const std::byte>,unsigned,unsigned,std::uint32_t&){return false;}
 int main(int argc,char** argv){
     assert(argc==2);mode=argv[1];
