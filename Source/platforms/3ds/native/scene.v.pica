@@ -96,10 +96,10 @@
         .end
     .end
     mov r0.w, k.y
-    dp4 outpos.x, u[48], r0
-    dp4 outpos.y, u[49], r0
-    dp4 outpos.z, u[50], r0
-    dp4 outpos.w, u[51], r0
+    dp4 r8.x, u[48], r0
+    dp4 r8.y, u[49], r0
+    dp4 r8.z, u[50], r0
+    dp4 r8.w, u[51], r0
     mul r10, k.z, v5
     cmp u[52].w, gt, gt, r15.x
     ifc cmp.x
@@ -121,12 +121,22 @@
         min r4.xyz, k.y, r4
         mul r10.xyz, r10, r4
     .end
+    ; Texture coordinates wait in r5, r6 and r7 for the single writes below.
+    mov r5, k.xxyx
+    mov r5.xy, v2
+    mov r6, k.xxxx
+    mov r6.xy, v3
+    mov r7, k.xxxx
+    mov r7.xy, v4
+    ; Outputs: the console PICA takes each component of each output register
+    ; exactly once. One left unwritten stopped it on every vertex (gx_rigid,
+    ; 2026-11-13); a later second write is ignored or stops it too (3dbrew,
+    ; GPU/Pitfalls). Every program therefore builds its outputs in registers
+    ; and writes each output once, whole (Tools/3ds/check_pica_shader.py).
+    mov outpos, r8
     mov outcolor, r10
-    mov outtex0.xy, v2
-    mov outtex0.z, k.y
-    mov outtex1, k.xxxx
-    mov outtex1.xy, v3
-    mov outtex2, k.xxxx
-    mov outtex2.xy, v4
+    mov outtex0, r5
+    mov outtex1, r6
+    mov outtex2, r7
     end
 .end

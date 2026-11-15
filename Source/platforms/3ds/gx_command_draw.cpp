@@ -27,6 +27,7 @@
 #include <cmath>
 #include <bit>
 #include <cstring>
+#include "runtime/gx_state_serial.hpp"
 #include <optional>
 
 #if defined(__3DS__) || defined(DUSK_TRANSFORM_DIAGNOSTIC_TEST) || defined(DUSK_INDIRECT_DIAGNOSTIC_TEST)
@@ -376,9 +377,11 @@ int drawPrepared(const PreparedDraw& rec,const gx::CommandDraw& draw,CommandDraw
         if(!bindGxTexture(textures[unit],scales[unit][0],scales[unit][1],unit,unit==0&&rec.material.projectiveTexture0))return 0;
     const auto& rigidScale=scales[rec.rigidProjected?1:0];
     gx::RigidVertexPlan rigid;gx::DecodedVertex first;
+    if(!context.allowSingleRigidShader)return 0;
     if(!draw.vertex(0,first)||!gx::planRigidVertex(draw.registers,first,transform,colorPlan,fog,rec.fogPrimaryAlpha,
         gx::currentTargetExtent.logicalWidth,rigid,rec.rigidProjected))return 0;
-    if(rec.rigidProjected)rigid.uniforms[rigid.projectionBase()+3]={scales[0][0],scales[0][1],0,0};
+    if(rec.rigidProjected)gx::setProjectedScales(rigid,scales[0],scales[1]);
+    if(fog.enabled&&rec.fogPrimaryRed)rigid.uniforms[12][2]=2;
     if(rigid.indexedMatrices)for(unsigned i=0;i<count;++i)if(!gx::addRigidMatrix(draw.registers,draw.vertices[i*stride],rigid))return 0;
     gx::GpuGeometryBatch batch;
     if(!reserveGxGeometry(count,indexCount,batch))return 0;
@@ -425,62 +428,352 @@ struct NativeShapeRecord {
     gx::DecodedVertex first;
     std::array<std::int8_t,10> matrixOffsets{};std::array<std::uint8_t,10> matrixOrder{};unsigned matrixCount{};
     float normalScale{},tex0Scale{1},tex1Scale{1};
+    std::array<float,3> origin{}; // of the resident positions (RigidVertexPlan::origin)
     const std::byte* vertices{};const std::uint16_t* indices{};unsigned indexCount{},vertexCount{};
     std::uint8_t originalTextureCount{};
     bool valid{},multiTexture{},fogEnabled{},fogPrimaryAlpha{},fogPrimaryRed{};
+    // Values baked into `material` as PICA constants (TEV colour/konst banks,
+    // fog colour). They are not part of the lookup key: the game animates them
+    // every frame for lit actors, and a new value only needs new constants.
+    std::uint32_t dynamic{};
+    // The recorded raster was resolved from a constant TEV alpha; such a record
+    // cannot take new constants and is re-recorded instead.
+    bool constantEarlyDepth{};
+    // A display list can produce several batches (large or multi-format
+    // shapes). Each batch has its own record; the list is replayable once
+    // every batch of one call was recorded (batchCount = their number).
+    std::uint8_t batch{},batchCount{};
+    bool pending{}; // recorded during the list call that is still running
+    // Base texture plus one texture projected from position (lit terrain).
+    // The projector moves, so every replay re-proves a positive divisor.
+    bool rigidProjected{};
+    // Bounds of the resident positions of a projected record: one test of the
+    // box replaces the per-vertex divisor proof while the whole box is in
+    // front of the projector.
+    bool boxValid{};std::array<float,3> boxLow{},boxHigh{};
+    std::array<std::uint32_t,6> parts{}; // key components, for miss attribution
 };
+constexpr unsigned nativeMaxBatches=12;
 constexpr unsigned nativeShapeCapacity=1024,nativeShapeProbe=8;
 std::array<NativeShapeRecord,nativeShapeCapacity> nativeShapes{};
 CommandDrawContext* nativeContext{};
 std::uint64_t nativeHits{},nativeMisses{},nativeRecords{},nativeKeyMisses{};
-unsigned nativeHome(const void* list){return unsigned((reinterpret_cast<std::uintptr_t>(list)>>2)*2654435761u)%nativeShapeCapacity;}
-// Linear probing over (list, state key): instances of one model share a list
-// but differ in material/lighting state, so each keeps its own record.
-NativeShapeRecord* nativeFind(const void* list,PreparedKey key){
-    const unsigned home=nativeHome(list);
+// Diagnostics: constants refreshed in place, refresh refusals, and which key
+// component differed from the closest record of the same list on a key miss
+// (bp, texture, cp, xf, matrix index, target; [6] = no record for the list).
+std::uint64_t native2dDraws{},native2dZeroAlpha{},native2dAlphaBlend{};
+std::uint64_t nativeConstantRefreshes{},nativeConstantRefusals{};
+std::array<std::uint64_t,7> nativeMissParts{};
+// Large key components, valid while the register bank's state epoch stands.
+struct NativeKeyCache {bool valid{};std::uint32_t epoch{},bp{},texture{},cp{},xf{};};
+NativeKeyCache nativeKeyCache;
+std::uint64_t nativeKeyCacheHits{};
+// Same-state continuation: consecutive replayed shapes of one material differ
+// only in geometry and matrices. While the GX state epoch and the PICA state
+// serial stand, the plans, bound textures and uniform block of the previous
+// replayed shape are reused; only its matrix palette is rebuilt.
+struct NativeChain {
+    bool valid{};
+    std::uint32_t stateEpoch{},picaSerial{},matrixTextures0{},matrixTextures1{},dynamic{};
+    gx::TargetExtent extent{};
+    gx::RasterPlan raster;gx::PicaMaterialPlan material,colorMaterial;
+    std::uint32_t firstPresent{};std::uint8_t firstNormalCount{},originalTextureCount{};
+    bool multiTexture{},fogEnabled{},fogPrimaryAlpha{},fogPrimaryRed{},rigidProjected{};
+    gx::RigidVertexPlan plan; // planned uniforms before the per-shape palette and scales
+    std::array<std::array<float,2>,3> scales{};
+};
+NativeChain nativeChain;
+bool nativeChainEnabled=true;
+std::uint64_t nativeChained{};
+// Why a static rigid batch was not recorded (diagnostics): 0 recorded,
+// 1 batch limit, 2 not compact, 3 not resident, 4 projected, 5 carrier/I4/
+// fallback, 6 indirect, 7 signed-q/camera/depth route, 8 clip disabled,
+// 9 fog substituted, 10 expanded/index mismatch, 11 pool, 12 CPU vertex path.
+std::array<std::uint64_t,13> nativeRecordOutcome{};
+// Records made by the display-list call in progress.
+const void* nativePendingList{};unsigned nativePendingCount{};
+unsigned nativeHome(const void* list,unsigned batch){
+    return unsigned(((reinterpret_cast<std::uintptr_t>(list)>>2)+batch*0x9e3779b1u)*2654435761u)%nativeShapeCapacity;
+}
+// Linear probing over (list, batch, state key): instances of one model share
+// a list but differ in material/lighting state, so each keeps its own record.
+NativeShapeRecord* nativeFind(const void* list,PreparedKey key,unsigned batch){
+    const unsigned home=nativeHome(list,batch);
     for(unsigned n=0;n<nativeShapeProbe;++n){auto& rec=nativeShapes[(home+n)%nativeShapeCapacity];
-        if(rec.valid&&rec.list==list&&rec.keyA==key.a&&rec.keyB==key.b)return &rec;}
+        if(rec.valid&&rec.list==list&&rec.batch==batch&&rec.keyA==key.a&&rec.keyB==key.b)return &rec;}
     return nullptr;
 }
-NativeShapeRecord& nativeClaim(const void* list,PreparedKey key){
-    if(auto* rec=nativeFind(list,key))return *rec;
-    const unsigned home=nativeHome(list);
+NativeShapeRecord& nativeClaim(const void* list,PreparedKey key,unsigned batch){
+    if(auto* rec=nativeFind(list,key,batch))return *rec;
+    const unsigned home=nativeHome(list,batch);
     for(unsigned n=0;n<nativeShapeProbe;++n){auto& rec=nativeShapes[(home+n)%nativeShapeCapacity];if(!rec.valid)return rec;}
-    static unsigned victim{};return nativeShapes[(home+(victim++%nativeShapeProbe))%nativeShapeCapacity];
+    // Never evict a record of the call in progress: its list would stay incomplete.
+    static unsigned victim{};
+    for(unsigned n=0;n<nativeShapeProbe;++n){auto& rec=nativeShapes[(home+(victim++%nativeShapeProbe))%nativeShapeCapacity];if(!rec.pending)return rec;}
+    return nativeShapes[home];
 }
-PreparedKey nativeStateKey(const gx::CommandRegisters& r,std::uint32_t generation,const void* list){
+// The key covers the state that decides the recorded plans (raster, material
+// structure, vertex layout). Values that the replay refreshes from the live
+// registers are left out: TEV colour/konst banks and fog colour (constants,
+// see nativeDynamic), fog curve parameters, projection and viewport. Keeping
+// them in the key made every lit actor miss whenever its environment colours
+// moved, i.e. every frame.
+PreparedKey nativeStateKey(const gx::CommandRegisters& r,std::uint32_t generation,const void* list,
+                           std::array<std::uint32_t,6>* parts=nullptr){
     // Raw register words, no per-register validity branches: a stale invalid
-    // word can only produce a miss. FNV-1a plus a rotate-xor second lane.
+    // word can only produce a miss. FNV-1a per component.
+    // The four large components only change with the bank's state epoch
+    // (shapes of one material share them); the per-shape rest is mixed below.
+    auto& kc=nativeKeyCache;
+    if(!kc.valid||kc.epoch!=r.stateEpoch){
+        auto lane=[](std::uint32_t seed){return 2166136261u^seed;};
+        std::uint32_t bp=lane(1),texture=lane(2),cp=lane(3),xf=lane(4);
+        auto mix=[](std::uint32_t& h,std::uint32_t v){h=(h^v)*16777619u;};
+        for(unsigned i=0;i<0x80;++i)mix(bp,r.bp[i]);
+        for(unsigned i=0x80;i<0xc0;++i)mix(texture,r.bp[i]);
+        for(unsigned i=0xc0;i<0xe0;++i)mix(bp,r.bp[i]);
+        // 0xe0-0xe7 TEV colour banks, 0xe8-0xf0 and 0xf2 fog curve/range/colour:
+        // refreshed per replay. 0xf1 keeps only fog type and projection kind.
+        mix(bp,r.bp[0xf1]>>20);
+        for(unsigned i=0xf3;i<0x100;++i)mix(bp,r.bp[i]);
+        for(const auto& t:r.tluts){mix(texture,t.token);mix(texture,t.offset^(t.entries<<16));}
+        mix(texture,r.tlutOverflow);
+        // CP 0x30/0x40 mirror the matrix index registers mixed per shape.
+        mix(cp,r.cp[0x50]);mix(cp,r.cp[0x60]);
+        for(unsigned i=0;i<8;++i){mix(cp,r.cp[0x70+i]);mix(cp,r.cp[0x80+i]);mix(cp,r.cp[0x90+i]);}
+        for(unsigned i=0;i<16;++i)mix(cp,r.cp[0xb0+i]);
+        for(unsigned i=0x1000;i<0x100a;++i)mix(xf,r.xf[i]);
+        for(unsigned i=0x100e;i<0x1018;++i)mix(xf,r.xf[i]);
+        // 0x1018/0x1019 matrix indices: mixed per shape. 0x101a-0x1025 viewport
+        // and projection parameters: planned per replay.
+        for(unsigned i=0x1026;i<0x1058;++i)mix(xf,r.xf[i]);
+        kc={true,r.stateEpoch,bp,texture,cp,xf};
+    }else ++nativeKeyCacheHits;
+    const std::uint32_t bp=kc.bp,texture=kc.texture,cp=kc.cp,xf=kc.xf;
+    const std::uint32_t matrix=r.matrixIndex[0]*0x9e3779b1u^r.matrixIndex[1];
+    const std::uint32_t target=(gx::currentTargetExtent.logicalWidth|(gx::currentTargetExtent.logicalHeight<<16))^(r.bpMask*0x85ebca6bu);
+    if(parts)*parts={bp,texture,cp,xf,matrix,target};
     std::uint32_t a=2166136261u^generation,b=0x9e3779b9u^std::uint32_t(reinterpret_cast<std::uintptr_t>(list));
-    auto mix=[&](std::uint32_t v){a=(a^v)*16777619u;b=((b<<5)|(b>>27))^v;};
-    for(unsigned i=0;i<256;++i)mix(r.bp[i]);
-    mix(r.bpMask);
-    for(unsigned bank=0;bank<2;++bank)for(unsigned i=0;i<8;++i)mix(r.tevColor[bank][i]);
-    for(const auto& t:r.tluts){mix(t.token);mix(t.offset^(t.entries<<16));}
-    mix(r.tlutOverflow);
-    mix(r.cp[0x30]);mix(r.cp[0x40]);mix(r.cp[0x50]);mix(r.cp[0x60]);
-    for(unsigned i=0;i<8;++i){mix(r.cp[0x70+i]);mix(r.cp[0x80+i]);mix(r.cp[0x90+i]);}
-    for(unsigned i=0;i<16;++i)mix(r.cp[0xb0+i]);
-    for(unsigned i=0x1000;i<0x100a;++i)mix(r.xf[i]);
-    for(unsigned i=0x100e;i<0x1058;++i)mix(r.xf[i]);
-    mix(r.matrixIndex[0]);mix(r.matrixIndex[1]);
-    mix(gx::currentTargetExtent.logicalWidth|(gx::currentTargetExtent.logicalHeight<<16));
+    for(const auto v:{bp,texture,cp,xf,matrix,target}){a=(a^v)*16777619u;b=((b<<5)|(b>>27))^v;}
     return {a,b};
 }
+// Signature of the register values that become PICA constants of a recorded
+// material: both TEV colour banks and the fog colour.
+std::uint32_t nativeDynamic(const gx::CommandRegisters& r){
+    std::uint32_t h=2166136261u;
+    for(unsigned bank=0;bank<2;++bank)for(unsigned i=0;i<8;++i)h=(h^r.tevColor[bank][i])*16777619u;
+    h=(h^std::uint32_t(r.tevColorValid.to_ulong()))*16777619u;
+    return (h^r.bp[0xf2])*16777619u;
+}
+// ---------------------------------------------------------------------------
+// Native PICA engine: immediate draw records. Immediate-mode draws (J2D panes,
+// HUD, particles, effects) repeat the same GX state every frame with new
+// vertices and a new position matrix; each one used to be planned from the
+// registers again (raster, TEV material, colour, transform, rigid uniforms)
+// for four vertices. The first complete translation of an unlit, fog-free
+// multi-texture GPU draw records its final raster plan, PICA material and
+// uniform block; a later draw with the same state fingerprint only resolves
+// and binds its textures, reloads the position matrix, decodes its vertices
+// and submits. Everything the recorded plans were derived from is part of
+// the fingerprint; anything else takes the complete path, which records again.
+struct ImmediateRecord {
+    bool used{};
+    std::uint32_t keyA{},keyB{},extra{};
+    gx::TargetExtent extent{};
+    gx::RasterPlan raster;gx::PicaMaterialPlan material;
+    gx::RigidVertexPlan plan; // planned uniforms before decode (texture fractions not folded in)
+    std::array<std::array<float,2>,3> scales{};
+    std::uint8_t textureCount{};
+};
+constexpr unsigned immediateCapacity=256,immediateProbe=4;
+std::array<ImmediateRecord,immediateCapacity> immediateRecords{};
+bool immediateEnabled=true;
+std::uint64_t immediateHits{},immediateStores{},immediateFallbacks{},immediateMisses{};
+// State outside nativeStateKey that the recorded plans depend on: TEV colour
+// banks and fog (constants), channel material/ambient colours, viewport and
+// projection, and the texture matrices read by the active texgens.
+std::uint32_t immediateExtra(const gx::CommandDraw& draw){
+    const auto& r=draw.registers;
+    std::uint32_t h=nativeDynamic(r);
+    auto mix=[&](std::uint32_t v){h=(h^v)*16777619u;};
+    for(unsigned i=0x100a;i<=0x100d;++i)mix(r.xf[i]);
+    for(unsigned i=0x101a;i<=0x1025;++i)mix(r.xf[i]);
+    for(unsigned i=0xe8;i<=0xf0;++i)mix(r.bp[i]);
+    const unsigned gens=std::min<unsigned>(r.xf[0x103f]&15,8);
+    for(unsigned c=0;c<gens;++c){
+        const unsigned m=c<4?(r.matrixIndex[0]>>(6+6*c))&63:(r.matrixIndex[1]>>(6*(c-4)))&63;
+        if(m<60)for(unsigned k=0;k<8;++k)mix(r.xf[4*m+k]);
+        const unsigned postRow=r.xf[0x1050+c]&63;
+        if(postRow<61)for(unsigned k=0;k<8;++k)mix(r.xf[0x500+4*postRow+k]);
+    }
+    mix(unsigned(draw.primitive));mix(draw.plan.packedStride());
+    return h;
+}
+ImmediateRecord* immediateFind(PreparedKey key,std::uint32_t extra){
+    for(unsigned n=0;n<immediateProbe;++n){auto& rec=immediateRecords[(key.a+n)%immediateCapacity];
+        if(rec.used&&rec.keyA==key.a&&rec.keyB==key.b&&rec.extra==extra)return &rec;}
+    return nullptr;
+}
+ImmediateRecord& immediateClaim(PreparedKey key){
+    for(unsigned n=0;n<immediateProbe;++n){auto& rec=immediateRecords[(key.a+n)%immediateCapacity];if(!rec.used)return rec;}
+    static unsigned victim{};
+    auto& rec=immediateRecords[(key.a+(victim++%immediateProbe))%immediateCapacity];rec.used=false;return rec;
+}
+// 1: submitted; 0: use the complete path; -1: failed after reservation.
+int drawImmediate(const ImmediateRecord& rec,const gx::CommandDraw& draw,CommandDrawContext& context){
+    const auto& r=draw.registers;
+    if(std::memcmp(&rec.extent,&gx::currentTargetExtent,sizeof(rec.extent)))return 0;
+    const auto count=draw.vertexCount;
+    const auto stride=draw.plan.packedStride();
+    if(count<3||!stride||count>draw.vertices.size()/stride)return 0;
+    std::size_t indexCount;
+    switch(draw.primitive){
+    case GX_TRIANGLES:if(count%3)return 0;indexCount=count;break;
+    case GX_QUADS:if(count%4)return 0;indexCount=std::size_t(count/4)*6;break;
+    case GX_TRIANGLESTRIP:case GX_TRIANGLEFAN:indexCount=std::size_t(count-2)*3;break;
+    default:return 0;
+    }
+    std::array<gx::Texture,3> textures{};
+    const unsigned gens=std::min<unsigned>(r.xf[0x103f]&15,8);
+    for(unsigned unit=0;unit<rec.textureCount;++unit){
+        const char* why;
+        // The fingerprint covers the texture matrices of the active texgens only.
+        if(rec.material.textures[unit].coordinate>=gens)return 0;
+        if(!gx::resolveCommandTexture(r,rec.material.textures[unit].map,textures[unit],why))return 0;
+    }
+    std::array<std::array<float,2>,3> scales{};
+    GxTextureDrawScope textureScope({textures.data(),rec.textureCount});
+    if(!textureScope)return 0;
+    for(unsigned unit=0;unit<rec.textureCount;++unit)
+        if(!bindGxTexture(textures[unit],scales[unit][0],scales[unit][1],unit,false))return 0;
+    // The recorded texture rows hold these scales (padded texture extents).
+    if(scales!=rec.scales)return 0;
+    gx::RigidVertexPlan rigid=rec.plan;
+    rigid.matrixOffsets.fill(-1);rigid.normalOffsets.fill(-1);rigid.matrices=0;
+    if(!r.matrixIndexValid[0]||!gx::addRigidMatrix(r,r.matrixIndex[0]&63,rigid))return 0;
+    gx::GpuGeometryBatch batch;
+    if(!reserveGxGeometry(count,indexCount,batch))return 0;
+    batch.qPolicy=gx::GeometryQPolicy::positiveOnly;
+    auto abandon=[&]{return cancelGxGeometry(batch)?0:-1;};
+    std::size_t at=0;
+    if(!aurora::gx::dl::expand_triangles(draw.primitive,count,[&](u16 a,u16 b,u16 c){batch.indices[at++]=a;batch.indices[at++]=b;batch.indices[at++]=c;}))
+        return abandon();
+    {GxProfileScope vertexProfile(GxProfilePart::vertices);
+    GxProfileScope section(GxProfilePart::vertexRigid);
+    if(!gx::decodeCompactRigidBatchMT(draw.plan,draw.vertices,draw.arrays,batch.vertices,rigid)||rigid.staticVertices)return abandon();
+    }
+    if(!submitGxRigidGeometry(rec.raster,rec.material,batch,rigid)){
+        cancelGxGeometry(batch);
+        if(!context.rejected){context.failure=gxPicaFailure();context.failureKind=DrawFailureKind::submission;if(context.reportFailure)context.reportFailure(draw,context.failure);}
+        ++context.rejected;++context.rejectedByKind[unsigned(DrawFailureKind::submission)];return -1;
+    }
+    gxProfileTotals.rigidDecodedVertices+=count;gxProfileTotals.rigidVertices+=count;gxProfileTotals.compactVertices+=count;
+    gxProfileTotals.vertices+=count;
+    ++context.submitted;if(rec.material.quantizedConstants)++context.quantizedDraws;
+    return 1;
+}
+// Two plans with the same combiner structure differ only in constants.
+bool sameMaterialStructure(gx::PicaMaterialPlan a,gx::PicaMaterialPlan b){
+    for(auto* plan:{&a,&b}){
+        for(auto& stage:plan->stages)stage.constant={};
+        plan->bufferConstant={};plan->quantizedConstants=false;
+    }
+    return !std::memcmp(&a,&b,sizeof(a));
+}
+// Rebuild the constants of a recorded material from the live TEV colours and
+// fog colour, repeating the recorded draw's own material steps (decode, plan,
+// projective routing, vertex fog). Any structural difference refuses; the
+// caller then takes the complete path, which records again.
+bool refreshNativeConstants(NativeShapeRecord& rec,const gx::CommandRegisters& r,const CommandDrawContext& context,
+                            const gx::VertexFogPlan& fog,std::uint8_t projectiveMask){
+    if(rec.constantEarlyDepth||rec.raster.earlyDepthAlpha)return false;
+    gx::MaterialState state;
+    if(!gx::decodeMaterial(r,state)||state.indirectCount)return false;
+    // Recorded shapes never carry indirect stages (the complete path zeroes
+    // them only after planning a vertex-indirect effect).
+    for(unsigned i=0;i<state.stageCount;++i)if(state.stages[i].indirect)return false;
+    gx::PicaMaterialPlan material;
+    const auto policy=context.allowQuantizedConstants&&!rec.raster.alphaInterval.enabled?
+        gx::MaterialPolicy::quantizedConstants:gx::MaterialPolicy::exactConstants;
+    if(!gx::planPicaMaterial(state,material,nullptr,policy))return false;
+    if(rec.raster.alphaBand&&!gx::appendAlphaBand(material,rec.raster.alphaBandUpper))return false;
+    const gx::PicaMaterialPlan colorMaterial=material;
+    if(!sameMaterialStructure(colorMaterial,rec.colorMaterial))return false;
+    if(!gx::routeProjectiveTexture(material,projectiveMask))return false;
+    if(!gx::appendVertexFog(material,fog,rec.fogPrimaryAlpha,rec.fogPrimaryRed))return false;
+    if(!sameMaterialStructure(material,rec.material))return false;
+    rec.material=material;rec.colorMaterial=colorMaterial;return true;
+}
+// Positive projective divisor for every resident vertex of a projected
+// record. The divisor is affine in the position, so its minimum over the
+// bounding box bounds every vertex from below (and the box maximum of the
+// magnitude bounds the cancellation headroom from above); the extra margin
+// covers the rounding of the per-vertex sums. A box that does not pass takes
+// the exact per-vertex proof.
+bool nativeProjectionPositive(const gx::RigidVertexPlan& rigid,const NativeShapeRecord& rec){
+    if(rec.boxValid&&(rigid.projectedTexture||rigid.multiProjected)){
+        const auto& m=rigid.multiProjected?rigid.uniforms[gx::multiUnitRow(0)+2]:rigid.uniforms[rigid.projectionBase()+2];
+        float q=m[3],magnitude=std::abs(m[3]);
+        for(unsigned c=0;c<3;++c){
+            const float a=m[c]*rec.boxLow[c],b=m[c]*rec.boxHigh[c];
+            q+=std::min(a,b);magnitude+=std::max(std::abs(a),std::abs(b));
+        }
+        if(std::isfinite(q)&&std::isfinite(magnitude)&&q>std::max(1e-5f,magnitude*1.01e-4f)+magnitude*1e-6f)return true;
+    }
+    return gx::validateRigidProjection(rigid,std::span<const gx::GpuVertex>(reinterpret_cast<const gx::GpuVertex*>(rec.vertices),rec.vertexCount));
+}
 void nativeListEnded(const void* list,std::uint32_t batches){
-    if(batches==1)return;
-    const unsigned home=nativeHome(list); // multi-batch lists stay on the normal path
-    for(unsigned n=0;n<nativeShapeProbe;++n){auto& rec=nativeShapes[(home+n)%nativeShapeCapacity];if(rec.list==list)rec.valid=false;}
+    // The call recorded every batch: the list becomes replayable. Otherwise
+    // drop this call's records; a partly recorded list always takes the
+    // normal path.
+    if(nativePendingList==list&&nativePendingCount){
+        const bool complete=nativePendingCount==batches&&batches<=nativeMaxBatches;
+        for(unsigned batch=1;batch<=batches&&batch<=nativeMaxBatches;++batch){
+            const unsigned home=nativeHome(list,batch);
+            for(unsigned n=0;n<nativeShapeProbe;++n){auto& rec=nativeShapes[(home+n)%nativeShapeCapacity];
+                if(!rec.pending||rec.list!=list||rec.batch!=batch)continue;
+                rec.pending=false;
+                if(complete)rec.batchCount=std::uint8_t(batches);else rec.valid=false;
+            }
+        }
+    }
+    nativePendingList=nullptr;nativePendingCount=0;
 }
 struct NativeListHook {NativeListHook(){gx::staticListEnded=nativeListEnded;}} nativeListHook;
 }
 void nativeShapeStatistics(std::uint64_t& hits,std::uint64_t& misses,std::uint64_t& records,std::uint64_t& keyMisses){
     hits=nativeHits;misses=nativeMisses;records=nativeRecords;keyMisses=nativeKeyMisses;
 }
+void nativeShapeDiagnostics(std::uint64_t& refreshes,std::uint64_t& refusals,std::array<std::uint64_t,7>& missParts){
+    refreshes=nativeConstantRefreshes;refusals=nativeConstantRefusals;missParts=nativeMissParts;
+}
+void nativeShapeChainStatistics(std::uint64_t& chained,std::uint64_t& keyCacheHits){chained=nativeChained;keyCacheHits=nativeKeyCacheHits;}
+void nativeShapeRecordOutcomes(std::array<std::uint64_t,13>& outcomes){outcomes=nativeRecordOutcome;}
+void native2dStatistics(std::uint64_t& draws,std::uint64_t& zeroAlpha,std::uint64_t& alphaBlend){draws=native2dDraws;zeroAlpha=native2dZeroAlpha;alphaBlend=native2dAlphaBlend;}
+void setNativeShapeChain(bool enabled){nativeChainEnabled=enabled;nativeChain.valid=false;}
+void immediateDrawStatistics(std::uint64_t& hits,std::uint64_t& misses,std::uint64_t& stores,std::uint64_t& fallbacks){
+    hits=immediateHits;misses=immediateMisses;stores=immediateStores;fallbacks=immediateFallbacks;
+}
+void setImmediateDrawRecords(bool enabled){immediateEnabled=enabled;for(auto& rec:immediateRecords)rec.used=false;}
 void preparedDrawStatistics(std::uint64_t& hits,std::uint64_t& misses,std::uint64_t& stores,std::uint64_t& fallbacks){
     hits=preparedHits;misses=preparedMisses;stores=preparedStores;fallbacks=preparedFallbacks;
 }
 std::uint64_t clipDisabledGpuDraws;
+// Triangle-fog draws kept on the GPU rigid path, and the one-shot switch a
+// draw uses to restart itself on the CPU form.
+std::uint64_t rigidTriangleFogDraws;
+bool rigidTriangleFogSuppressed;
+// One-shot switch: translate the draw again without its vertex warp (see
+// DrawVisualFallback::indirectDivisor).
+bool vertexIndirectSuppressed;
+// Fog-overlay meshes on the GPU: the terrain materials that need it carry
+// three textures with a projected one, which the multi-texture shader plans
+// since 2026-11-14 (title: 2035 vertices a frame left the CPU vertex route).
+// SD switch rigid-triangle-fog.txt (0 = the CPU form).
+bool rigidTriangleFogEnabled=true;
+void setRigidTriangleFog(bool enabled){rigidTriangleFogEnabled=enabled;}
+std::array<std::uint64_t,8> rigidTriangleFogGate;
+std::uint64_t rigidTriangleFogStatistics(std::array<std::uint64_t,8>* gates){if(gates)*gates=rigidTriangleFogGate;return rigidTriangleFogDraws;}
 bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
     GxProfileScope profile(GxProfilePart::command);
     if(!ptr)return false;
@@ -512,17 +805,55 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
         }else ++preparedMisses;
         preparedArmed=true;
     }
+    // Native PICA engine: immediate draw records (see ImmediateRecord).
+    ImmediateRecord* immediateSlot=nullptr;PreparedKey immediateKey{};std::uint32_t immediateExtraKey{};bool immediateCaptured=false;
+    if(immediateEnabled&&context.allowRigidGpu&&!gx::staticGeometryHint.list&&!draw.indexCount&&!gxVertexLayoutTracing&&
+       (draw.primitive==GX_QUADS||draw.primitive==GX_TRIANGLES||draw.primitive==GX_TRIANGLESTRIP||draw.primitive==GX_TRIANGLEFAN)){
+        static const auto immediateIndex=registerGxNamedProfile("draw.immediate");GxNamedProfileSpan immediateSpan(immediateIndex);
+        immediateKey=nativeStateKey(draw.registers,0x494d4d00u,nullptr);
+        immediateExtraKey=immediateExtra(draw);
+        if(auto* rec=immediateFind(immediateKey,immediateExtraKey)){
+            const int result=drawImmediate(*rec,draw,context);
+            if(result>0){++immediateHits;drawClass.cls=1;return true;}
+            if(result<0)return false;
+            rec->used=false;++immediateFallbacks;
+        }else ++immediateMisses;
+        immediateSlot=&immediateClaim(immediateKey);
+    }
     bool carrierAttempt=false;
     std::uint32_t carrierFailureVertex=UINT32_MAX;
     auto fail=[&](const char* why,DrawFailureKind kind=DrawFailureKind::state){
-        if(!context.rejected){context.failure=why;context.failureKind=kind;if(context.reportFailure)context.reportFailure(draw,why);}
+        const bool skippable=context.skipUnsupportedDraws&&
+            (kind==DrawFailureKind::state||kind==DrawFailureKind::protocol||kind==DrawFailureKind::resource);
+        // Report the first rejection, and under the skip policy the first of
+        // each distinct reason (reasons are static strings).
+        bool report=!context.rejected;
+        {
+            CommandDrawContext::RejectReason* reason=nullptr;
+            for(unsigned n=0;n<context.rejectReasonCount&&!reason;++n)
+                if(context.rejectReasons[n].why==why||!std::strcmp(context.rejectReasons[n].why,why))reason=&context.rejectReasons[n];
+            if(!reason&&context.rejectReasonCount<context.rejectReasons.size()){
+                reason=&context.rejectReasons[context.rejectReasonCount++];*reason={why,0,0,0,false};
+            }
+            if(reason){
+                ++reason->draws;reason->vertices+=draw.vertexCount;
+                if(skippable&&!reason->reported)report=true;
+                reason->reported=true;
+            }
+        }
+        if(report){context.failure=why;context.failureKind=kind;if(context.reportFailure)context.reportFailure(draw,why);}
         if(carrierAttempt){
             ++context.rasterCarrierRejects;
             if(!context.rasterCarrierFirstFailure){context.rasterCarrierFirstFailure=why;context.rasterCarrierFirstVertex=carrierFailureVertex;}
         }
-        ++context.rejected;++context.rejectedByKind[unsigned(kind)];return false;
+        ++context.rejected;++context.rejectedByKind[unsigned(kind)];
+        if(skippable){++context.skippedDraws;return true;}
+        return false;
     };
     auto allowsFallback=[&](DrawVisualFallback reason){
+        if(reason==DrawVisualFallback::projectiveDivisor&&!context.allowProjectiveDivisorFallback)return false;
+        if(reason==DrawVisualFallback::alphaCompare&&!context.allowAlphaCompareFallback)return false;
+        if(reason==DrawVisualFallback::indirectDivisor&&!context.allowIndirectDivisorFallback)return false;
         return context.allowDegradedDraws&&(context.allowVisualFallback?context.allowVisualFallback(draw,reason):
             draw.registers.xfValid[0x1026]&&draw.registers.xf[0x1026]==0);
     };
@@ -533,8 +864,14 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
     gx::RasterPlan raster;gx::RasterError rasterError;
     { static const auto index=registerGxNamedProfile("adapter.raster");GxNamedProfileScope detail(index);
     if(!gx::planRaster(draw.registers,raster,&rasterError,context.allowVertexFog?gx::FogPolicy::vertexApproximation:gx::FogPolicy::requireSupported,
-        context.allowRgba6Storage?gx::ColorStoragePolicy::rgba8ForRgba6:gx::ColorStoragePolicy::rgb8Only,gx::ClipPolicy::validateGeometry,context.allowConstantEarlyDepth,context.allowAlphaUnion,context.alphaIntervalPolicy))
-        return fail(gx::rasterErrorText(rasterError));
+        context.allowRgba6Storage?gx::ColorStoragePolicy::rgba8ForRgba6:gx::ColorStoragePolicy::rgb8Only,gx::ClipPolicy::validateGeometry,context.allowConstantEarlyDepth,context.allowAlphaUnion,context.alphaIntervalPolicy)){
+        // A dual alpha comparison without an exact route: degraded draws use one test.
+        if(rasterError!=gx::RasterError::alpha||!allowsFallback(DrawVisualFallback::alphaCompare)||
+           !gx::planRaster(draw.registers,raster,&rasterError,context.allowVertexFog?gx::FogPolicy::vertexApproximation:gx::FogPolicy::requireSupported,
+        context.allowRgba6Storage?gx::ColorStoragePolicy::rgba8ForRgba6:gx::ColorStoragePolicy::rgb8Only,gx::ClipPolicy::validateGeometry,context.allowConstantEarlyDepth,context.allowAlphaUnion,context.alphaIntervalPolicy,true))
+            return fail(gx::rasterErrorText(rasterError));
+        if(raster.alphaRelaxed)simplified[unsigned(DrawVisualFallback::alphaCompare)]=true;
+    }
     }
     if(raster.scissor.empty||(!expanded&&raster.cull==3)){++context.culled;return true;}
     gx::MaterialState state;gx::MaterialError materialError;
@@ -547,6 +884,7 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
         const char* why;
         if(!gx::planVertexIndirect(draw.registers,state,indirect,why))return fail(why);
         state.indirectCount=0;for(auto& stage:state.stages)stage.indirect=0;
+        if(vertexIndirectSuppressed&&indirect.enabled){indirect={};simplified[unsigned(DrawVisualFallback::indirectDivisor)]=true;}
     }
     gx::PicaMaterialPlan material;gx::MaterialPlanError planError;
     bool carrier=false,lookupCarrier=false,exactI4Pending=false;
@@ -608,6 +946,10 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
     }
     }
     } // Original planner fallback; exact I4 proof is separate.
+    // Band alpha test: the hardware keeps the lower bound, the combiner alpha
+    // takes the upper one. No room in the combiner leaves the draw unsupported.
+    if(raster.alphaBand&&(carrier||exactI4Pending||!gx::appendAlphaBand(material,raster.alphaBandUpper)))
+        return fail(gx::rasterErrorText(gx::RasterError::alpha));
     const bool constantEarlyDepth=raster.earlyDepthAlpha;
     if(!gx::resolveConstantEarlyAlpha(material,raster))return fail("GX early depth alpha is not constant");
     gx::RasterColorPlan colorPlan;gx::RasterColorError colorError;
@@ -638,15 +980,20 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
         const auto binding=material.textures[unit];
         const char* textureFailure;
         if(!gx::resolveCommandTexture(draw.registers,binding.map,textures[unit],textureFailure))return fail(textureFailure,DrawFailureKind::resource);
-        int first=-1;
+        int first=-1;bool plain=false;
         for(unsigned stage=0;stage<originalMaterial.stageCount;++stage){
             const auto& s=originalMaterial.stages[stage];
             if(!s.textureEnabled||s.texture!=binding.map||s.coordinate!=binding.coordinate)continue;
-            if(first>=0&&indirect.stages[first].state!=indirect.stages[stage].state)
-                return fail("GX shared texture has different indirect coordinates");
+            if(first>=0&&indirect.stages[first].state!=indirect.stages[stage].state){
+                // One PICA unit has one coordinate set: degraded draws keep
+                // the texture and leave its warp out.
+                if(!allowsFallback(DrawVisualFallback::sharedIndirect))
+                    return fail("GX shared texture has different indirect coordinates");
+                simplified[unsigned(DrawVisualFallback::sharedIndirect)]=plain=true;
+            }
             first=stage;
         }
-        if(first>=0&&indirect.stages[first].enabled)indirectUnits[unit]=&indirect.stages[first];
+        if(first>=0&&indirect.stages[first].enabled&&!plain)indirectUnits[unit]=&indirect.stages[first];
     }
     }
     static const auto midIndex=registerGxNamedProfile("draw.mid");GxNamedProfileSpan midSpan(midIndex);
@@ -677,6 +1024,10 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
     if(lookupCarrier&&!rasterLookupTextures(textures,originalTextureCount))return fail("GX raster color lookup unavailable",DrawFailureKind::resource);
     bool fogPrimaryAlpha=(!carrier||lookupCarrier)&&!(colorPlan.required&2);
     bool fogPrimaryRed=(!carrier||lookupCarrier)&&!fogPrimaryAlpha&&!(colorPlan.required&1);
+    // Only the CPU vertex route can carry the fog factor in the red channel.
+    // With a free texture unit the fog ramp gives the same factor and the
+    // draw stays on the GPU vertex route (Lakebed water: 7500 vertices a frame).
+    if(fogPrimaryRed&&!carrier&&context.preferFogRamp&&material.textureCount<3&&!indirect.enabled)fogPrimaryRed=false;
     gx::VertexFogPlan fog;
     bool triangleFog=false;gx::RasterPlan fogRaster;gx::PicaMaterialPlan fogMaterial;
     unsigned fogTextureUnit=0;
@@ -773,8 +1124,9 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
         }
     }
     std::array<std::array<float,2>,3> scales{};
-    GxTextureDrawScope textureScope({textures.data(),material.textureCount});
-    if(!textureScope)return fail(gxTextureFailure(),DrawFailureKind::resource);
+    // Optional: a draw that translates itself again ends this scope first.
+    std::optional<GxTextureDrawScope> textureScope;textureScope.emplace(std::span<const gx::Texture>{textures.data(),material.textureCount});
+    if(!*textureScope)return fail(gxTextureFailure(),DrawFailureKind::resource);
     for(unsigned unit=0;unit<material.textureCount;++unit)
         if(!bindGxTexture(textures[unit],scales[unit][0],scales[unit][1],unit,unit==0&&material.projectiveTexture0))return fail(gxTextureFailure(),DrawFailureKind::resource);
     const bool signedQDiagnostic=context.allowDirectSignedQDiagnostic&&
@@ -790,45 +1142,74 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
     bool cameraAlignedProved=false,cameraCpuClip=false;
     auto recordCameraAligned=[&](CameraAlignedIndirectCounts::Total& total){++total.draws;total.vertices+=count;};
     gx::RigidVertexPlan rigid;
-    bool rigidGpu=false,gateCounted=false;
+    bool rigidGpu=false,gateCounted=false,rigidTriangleFog=false;
     bool signedQPositiveRigidAttempt=false;
     auto recordSignedQPositiveRigid=[&](SignedQPositiveRigidCounts::Total& total){++total.draws;total.vertices+=count;};
     const bool rigidProjected=originalTextureCount==2&&material.projectiveTexture0&&
         material.textures[0].coordinate==1&&material.textures[1].coordinate==0;
     const auto& rigidScale=scales[rigidProjected?1:0];
-    const unsigned cpuReason=(raster.alphaUnion||raster.alphaInterval.enabled)?0:triangleFog?1:(fog.enabled&&fogPrimaryRed)?2:expanded?3:raster.clipDisabled?4:
+    const unsigned cpuReason=(raster.alphaUnion||raster.alphaInterval.enabled)?0:triangleFog?1:expanded?3:raster.clipDisabled?4:
         indirect.enabled?5:!originalTextureCount?6:(originalTextureCount>1&&!rigidProjected)?7:
         (!rigidProjected&&material.textures[0].coordinate!=0)?8:9;
     midSpan.stop();
     // Orthographic (2D) draws are unlit; never attempt the lit rigid shaders.
     const bool orthographicDraw=draw.registers.xfValid[0x1026]&&draw.registers.xf[0x1026]==1;
     { static const auto index=registerGxNamedProfile("adapter.rigidPlan");GxNamedProfileScope detail(index);
-    if(!orthographicDraw&&!exactI4Pending&&!carrier&&(!signedQDiagnostic||context.allowSignedQPositiveRigidGpu)&&context.allowRigidGpu&&!raster.alphaUnion&&!raster.alphaInterval.enabled&&!triangleFog&&!(fog.enabled&&fogPrimaryRed)&&!expanded&&!raster.clipDisabled&&!indirect.enabled&&
+    // Triangle fog on the GPU: the draw is planned without fog; the fog
+    // overlay pass reuses its geometry and uniform block (see the submit).
+    const bool rigidFogCandidate=triangleFog&&rigidTriangleFogEnabled&&!rigidTriangleFogSuppressed&&picaRigidTriangleFogAvailable()&&
+        fog.function==2&&!fog.orthographic&&fog.a>=0&&fog.b>1&&!orthographicDraw&&!signedQDiagnostic;
+    static const gx::VertexFogPlan noFog{};
+    // The shaders write the fog factor to primary red when u[12].z is 2 (the
+    // material does not read the vertex colour: its red channel is free).
+    const bool fogRedCarrier=fog.enabled&&fogPrimaryRed&&!triangleFog;
+    if(context.allowSingleRigidShader&&!orthographicDraw&&!exactI4Pending&&!carrier&&(!signedQDiagnostic||context.allowSignedQPositiveRigidGpu)&&context.allowRigidGpu&&!raster.alphaUnion&&!raster.alphaInterval.enabled&&(!triangleFog||rigidFogCandidate)&&!expanded&&!raster.clipDisabled&&!indirect.enabled&&
        ((originalTextureCount==1&&material.textures[0].coordinate==0)||rigidProjected)){
         signedQPositiveRigidAttempt=signedQDiagnostic;
         if(signedQPositiveRigidAttempt)recordSignedQPositiveRigid(context.signedQPositiveRigid.attempts);
         gx::DecodedVertex first;
-        if(draw.vertex(0,first))rigidGpu=gx::planRigidVertex(draw.registers,first,transform,colorPlan,fog,fogPrimaryAlpha,gx::currentTargetExtent.logicalWidth,rigid,rigidProjected);
-        if(rigidGpu&&rigidProjected)rigid.uniforms[rigid.projectionBase()+3]={scales[0][0],scales[0][1],0,0};
+        if(draw.vertex(0,first))rigidGpu=gx::planRigidVertex(draw.registers,first,transform,colorPlan,triangleFog?noFog:fog,fogPrimaryAlpha,gx::currentTargetExtent.logicalWidth,rigid,rigidProjected);
+        if(rigidGpu&&rigidProjected)gx::setProjectedScales(rigid,scales[0],scales[1]);
+        if(rigidGpu&&fogRedCarrier)rigid.uniforms[12][2]=2;
+#if defined(__3DS__)
+        if(!rigidGpu&&rigidProjected){
+            // What kept a projected draw on the CPU vertex route (first three).
+            static unsigned reports;
+            if(reports<3){++reports;const auto& x=draw.registers;
+                OSReport("Native projected rigid plan refused: gen0=%08lx post0=%08lx gen1=%08lx post1=%08lx index=%08lx present=%08lx normals=%u fog=%u,%u lit=%u required=%u mask=%02x vertices=%u\n",
+                    static_cast<unsigned long>(x.xf[0x1040]),static_cast<unsigned long>(x.xf[0x1050]),static_cast<unsigned long>(x.xf[0x1041]),static_cast<unsigned long>(x.xf[0x1051]),
+                    static_cast<unsigned long>(x.matrixIndex[0]),static_cast<unsigned long>(first.present),unsigned(first.normalCount),unsigned(fog.enabled),fog.function,
+                    unsigned(colorPlan.lit),unsigned(colorPlan.required),unsigned(colorPlan.channels[0].mask),unsigned(count));}
+        }
+#endif
+        rigidTriangleFog=rigidGpu&&triangleFog;
     }
     // Native multi-texture GPU path: 1-3 texgen coordinates on the PICA.
     // Includes orthographic 2D draws when unlit (vertex/material color only).
     if(!rigidGpu&&!exactI4Pending&&!carrier&&!signedQDiagnostic&&context.allowRigidGpu&&!raster.alphaUnion&&!raster.alphaInterval.enabled&&
-       !triangleFog&&!(fog.enabled&&fogPrimaryRed)&&!expanded&&(!raster.clipDisabled||!orthographicDraw)&&!indirect.enabled&&
-       originalTextureCount<=3&&!rigidProjected&&!material.projectiveTexture0&&(!orthographicDraw||!colorPlan.lit)){
+       (!triangleFog||rigidFogCandidate)&&!expanded&&(!raster.clipDisabled||!orthographicDraw)&&!indirect.enabled&&
+       originalTextureCount<=3&&(!material.projectiveTexture0||(context.allowMultiProjected&&!orthographicDraw))&&(!orthographicDraw||!colorPlan.lit)){
         gx::DecodedVertex first;
-        const int fogUnit=fog.enabled&&!fogPrimaryAlpha&&!fogPrimaryRed?int(originalTextureCount):-1;
-        if(draw.vertex(0,first))rigidGpu=gx::planRigidMultiVertex(draw.registers,first,transform,colorPlan,fog,fogPrimaryAlpha,
-            gx::currentTargetExtent.logicalWidth,material,originalTextureCount,scales,fogUnit,rigid);
+        const int fogUnit=!triangleFog&&fog.enabled&&!fogPrimaryAlpha&&!fogPrimaryRed?int(originalTextureCount):-1;
+        if(draw.vertex(0,first))rigidGpu=gx::planRigidMultiVertex(draw.registers,first,transform,colorPlan,triangleFog?noFog:fog,fogPrimaryAlpha,
+            gx::currentTargetExtent.logicalWidth,material,originalTextureCount,scales,fogUnit,rigid,context.allowMultiProjected);
+        if(rigidGpu&&fogRedCarrier)rigid.uniforms[12][2]=2;
+        rigidTriangleFog=rigidGpu&&triangleFog;
+        if(triangleFog&&!rigidGpu)++rigidTriangleFogGate[7];
+    }else if(triangleFog&&!rigidGpu){
+        // Diagnostic: first gate that kept a triangle-fog draw on the CPU.
+        ++rigidTriangleFogGate[(rigidTriangleFogSuppressed||!rigidTriangleFogEnabled)?0:!picaRigidTriangleFogAvailable()?1:fog.function!=2?2:
+            (fog.orthographic||fog.a<0||fog.b<=1||orthographicDraw)?3:material.projectiveTexture0?4:
+            originalTextureCount>3?5:6];
         // Native clip-disabled draws: the shader clamps depth instead of the
         // CPU transforming and re-clipping every vertex.
-        if(rigidGpu&&raster.clipDisabled){rigid.uniforms[80][3]=1;++clipDisabledGpuDraws;}
+        if(rigidGpu&&raster.clipDisabled){gx::setMultiDepthClamp(rigid);++clipDisabledGpuDraws;}
     }
     if(!rigidGpu&&!orthographicDraw){gateCounted=true;
         // Diagnostic: first gate that kept a perspective draw off the GPU paths.
         const unsigned why=exactI4Pending?1:carrier?2:signedQDiagnostic?3:!context.allowRigidGpu?4:(raster.alphaUnion||raster.alphaInterval.enabled)?5:
-            triangleFog?6:(fog.enabled&&fogPrimaryRed)?7:expanded?8:indirect.enabled?9:originalTextureCount>3?10:rigidProjected?11:
-            material.projectiveTexture0?12:13;
+            triangleFog?6:expanded?8:indirect.enabled?9:originalTextureCount>3?10:rigidProjected?11:
+            material.projectiveTexture0?12:raster.clipDisabled?7:13;
         ++gxPerspCpuGate[why];gxPerspCpuGateVertices[why]+=count;
     }
     if(rigidGpu&&rigid.indexedMatrices){
@@ -836,7 +1217,7 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
         // only matrices actually used by this draw; larger palettes fall back.
         bool placed=true;
         for(unsigned i=0;i<count;++i)if(!gx::addRigidMatrix(draw.registers,draw.vertices[i*stride],rigid)){placed=false;break;}
-        if(!placed&&!rigidProjected){
+        if(!placed&&!rigid.projectedTexture){
             gx::restartCompactPalette(rigid);placed=true;
             for(unsigned i=0;i<count;++i)if(!gx::addRigidMatrix(draw.registers,draw.vertices[i*stride],rigid)){placed=false;break;}
         }
@@ -855,9 +1236,10 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
     static const auto reserveIndex=registerGxNamedProfile("draw.reserve");GxNamedProfileSpan reserveSpan(reserveIndex);
     gx::GpuGeometryBatch reservation;
     const auto pairedCount=(outputCount+3)&~std::size_t(3);
-    if(!reserveGxGeometry(triangleFog?pairedCount*2:outputCount,indexCount,reservation))return fail(gxGeometryFailure(),DrawFailureKind::geometry);
+    const bool cpuTriangleFog=triangleFog&&!rigidTriangleFog;
+    if(!reserveGxGeometry(cpuTriangleFog?pairedCount*2:outputCount,indexCount,reservation))return fail(gxGeometryFailure(),DrawFailureKind::geometry);
     reservation.qPolicy=signedQDiagnostic?gx::GeometryQPolicy::directTexture0Diagnostic:gx::GeometryQPolicy::positiveOnly;
-    auto batch=reservation;if(triangleFog)batch.vertices=batch.vertices.first(outputCount);
+    auto batch=reservation;if(cpuTriangleFog)batch.vertices=batch.vertices.first(outputCount);
     auto cancel=[&](const char* why,DrawFailureKind kind=DrawFailureKind::protocol){
         if(!cancelGxGeometry(reservation)){
             // A backend can fail after committing/emitting part of the draw.
@@ -962,6 +1344,10 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
             }
             if(unit==0)target.textureQ=q;
             target.texcoord[unit]={uv[0]*scales[unit][0],q-uv[1]*scales[unit][1]};
+            if(unit==0&&material.projectiveTexture0&&!context.allowProjectionMode&&q>0&&q!=1){
+                // No projection mode: the divide happens here, per vertex.
+                target.texcoord[0]={uv[0]*scales[0][0]/q,1-uv[1]*scales[0][1]/q};target.textureQ=1;
+            }
         }
         if(lookupCarrier){
             target.texcoord[originalTextureCount]=dusk::pica::colorLookupUv(secondColor[0],secondColor[1]);
@@ -1081,6 +1467,11 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
             return !transformOne(index,unused,false,&invalid);
         };
         unsigned survivor=unsigned(count);
+        // Degraded draws: a visible triangle with a nonpositive divisor keeps
+        // its geometry; its affected vertices get a tiny positive divisor below.
+        const bool degradeDivisor=!indirect.enabled&&!signedQDiagnostic&&material.projectiveTexture0&&
+            allowsFallback(DrawVisualFallback::projectiveDivisor);
+        bool degraded=false;
         for(unsigned i=0;i<batch.indices.size();i+=3){
             const auto& a=batch.vertices[batch.indices[i]];
             const auto& b=batch.vertices[batch.indices[i+1]];
@@ -1093,6 +1484,7 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
             if(!invalid){survivor=batch.indices[i];continue;}
             const unsigned maskA=gx::picaClipSideMask(a.position),maskB=gx::picaClipSideMask(b.position),maskC=gx::picaClipSideMask(c.position);
             if(!(maskA&maskB&maskC)&&!gx::picaTriangleOutsideSides(a.position,b.position,c.position)){
+                if(degradeDivisor){degraded=true;if(survivor==count)survivor=batch.indices[i];continue;}
 #if defined(__3DS__)
                 OSReport("Native projected clip refused: triangle=%u indices=%u,%u,%u q=%.9g,%.9g,%.9g side-masks=%x,%x,%x\n",
                     i/3,unsigned(batch.indices[i]),unsigned(batch.indices[i+1]),unsigned(batch.indices[i+2]),
@@ -1118,6 +1510,17 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
         for(unsigned i=0;i<batch.indices.size();i+=3)
             if(batch.indices[i]==count)
                 batch.indices[i]=batch.indices[i+1]=batch.indices[i+2]=u16(survivor);
+        if(degraded){
+            // Vertices still referenced by a kept triangle: replace only the
+            // divisor. texcoord0 is {s, q - t}; keep s and t, move q to epsilon.
+            constexpr float epsilon=1.0f/4096;
+            for(unsigned i=0;i<batch.indices.size();++i){
+                auto& vertex=batch.vertices[batch.indices[i]];
+                if(vertex.textureQ>0)continue;
+                vertex.texcoord[0][1]+=epsilon-vertex.textureQ;vertex.textureQ=epsilon;
+            }
+            simplified[unsigned(DrawVisualFallback::projectiveDivisor)]=true;
+        }
         for(unsigned i=0;i<count;++i){bool invalid;
             if(!invalidVertexDivisor(i,invalid))return ProjectiveClip::unproved;
             if(invalid)batch.vertices[i]=batch.vertices[survivor];
@@ -1126,7 +1529,11 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
     };
     reserveSpan.stop();
     {GxProfileScope vertexProfile(GxProfilePart::vertices);
+    // CPU vertex route with a projected texture: per-pixel divide (see
+    // setGxTextureProjection). The rigid routes keep the 2D mode of the bind.
+    auto cpuProjection=[&]{if(material.projectiveTexture0&&originalTextureCount&&context.allowProjectionMode)setGxTextureProjection(true);};
     if(expanded) {
+        cpuProjection();
         const auto& extent=gx::currentTargetExtent;
         for(unsigned q=0;q<quads;++q) {
             gx::GpuVertex a,b;
@@ -1164,6 +1571,11 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
     }else {
         const bool rigidPackingAttempt=rigidGpu;
         bool nativeRigid=false;
+        // Immediate draw record: the planned uniform block, before the decode
+        // folds this draw's fixed-point texture fractions into it.
+        if(immediateSlot&&rigidGpu&&rigid.multiTexture&&!rigid.indexedMatrices&&!rigid.compactPalette&&rigid.matrices==1){
+            immediateSlot->plan=rigid;immediateCaptured=true;
+        }
         if(rigidGpu&&rigid.multiTexture){GxProfileScope section(GxProfilePart::vertexRigid);
             nativeRigid=gx::decodeCompactRigidBatchMT(draw.plan,draw.vertices,draw.arrays,batch.vertices,rigid);
             if(!nativeRigid){rigidGpu=false;++gx::gxRigidPlanRejects[63];} // no float fallback layout for the multi-texture shader
@@ -1185,14 +1597,28 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
                 // compact storage. The signed diagnostic token is CPU-only.
                 if(positive)reservation.qPolicy=batch.qPolicy=gx::GeometryQPolicy::positiveOnly;
             }
-            rigidGpu=positive;if(!positive)++gx::gxRigidPlanRejects[61];
+            // A projector crossing these vertices: degraded draws stay on the
+            // GPU, where the shader clamps the divisor to a small positive value
+            // (border sampling), instead of the per-vertex CPU route.
+            const bool clampDivisor=!positive&&!signedQPositiveRigidAttempt&&(rigid.projectedTexture||rigid.multiProjected)&&
+                allowsFallback(DrawVisualFallback::projectiveDivisor);
+            if(clampDivisor)simplified[unsigned(DrawVisualFallback::projectiveDivisor)]=true;
+            rigidGpu=positive||clampDivisor;if(!rigidGpu)++gx::gxRigidPlanRejects[61];
         }
         if(signedQPositiveRigidAttempt&&!rigidGpu){
             reservation.qPolicy=batch.qPolicy=gx::GeometryQPolicy::directTexture0Diagnostic;
             // The complete CPU loop below resets every GpuVertex, overwriting
             // all speculative raw/compact bytes before scanning/submission.
         }
+        if(rigidTriangleFog&&!rigidGpu){
+            // The reservation has no fog half: translate again without the GPU form.
+            if(!cancelGxGeometry(reservation))return fail("GX geometry cancellation failed",DrawFailureKind::geometry);
+            textureScope.reset();
+            rigidTriangleFogSuppressed=true;const bool restarted=drawGxCommand(draw,ptr);rigidTriangleFogSuppressed=false;
+            return restarted;
+        }
         if(!rigidGpu){GxProfileScope section(GxProfilePart::vertexCpu);
+            cpuProjection();
             bool positionOnly=false;
             if(!colorPlan.required&&!material.textureCount&&!fog.enabled&&!indirect.enabled&&!transform.coordinateMask()){
                 GxProfileScope positionProfile(GxProfilePart::vertexPosition);
@@ -1235,6 +1661,18 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
                     if(clipped==ProjectiveClip::empty){recordProjectiveClip(true);++context.culled;return true;}
                     if(clipped==ProjectiveClip::trimmed)break;
                 }
+                if(!std::strcmp(error,"GX vertex indirect coordinate invalid")&&indirect.enabled&&!vertexIndirectSuppressed&&
+                   !material.projectiveTexture0&&allowsFallback(DrawVisualFallback::indirectDivisor)){
+                    // The warp is undefined at a visible vertex: draw the mesh
+                    // without it. Not when the warped texture is itself
+                    // projected (water that refracts the frame copy): without
+                    // the camera-plane clip its divisor is invalid too and the
+                    // border fallback smears the frame across the surface.
+                    if(!cancelGxGeometry(reservation))return fail("GX geometry cancellation failed",DrawFailureKind::geometry);
+                    textureScope.reset();
+                    vertexIndirectSuppressed=true;const bool restarted=drawGxCommand(draw,ptr);vertexIndirectSuppressed=false;
+                    return restarted;
+                }
                 captureIndirect(i,error);
                 return cancel(error);
             }}
@@ -1242,63 +1680,73 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
     }
     static const auto postIndex=registerGxNamedProfile("draw.post");GxNamedProfileSpan postSpan(postIndex);
     if(cameraCpuClip){
-        namespace cc=gx::camera_clip109;
-        // Single render owner, cold exception only. Fixed scratch is independent
-        // of mesh size; no original or negative-Q vertex may leave CPU scratch.
-        static cc::Scratch scratch;
-        static bool busy=false;
-        if(busy)return cancel("GX camera clipping reentrant",DrawFailureKind::geometry);
-        struct BusyGuard {bool& value;explicit BusyGuard(bool& v):value(v){value=true;}~BusyGuard(){value=false;}} guard(busy);
-        auto clipFailure=[&](const cc::Plan& p){
-            ++context.cameraClipKernelRejected;
-            if(!context.cameraClipFirstError){
-                context.cameraClipFirstError=unsigned(p.error);
-                if(p.failedVertex!=cc::noDetail)context.cameraClipFirstVertex=unsigned(p.failedVertex);
-                if(p.failedTriangle!=cc::noDetail)context.cameraClipFirstTriangle=unsigned(p.failedTriangle);
+        // Clip the triangles against the near plane (z=-w) here: every vertex
+        // that reaches PICA is then in front of the camera with q=w>0, and
+        // PICA clips the other planes as for any draw. A crossing is computed
+        // from the outside vertex towards the inside one, so the two triangles
+        // sharing an edge get the same new vertex. (The interval-arithmetic
+        // kernel in gx_camera_clip.hpp cost 31 ms for one 77-vertex patch.)
+        constexpr std::size_t maxClipVertices=1024,maxClipIndices=4096;
+        static std::array<gx::GpuVertex,maxClipVertices> clipVertices;
+        static std::array<u16,maxClipIndices> clipIndices;
+        static std::array<u16,maxClipVertices> clipRemap;
+        if(count>maxClipVertices)return cancel("GX camera clipping capacity",DrawFailureKind::geometry);
+        std::fill_n(clipRemap.begin(),count,u16(0xffff));
+        std::size_t nv=0,ni=0;bool overflow=false,invalid=false;
+        const auto distance=[](const gx::GpuVertex& v){return v.position[3]+v.position[2];};
+        const auto original=[&](u16 index)->u16{
+            if(clipRemap[index]==0xffff){
+                if(nv>=maxClipVertices){overflow=true;return 0;}
+                if(!(batch.vertices[index].position[3]>0))invalid=true;
+                clipVertices[nv]=batch.vertices[index];clipRemap[index]=u16(nv++);
             }
+            return clipRemap[index];
         };
-        // Scoped gradual-underflow environment must wrap ONLY plan/emit here;
-        // original transforms/lighting/indirect remain in their normal mode.
-        const auto planned=cc::plan({batch.vertices,batch.indices},scratch);
-        if(planned.error!=cc::Error::none){clipFailure(planned);return cancel("GX camera clipping plan rejected");}
-        if(!planned.counts.vertices){
-            if(!cancelGxGeometry(reservation))return fail("GX camera clipping cancellation failed",DrawFailureKind::geometry);
-            ++context.cameraClipCulled;++context.culled;return true;
+        const auto crossing=[&](u16 outsideIndex,u16 insideIndex)->u16{
+            if(nv>=maxClipVertices){overflow=true;return 0;}
+            const auto& o=batch.vertices[outsideIndex];const auto& n=batch.vertices[insideIndex];
+            const float dOut=distance(o),dIn=distance(n),t=dOut/(dOut-dIn);
+            auto& v=clipVertices[nv];
+            for(unsigned k=0;k<4;++k){
+                v.position[k]=o.position[k]+t*(n.position[k]-o.position[k]);
+                v.color[k]=std::clamp(o.color[k]+t*(n.color[k]-o.color[k]),0.f,1.f);
+            }
+            for(unsigned unit=0;unit<3;++unit)for(unsigned k=0;k<2;++k)
+                v.texcoord[unit][k]=o.texcoord[unit][k]+t*(n.texcoord[unit][k]-o.texcoord[unit][k]);
+            v.textureQ=v.position[3]; // q equals w on every original vertex (proved above)
+            if(!(v.position[3]>0))invalid=true;
+            return u16(nv++);
+        };
+        for(std::size_t at=0;at+2<indexCount&&!overflow;at+=3){
+            const u16 corner[3]{batch.indices[at],batch.indices[at+1],batch.indices[at+2]};
+            if(corner[0]>=count||corner[1]>=count||corner[2]>=count){invalid=true;break;}
+            bool inside[3];unsigned insideCount=0;
+            for(unsigned k=0;k<3;++k){inside[k]=distance(batch.vertices[corner[k]])>=0;insideCount+=inside[k];}
+            if(!insideCount)continue;
+            u16 polygon[4];unsigned corners=0;
+            for(unsigned k=0;k<3;++k){
+                const unsigned next=(k+1)%3;
+                if(inside[k])polygon[corners++]=original(corner[k]);
+                if(inside[k]!=inside[next])polygon[corners++]=inside[k]?crossing(corner[next],corner[k]):crossing(corner[k],corner[next]);
+            }
+            if(ni+3*(corners-2)>maxClipIndices){overflow=true;break;}
+            for(unsigned k=1;k+1<corners;++k){clipIndices[ni++]=polygon[0];clipIndices[ni++]=polygon[k];clipIndices[ni++]=polygon[k+1];}
         }
-        const auto nv=planned.counts.vertices,ni=planned.counts.indices;
-        if(nv>cc::maxVertices-count||ni>cc::maxIndices-indexCount||
-           (((nv+count)*sizeof(gx::GpuVertex)+15)&~std::size_t(15))+(ni+indexCount)*sizeof(u16)>512*1024)
-            return cancel("GX camera clipping combined capacity",DrawFailureKind::geometry);
-        // reserve() can complete/reclaim the entire old arena. Never retain or
-        // read original prepared spans after cancel: rebuild into a disjoint tail.
+        if(overflow)return cancel("GX camera clipping capacity",DrawFailureKind::geometry);
+        if(invalid){++context.cameraClipKernelRejected;return cancel("GX camera clipping plan rejected");}
+        // reserve() can reclaim the old arena: the clipped mesh waits in the
+        // scratch above while the reservation is replaced by one of its size.
         if(!cancelGxGeometry(reservation))return fail("GX camera clipping cancellation failed",DrawFailureKind::geometry);
+        if(!ni){++context.cameraClipCulled;++context.culled;return true;}
         reservation={};batch={};
-        if(!reserveGxGeometry(nv+count,ni+indexCount,reservation))return fail(gxGeometryFailure(),DrawFailureKind::geometry);
+        if(!reserveGxGeometry(nv,ni,reservation))return fail(gxGeometryFailure(),DrawFailureKind::geometry);
         reservation.qPolicy=gx::GeometryQPolicy::positiveOnly;
         if(aliases(std::as_bytes(draw.vertices))||aliases(std::as_bytes(draw.indices))||
            aliases(std::as_bytes(std::span(&draw.registers,1)))||aliases(std::as_bytes(std::span(&draw.plan,1)))||
            aliases(std::as_bytes(std::span(&draw.arrays,1))))return cancel("GX command input aliases GPU reservation");
         for(const auto& array:draw.arrays)if(aliases(std::as_bytes(array.bytes)))return cancel("GX command input aliases GPU reservation");
-        auto originals=reservation.vertices.subspan(nv,count);
-        auto originalIndices=reservation.indices.subspan(ni,indexCount);
-        if(draw.indexCount)std::memcpy(originalIndices.data(),draw.indices.data(),indexCount*sizeof(u16));
-        else{
-            std::size_t at=0;
-            if(!aurora::gx::dl::expand_triangles(draw.primitive,count,[&](u16 a,u16 b,u16 c){originalIndices[at++]=a;originalIndices[at++]=b;originalIndices[at++]=c;}))
-                return cancel("GX camera clipping triangulation failed");
-        }
-        for(unsigned i=0;i<count;++i)if(const char* error=transformOne(i,originals[i]))return cancel(error);
-        const cc::Input prepared{originals,originalIndices};
-        const auto rebuilt=cc::plan(prepared,scratch);
-        if(rebuilt.error!=cc::Error::none||rebuilt.counts!=planned.counts||rebuilt.digest!=planned.digest){
-            auto failed=rebuilt;if(failed.error==cc::Error::none)failed.error=cc::Error::changed;
-            clipFailure(failed);return cancel("GX camera clipping rebuilt input differs");
-        }
-        const auto emitted=cc::emit(prepared,rebuilt,scratch,reservation.vertices.first(nv),reservation.indices.first(ni));
-        if(emitted.error!=cc::Error::none){auto failed=rebuilt;failed.error=emitted.error;clipFailure(failed);return cancel("GX camera clipping emission rejected");}
-        // End all scratch-tail views before index relocation overwrites them.
-        originals={};originalIndices={};
-        if(!shrinkGxGeometry(reservation,nv,ni))return cancel(gxGeometryFailure(),DrawFailureKind::geometry);
+        std::copy_n(clipVertices.begin(),nv,reservation.vertices.begin());
+        std::copy_n(clipIndices.begin(),ni,reservation.indices.begin());
         batch=reservation;
         if(!gx::validateGpuGeometry(batch))return cancel("GX camera clipping strict output invalid");
         context.cameraClipOriginalVertices+=count;
@@ -1309,6 +1757,15 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
     if(!rigidGpu)context.cpuVertexReasons[cpuReason]+=count;
     if(!rigidGpu&&!orthographicDraw){++gxPerspCpuGate[gateCounted?15:14];gxPerspCpuGateVertices[gateCounted?15:14]+=count;}
     drawClass.cls=rigidGpu?(gx::staticGeometryHint.generation?0:1):(draw.registers.xfValid[0x1026]&&draw.registers.xf[0x1026]==1?2:3);
+    if(gxSparseVertexProfiling&&orthographicDraw){
+        // Diagnostics: how many 2D draws carry only zero vertex alpha (hidden
+        // panes drawn anyway) and how many use the standard alpha blend.
+        ++native2dDraws;
+        bool zero=count>0;gx::DecodedVertex vertex;
+        for(unsigned i=0;i<count&&zero;++i)zero=draw.vertex(i,vertex)&&(vertex.present&(1u<<GX_VA_CLR0))&&vertex.color[0][3]==0;
+        if(zero)++native2dZeroAlpha;
+        if(raster.blend.mode==1&&raster.blend.src==4&&raster.blend.dst==5)++native2dAlphaBlend;
+    }
     bool positiveQDepthFallback=false;
     bool depthlessOrthoNormalized=false;
     // GX disabled depth clipping must not lose an orthographic silhouette to
@@ -1406,7 +1863,30 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
         }
     }
     postSpan.stop();
-    if(triangleFog){
+    if(rigidTriangleFog){
+        if(rigid.staticVertices&&batch.vertices.size()>3){
+            if(!shrinkGxGeometry(batch,3,batch.indices.size(),true))return cancel(gxGeometryFailure(),DrawFailureKind::geometry);
+            reservation=batch;
+        }
+        // Same uniform block with the fog rows of a primary-alpha fog plan.
+        gx::RigidVertexPlan fogRigid=rigid;
+        {auto& u=fogRigid.uniforms;
+         u[11][0]=float(fog.a);u[11][1]=float(fog.b);u[11][2]=float(fog.c);
+         u[12][0]=1;u[12][1]=float(fog.rangeEnabled);u[12][2]=1;
+         if(fog.rangeEnabled){
+            const unsigned logicalWidth=gx::currentTargetExtent.logicalWidth;
+            u[13][0]=float(-double(logicalWidth)/fog.viewportWidth);u[13][1]=float((logicalWidth-2*fog.rangeCenter)/fog.viewportWidth);
+            for(unsigned i=0;i<5;++i){u[14+i][0]=float(fog.rangeK[2*i]);u[14+i][1]=float(fog.rangeK[2*i+1]);u[14+i][2]=float(fog.rangeK[std::min(2*i+2,9u)]);}
+         }
+         for(unsigned row=11;row<19;++row)for(float value:u[row])if(!std::isfinite(value)||std::abs(value)>1e8f)return cancel("GX rigid fog uniforms invalid");}
+        gx::PicaMaterialPlan fogConstant=fogMaterial;
+        fogConstant.stages[0].constant=fog.color;
+        fogConstant.stages[0].rgb.inputs[0]={gx::MaterialSource::constant,gx::MaterialOperand::color,false};
+        if(!submitGxRigidFogGeometry(raster,material,fogRaster,fogConstant,batch,rigid,fogRigid))return cancel(gxPicaFailure(),DrawFailureKind::submission);
+        gxProfileTotals.rigidVertices+=count;if(rigid.compact)gxProfileTotals.compactVertices+=count;
+        ++context.triangleFogDraws;++rigidTriangleFogDraws;
+    }
+    else if(triangleFog){
         for(unsigned i=outputCount;i<pairedCount;++i)reservation.vertices[i]=batch.vertices[0];
         for(unsigned i=0;i<pairedCount;++i){auto& vertex=reservation.vertices[pairedCount+i];vertex={};
             vertex.position=reservation.vertices[i].position;
@@ -1422,22 +1902,41 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
             if(!shrinkGxGeometry(batch,3,batch.indices.size(),true))return cancel(gxGeometryFailure(),DrawFailureKind::geometry);
             reservation=batch;
         }
-        if(!submitGxRigidGeometry(raster,material,batch,rigid))return cancel(gxPicaFailure(),DrawFailureKind::submission);gxProfileTotals.rigidVertices+=count;if(rigid.compact)gxProfileTotals.compactVertices+=count;
+        if(!submitGxRigidGeometry(raster,material,batch,rigid))return cancel(gxPicaFailure(),DrawFailureKind::submission);
+        gxProfileTotals.rigidVertices+=count;if(rigid.compact)gxProfileTotals.compactVertices+=count;
         bool anyFallback=false;for(bool v:simplified)anyFallback|=v;
+        if(immediateCaptured&&rigid.multiTexture&&rigid.compact&&!rigid.staticVertices&&!colorPlan.lit&&!fog.enabled&&!anyFallback&&
+           !carrier&&!exactI4Pending&&!indirect.enabled&&!originalMaterial.indirectCount&&!signedQDiagnostic&&!cameraCpuClip&&
+           !cameraAlignedProved&&!depthlessOrthoNormalized&&!positiveQDepthFallback&&!fogSubstituted&&!constantEarlyDepth&&
+           material.textureCount==originalTextureCount&&!material.projectiveTexture0){
+            auto& rec=*immediateSlot;
+            rec.keyA=immediateKey.a;rec.keyB=immediateKey.b;rec.extra=immediateExtraKey;rec.extent=gx::currentTargetExtent;
+            rec.raster=raster;rec.material=material;rec.scales=scales;rec.textureCount=std::uint8_t(originalTextureCount);
+            rec.used=true;++immediateStores;
+        }
         // Native shape record (direct J3D draw on later frames).
-        if(gx::staticGeometryHint.generation&&gx::staticGeometryHint.list&&gx::staticGeometryHint.batch==1&&
-           rigid.compact&&rigid.staticVertices&&!rigidProjected&&!carrier&&!exactI4Pending&&!anyFallback&&!indirect.enabled&&
-           !originalMaterial.indirectCount&&!signedQDiagnostic&&!cameraCpuClip&&!cameraAlignedProved&&!depthlessOrthoNormalized&&
-           !positiveQDepthFallback&&!raster.clipDisabled&&!fogSubstituted&&!expanded&&draw.indexCount==batch.indices.size()){
+        const bool staticList=gx::staticGeometryHint.generation&&gx::staticGeometryHint.list;
+        const unsigned listBatch=gx::staticGeometryHint.batch;
+        // Topology must be the complete, view-independent expansion of the
+        // list (pre-indexed by the batcher or expanded here from strips, fans
+        // and quads); points and lines are widened per frame.
+        const unsigned refusal=!staticList?0:listBatch<1||listBatch>nativeMaxBatches?1:!rigid.compact?2:!rigid.staticVertices?3:
+            (carrier||exactI4Pending||anyFallback)?5:(indirect.enabled||originalMaterial.indirectCount)?6:
+            (signedQDiagnostic||cameraCpuClip||cameraAlignedProved||depthlessOrthoNormalized||positiveQDepthFallback)?7:
+            raster.clipDisabled?8:fogSubstituted?9:(expanded||batch.indices.size()!=indexCount)?10:0;
+        if(staticList&&refusal)++nativeRecordOutcome[refusal];
+        if(staticList&&!refusal){
             auto* cache=gx::staticCompactCache();
-            const auto key=nativeStateKey(draw.registers,gx::staticGeometryHint.generation,gx::staticGeometryHint.list);
-            auto& rec=nativeClaim(gx::staticGeometryHint.list,key);
+            std::array<std::uint32_t,6> keyParts;
+            const auto key=nativeStateKey(draw.registers,gx::staticGeometryHint.generation,gx::staticGeometryHint.list,&keyParts);
+            auto& rec=nativeClaim(gx::staticGeometryHint.list,key,listBatch);
+            bool recorded=false;
             if(cache&&cache->resident()){
-                // Reuse persistent indices recorded for this list (any instance).
+                // Reuse persistent indices recorded for this batch (any instance).
                 const std::uint16_t* reuse=nullptr;
-                {const unsigned home=nativeHome(gx::staticGeometryHint.list);
+                {const unsigned home=nativeHome(gx::staticGeometryHint.list,listBatch);
                  for(unsigned n=0;n<nativeShapeProbe&&!reuse;++n){const auto& other=nativeShapes[(home+n)%nativeShapeCapacity];
-                    if(other.list==gx::staticGeometryHint.list&&other.indices&&other.indexCount==batch.indices.size()&&other.indexEpoch==residentIndexEpoch()&&
+                    if(other.list==gx::staticGeometryHint.list&&other.batch==listBatch&&other.indices&&other.indexCount==batch.indices.size()&&other.indexEpoch==residentIndexEpoch()&&
                        !std::memcmp(other.indices,batch.indices.data(),batch.indices.size()*sizeof(u16)))reuse=other.indices;}}
                 const auto* indices=reuse?reuse:allocateResidentIndices(batch.indices.data(),unsigned(batch.indices.size()));
                 gx::DecodedVertex first;
@@ -1454,9 +1953,27 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
                     rec.vertices=rigid.staticVertices;rec.indices=indices;rec.indexCount=unsigned(batch.indices.size());rec.vertexCount=count;
                     rec.originalTextureCount=std::uint8_t(originalTextureCount);rec.multiTexture=rigid.multiTexture;
                     rec.fogEnabled=fog.enabled;rec.fogPrimaryAlpha=fogPrimaryAlpha;rec.fogPrimaryRed=fogPrimaryRed;
-                    rec.valid=true;nativeContext=&context;++nativeRecords;
+                    rec.dynamic=nativeDynamic(draw.registers);rec.constantEarlyDepth=constantEarlyDepth;rec.parts=keyParts;
+                    rec.batch=std::uint8_t(listBatch);rec.batchCount=0;rec.pending=true;rec.rigidProjected=rigid.projectedTexture||rigid.multiProjected;
+                    rec.origin=rigid.origin;
+                    if(rec.rigidProjected&&count){
+                        bool finite=true;
+                        for(unsigned i=0;i<count;++i){
+                            gx::CompactRigidVertex v;std::memcpy(&v,rigid.staticVertices+i*sizeof(v),sizeof(v));
+                            for(unsigned c=0;c<3;++c){
+                                finite&=std::isfinite(v.position[c]);
+                                if(!i||v.position[c]<rec.boxLow[c])rec.boxLow[c]=v.position[c];
+                                if(!i||v.position[c]>rec.boxHigh[c])rec.boxHigh[c]=v.position[c];
+                            }
+                        }
+                        rec.boxValid=finite;
+                    }
+                    rec.valid=true;nativeContext=&context;++nativeRecords;recorded=true;
+                    if(nativePendingList!=gx::staticGeometryHint.list){nativePendingList=gx::staticGeometryHint.list;nativePendingCount=0;}
+                    ++nativePendingCount;
                 }
             }
+            ++nativeRecordOutcome[recorded?0:11];
         }
         if(preparedArmed&&rigid.compact&&!carrier&&!exactI4Pending&&!anyFallback&&!indirect.enabled&&!originalMaterial.indirectCount&&
            !signedQDiagnostic&&!cameraCpuClip&&!cameraAlignedProved&&!depthlessOrthoNormalized&&!positiveQDepthFallback&&
@@ -1468,7 +1985,10 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
             ++preparedStores;
         }
     }
-    else if(!submitGxCommandGeometry(raster,material,batch))return cancel(gxPicaFailure(),DrawFailureKind::submission);
+    else{
+        if(gx::staticGeometryHint.generation&&gx::staticGeometryHint.list)++nativeRecordOutcome[12];
+        if(!submitGxCommandGeometry(raster,material,batch))return cancel(gxPicaFailure(),DrawFailureKind::submission);
+    }
     if(positiveQDepthFallback){++context.positiveQDepthFallbackDraws;context.positiveQDepthFallbackVertices+=batch.vertices.size();}
     if(exactI4Pending){++context.exactI4Draws;context.exactI4Vertices+=batch.vertices.size();context.exactI4CpuImages=exactI4Cache.count();}
     if(depthlessOrthoNormalized){++context.depthlessOrthoDraws;context.depthlessOrthoVertices+=batch.vertices.size();}
@@ -1481,8 +2001,14 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
     bool anySimplified=false;
     for(unsigned i=0;i<simplified.size();++i)if(simplified[i]){
         ++context.simplifiedByReason[i];anySimplified=true;
-        if(context.reportFailure&&context.simplifiedByReason[i]==1)context.reportFailure(draw,i==unsigned(DrawVisualFallback::tevMaterial)?
-            "GX visual fallback: simplified TEV material":"GX visual fallback: disabled depth clipping (PICA clipped)");
+        static constexpr const char* names[unsigned(DrawVisualFallback::count)]{
+            "GX visual fallback: simplified TEV material",
+            "GX visual fallback: disabled depth clipping (PICA clipped)",
+            "GX visual fallback: projected texture behind its projector (border sampled)",
+            "GX visual fallback: dual alpha comparison drawn with one test",
+            "GX visual fallback: texture shared by warped and plain stages drawn without the warp",
+            "GX visual fallback: warp coordinate behind its projector (drawn without the warp)"};
+        if(context.reportFailure&&context.simplifiedByReason[i]==1)context.reportFailure(draw,names[i]);
     }
     if(anySimplified)++context.simplifiedDraws;
     if(carrier)++context.rasterCarrierDraws;
@@ -1492,29 +2018,54 @@ bool drawGxCommand(const gx::CommandDraw& draw,void* ptr){
     if(constantEarlyDepth)++context.constantEarlyDepthDraws;
     if(raster.alphaUnion)++context.alphaUnionDraws;
     if(raster.alphaInterval.enabled)++context.alphaIntervalDraws;
+    if(raster.alphaBand)++context.alphaBandDraws;
     gxProfileTotals.vertices+=count;if(carrier?bool(colorPlan.lit||secondColorPlan->lit):colorPlan.needsNormal)gxProfileTotals.litVertices+=count;
     if(fog.enabled)gxProfileTotals.fogVertices+=count;
     return true;
 }
 }
 
-// Direct J3D shape draw; false means "use the normal display-list path".
-extern "C" bool duskNativeDrawRecorded(std::uint32_t generation,const void* list){
-    using namespace dusk::native;
-    auto* cache=gx::staticCompactCache();
-    auto* stream=gx::commandStream();
-    if(!nativeContext||!cache||!stream||!stream->idle()){++nativeMisses;return false;}
-    static const auto index=registerGxNamedProfile("native.shape");GxNamedProfileScope profile(index);
-    const auto& r=stream->registers();
-    static const auto keyIndex=registerGxNamedProfile("native.key");GxNamedProfileSpan keySpan(keyIndex);
-    const auto key=nativeStateKey(r,generation,list);
-    keySpan.stop();
-    auto* found=nativeFind(list,key);
-    if(!found){++nativeKeyMisses;return false;}
-    auto& rec=*found;
-    if(rec.generation!=generation||cache->epoch!=rec.cacheEpoch||rec.indexEpoch!=residentIndexEpoch()){rec.valid=false;++nativeMisses;return false;}
-    auto& context=*nativeContext;
+namespace dusk::native {
+namespace {
+// Replay one recorded batch from the live registers. False: nothing was
+// submitted for this batch.
+bool nativeReplay(NativeShapeRecord& rec,const gx::CommandRegisters& r,CommandDrawContext& context){
     if(rec.raster.scissor.empty||rec.raster.cull==3){++context.culled;++nativeHits;return true;}
+    auto& chain=nativeChain;
+    if(chain.valid&&chain.stateEpoch==r.stateEpoch&&chain.picaSerial==gxPicaStateSerial&&
+       chain.matrixTextures0==(r.matrixIndex[0]>>6)&&chain.matrixTextures1==r.matrixIndex[1]&&
+       rec.dynamic==chain.dynamic&&rec.multiTexture==chain.multiTexture&&rec.fogEnabled==chain.fogEnabled&&
+       rec.fogPrimaryAlpha==chain.fogPrimaryAlpha&&rec.fogPrimaryRed==chain.fogPrimaryRed&&
+       rec.rigidProjected==chain.rigidProjected&&
+       rec.originalTextureCount==chain.originalTextureCount&&rec.first.present==chain.firstPresent&&
+       rec.first.normalCount==chain.firstNormalCount&&
+       !std::memcmp(&chain.extent,&gx::currentTargetExtent,sizeof(chain.extent))&&
+       !std::memcmp(&rec.raster,&chain.raster,sizeof(rec.raster))&&
+       !std::memcmp(&rec.material,&chain.material,sizeof(rec.material))&&
+       !std::memcmp(&rec.colorMaterial,&chain.colorMaterial,sizeof(rec.colorMaterial))){
+        static const auto chainIndex=registerGxNamedProfile("native.chained");GxNamedProfileScope chainScope(chainIndex);
+        gx::RigidVertexPlan rigid=chain.plan;
+        rigid.matrixOffsets.fill(-1);rigid.normalOffsets.fill(-1);rigid.matrices=0;rigid.compactPalette=false;rigid.paletteEnd=0;
+        const unsigned position=rec.first.present&1?rec.first.matrix[0]:r.matrixIndex[0]&63;
+        bool okay=position<=27&&position%3==0&&gx::addRigidMatrix(r,position,rigid);
+        for(unsigned n=0;okay&&n<rec.matrixCount;++n)okay=gx::addRigidMatrix(r,rec.matrixOrder[n]*3u,rigid);
+        if(okay&&rigid.matrixOffsets==rec.matrixOffsets){
+            rigid.decodedNormalScale=rec.normalScale;rigid.decodedTex0Scale=rec.tex0Scale;rigid.decodedTex1Scale=rec.tex1Scale;
+            rigid.origin=rec.origin;
+            if(gx::finishCompactRigidUniforms(rigid,chain.scales[rec.rigidProjected?1:0])&&
+               (rigid.staticVertices=rec.vertices,!rec.rigidProjected||nativeProjectionPositive(rigid,rec))){
+                static const auto chainSubmit=registerGxNamedProfile("native.chained.submit");GxNamedProfileScope chainSubmitScope(chainSubmit);
+                if(!submitNativeRigid(rec.raster,rec.material,rigid,rec.vertices,rec.indices,rec.indexCount,true)){
+                    rec.valid=false;chain.valid=false;return false;
+                }
+                ++context.submitted;++nativeHits;++nativeChained;
+                gxProfileTotals.rigidVertices+=rec.vertexCount;gxProfileTotals.compactVertices+=rec.vertexCount;gxProfileTotals.vertices+=rec.vertexCount;
+                return true;
+            }
+        }
+        // Not expressible as a continuation: take the complete replay below.
+    }
+    chain.valid=false;
     static const auto planIndex=registerGxNamedProfile("native.plans");GxNamedProfileSpan planSpan(planIndex);
     gx::RasterColorPlan colorPlan;
     if(!gx::planRasterColor(r,rec.colorMaterial,colorPlan,nullptr))return false;
@@ -1534,6 +2085,11 @@ extern "C" bool duskNativeDrawRecorded(std::uint32_t generation,const void* list
         if(!gx::planVertexFog(r,fog)||fog.enabled!=rec.fogEnabled)return false;
         if(fog.enabled&&!rec.fogPrimaryAlpha&&!rec.fogPrimaryRed&&!fogRampTexture(textures[rec.originalTextureCount]))return false;
     }else if(rec.fogEnabled)return false;
+    // Animated TEV colours or fog colour: same combiner, new constants.
+    if(const auto dynamic=nativeDynamic(r);dynamic!=rec.dynamic){
+        if(!refreshNativeConstants(rec,r,context,fog,transform.projectiveMask())){++nativeConstantRefusals;return false;}
+        rec.dynamic=dynamic;++nativeConstantRefreshes;
+    }
     std::array<std::array<float,2>,3> scales{};
     static const auto scopeIndex=registerGxNamedProfile("native.tex.scope");GxNamedProfileSpan scopeSpan(scopeIndex);
     GxTextureDrawScope textureScope({textures.data(),rec.material.textureCount});
@@ -1548,20 +2104,103 @@ extern "C" bool duskNativeDrawRecorded(std::uint32_t generation,const void* list
     const int fogUnit=fog.enabled&&!rec.fogPrimaryAlpha&&!rec.fogPrimaryRed?int(rec.originalTextureCount):-1;
     const bool planned=rec.multiTexture?
         gx::planRigidMultiVertex(r,rec.first,transform,colorPlan,fog,rec.fogPrimaryAlpha,gx::currentTargetExtent.logicalWidth,
-                                 rec.material,rec.originalTextureCount,scales,fogUnit,rigid):
-        gx::planRigidVertex(r,rec.first,transform,colorPlan,fog,rec.fogPrimaryAlpha,gx::currentTargetExtent.logicalWidth,rigid,false);
+                                 rec.material,rec.originalTextureCount,scales,fogUnit,rigid,context.allowMultiProjected):
+        (context.allowSingleRigidShader&&gx::planRigidVertex(r,rec.first,transform,colorPlan,fog,rec.fogPrimaryAlpha,gx::currentTargetExtent.logicalWidth,rigid,rec.rigidProjected));
     if(!planned)return false;
+    if(rec.rigidProjected&&!rec.multiTexture)gx::setProjectedScales(rigid,scales[0],scales[1]);
+    if(fog.enabled&&rec.fogPrimaryRed)rigid.uniforms[12][2]=2;
+    if(nativeChainEnabled)chain.plan=rigid; // before this shape's palette and decoded scales
     for(unsigned n=0;n<rec.matrixCount;++n)if(!gx::addRigidMatrix(r,rec.matrixOrder[n]*3u,rigid))return false;
     if(rigid.matrixOffsets!=rec.matrixOffsets)return false;
     rigid.decodedNormalScale=rec.normalScale;rigid.decodedTex0Scale=rec.tex0Scale;rigid.decodedTex1Scale=rec.tex1Scale;
-    if(!gx::finishCompactRigidUniforms(rigid,scales[0]))return false;
+    rigid.origin=rec.origin;
+    if(!gx::finishCompactRigidUniforms(rigid,scales[rec.rigidProjected?1:0]))return false;
     rigid.staticVertices=rec.vertices;
+    // The projector may now cross these vertices: the complete path then
+    // takes its CPU route for this frame.
+    if(rec.rigidProjected&&!nativeProjectionPositive(rigid,rec))return false;
     rigidSpan.stop();
     static const auto submitIndex=registerGxNamedProfile("native.submit");GxNamedProfileScope submitScope(submitIndex);
     if(!submitNativeRigid(rec.raster,rec.material,rigid,rec.vertices,rec.indices,rec.indexCount)){
         rec.valid=false;return false;
     }
+    if(nativeChainEnabled){
+        // The epoch does not cover position-matrix memory: a texgen that reads
+        // its matrix from those slots cannot be continued.
+        bool continuable=true;
+        for(unsigned unit=0;unit<rec.originalTextureCount&&continuable;++unit){
+            const unsigned c=rec.material.textures[unit].coordinate;
+            const unsigned m=c<4?(r.matrixIndex[0]>>(6+6*c))&63:c<8?(r.matrixIndex[1]>>(6*(c-4)))&63:0;
+            continuable=c<8&&m>=30;
+        }
+        if(continuable){
+            chain.stateEpoch=r.stateEpoch;chain.picaSerial=gxPicaStateSerial;
+            chain.matrixTextures0=r.matrixIndex[0]>>6;chain.matrixTextures1=r.matrixIndex[1];chain.dynamic=rec.dynamic;
+            chain.extent=gx::currentTargetExtent;chain.raster=rec.raster;chain.material=rec.material;chain.colorMaterial=rec.colorMaterial;
+            chain.firstPresent=rec.first.present;chain.firstNormalCount=rec.first.normalCount;chain.originalTextureCount=rec.originalTextureCount;
+            chain.multiTexture=rec.multiTexture;chain.fogEnabled=rec.fogEnabled;chain.fogPrimaryAlpha=rec.fogPrimaryAlpha;chain.fogPrimaryRed=rec.fogPrimaryRed;
+            chain.rigidProjected=rec.rigidProjected;
+            chain.scales=scales;chain.valid=true;
+        }
+    }
     ++context.submitted;++nativeHits;
     gxProfileTotals.rigidVertices+=rec.vertexCount;gxProfileTotals.compactVertices+=rec.vertexCount;gxProfileTotals.vertices+=rec.vertexCount;
+    return true;
+}
+}
+}
+// Direct J3D shape draw; false means "use the normal display-list path".
+extern "C" bool duskNativeDrawRecorded(std::uint32_t generation,const void* list){
+    using namespace dusk::native;
+    auto* cache=gx::staticCompactCache();
+    auto* stream=gx::commandStream();
+    if(!nativeContext||!cache||!stream||!stream->idle()){++nativeMisses;return false;}
+    static const auto index=registerGxNamedProfile("native.shape");GxNamedProfileScope profile(index);
+    const auto& r=stream->registers();
+    static const auto keyIndex=registerGxNamedProfile("native.key");GxNamedProfileSpan keySpan(keyIndex);
+    std::array<std::uint32_t,6> keyParts;
+    const auto key=nativeStateKey(r,generation,list,gxSparseVertexProfiling?&keyParts:nullptr);
+    keySpan.stop();
+    // Every batch of the list must be recorded for this state before anything
+    // is submitted: a list is replayed completely or not at all.
+    std::array<NativeShapeRecord*,nativeMaxBatches> records{};
+    auto* found=nativeFind(list,key,1);
+    unsigned batches=found?found->batchCount:0;
+    for(unsigned batch=2;batch<=batches;++batch){
+        records[batch-1]=nativeFind(list,key,batch);
+        if(!records[batch-1]||records[batch-1]->batchCount!=batches){batches=0;break;}
+    }
+    if(!batches||batches>nativeMaxBatches){
+        ++nativeKeyMisses;
+        if(gxSparseVertexProfiling){
+            // Which component differs from the closest record of this list?
+            const unsigned home=nativeHome(list,1);int best=-1;unsigned bestEqual=0;
+            for(unsigned n=0;n<nativeShapeProbe;++n){const auto& other=nativeShapes[(home+n)%nativeShapeCapacity];
+                if(!other.valid||other.list!=list||other.batch!=1)continue;
+                unsigned equal=0;for(unsigned c=0;c<6;++c)equal+=other.parts[c]==keyParts[c];
+                if(best<0||equal>bestEqual){best=int((home+n)%nativeShapeCapacity);bestEqual=equal;}}
+            if(best<0)++nativeMissParts[6];
+            else for(unsigned c=0;c<6;++c)if(nativeShapes[best].parts[c]!=keyParts[c])++nativeMissParts[c];
+        }
+        return false;
+    }
+    records[0]=found;
+    for(unsigned n=0;n<batches;++n){
+        const auto& rec=*records[n];
+        if(rec.generation!=generation||cache->epoch!=rec.cacheEpoch||rec.indexEpoch!=residentIndexEpoch()){
+            for(unsigned m=0;m<batches;++m)records[m]->valid=false;
+            ++nativeMisses;return false;
+        }
+    }
+    auto& context=*nativeContext;
+    for(unsigned n=0;n<batches;++n){
+        if(nativeReplay(*records[n],r,context))continue;
+        // Nothing submitted yet: the normal path draws the whole list. After a
+        // partial replay the list must not be drawn twice; drop its records
+        // and let the next frame take the normal path.
+        for(unsigned m=0;m<batches;++m)records[m]->valid=false;
+        ++nativeMisses;
+        return n!=0;
+    }
     return true;
 }

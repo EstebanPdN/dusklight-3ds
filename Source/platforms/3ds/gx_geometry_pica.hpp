@@ -18,18 +18,28 @@ bool endGxGeometryFrame();
 // CPU reservations are excluded until commit; successful flushes alone advance
 // the watermark. No draw reads the arena before this publication boundary.
 bool flushGxGeometry();
+bool flushPendingGxGeometry();
+// Console A/B switch: publish arena bytes with the kernel cache flush instead
+// of a GSP request (same range, no IPC round trip). Off until hardware confirms it.
+void setGxGeometryKernelFlush(bool enabled);
 bool reserveGxGeometry(std::size_t vertices,std::size_t indices,gx::GpuGeometryBatch&);
+// Forget the attribute layout recorded for resident draws (other code is
+// about to use, or may have used, the Citro3D attribute state).
+void invalidateGxGeometryBindings();
 bool cancelGxGeometry(const gx::GpuGeometryBatch&);
 // Pending CPU-only layout change; never flushes, commits or waits.
 bool shrinkGxGeometry(gx::GpuGeometryBatch&,std::size_t vertices,std::size_t indices,bool externalVertices=false);
 // Caller binds shader, transform uniform, raster/material/texture state first.
 // The shared GX shader consumes position4/color4/three independent UV2 streams.
 // Success invalidates mutable batch access. No per-draw allocation or CPU copy.
-bool submitGxGeometry(const gx::GpuGeometryBatch&);
+// clipSpace: the positions are clip coordinates (the hardware clip guard
+// applies); false for layouts a rigid shader transforms on the GPU.
+bool submitGxGeometry(const gx::GpuGeometryBatch&,bool clipSpace=true);
 // Two equal-size vertex halves share indices. The callback sets material/fog
 // state per triangle, without changing attribute/buffer bindings or geometry.
 // All bytes commit before any callback can flush the queue.
 bool submitGxTrianglePairs(const gx::GpuGeometryBatch&,bool (*beforePass)(bool fog,void*),void*);
+bool submitGxMeshPair(const gx::GpuGeometryBatch&,bool (*beforePass)(bool fog,void*),void*);
 // Same immutable vertices for both disjoint alpha tests, interleaved per
 // triangle to retain blending/depth order. Callback may only change draw state.
 bool submitGxTriangleAlphaPairs(const gx::GpuGeometryBatch&,bool (*beforePass)(bool second,void*),void*);
@@ -37,6 +47,7 @@ bool submitGxTriangleAlphaPairs(const gx::GpuGeometryBatch&,bool (*beforePass)(b
 // All address/geometry checks precede commit. Failure after commit is fatal.
 bool submitGxTriangleAlphaInterval(const gx::GpuGeometryBatch&,bool (*beforePass)(gx::AlphaIntervalPass,void*),void*);
 bool submitGxCompactRigidGeometry(const gx::GpuGeometryBatch&,const void* resident=nullptr,bool multiTexture=false);
+void redrawGxGeometry(const gx::GpuGeometryBatch&);
 // Native engine resident draws: persistent vertices/indices, no frame arena.
 bool drawResidentRigid(const void* vertices,const std::uint16_t* indices,unsigned indexCount,bool multiTexture);
 std::uint16_t* allocateResidentIndices(const std::uint16_t* source,unsigned count);

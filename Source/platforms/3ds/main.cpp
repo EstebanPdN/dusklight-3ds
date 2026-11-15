@@ -1,3 +1,4 @@
+#include "runtime/durable_file.hpp"
 #include "runtime/copy_lifecycle_probe.hpp"
 #include "gx_geometry_pica.hpp"
 #include "gx_command_probe.hpp"
@@ -7,6 +8,7 @@
 #endif
 #include <3ds.h>
 #include <citro3d.h>
+#include "runtime/ctru_abi.hpp"
 #include "diagnostics.hpp"
 #include "runtime/bootstrap.hpp"
 #include "runtime/cache_maintenance_profile.hpp"
@@ -36,7 +38,10 @@ extern "C" {
 #ifdef DUSK_GAME_STARTUP
 u32 __stacksize__ = 256 * 1024;
 u32 __ctru_heap_size = 80 * 1024 * 1024;
-u32 __ctru_linear_heap_size = 16 * 1024 * 1024;
+// 20 MiB linear (was 16): the texture cache needs ~10 MiB at the title on top
+// of geometry, captures and readbacks. The application region still had
+// ~9.5 MiB free with the old split (measured in a full dump).
+u32 __ctru_linear_heap_size = 20 * 1024 * 1024;
 #else
 u32 __ctru_heap_size = 24 * 1024 * 1024;
 u32 __ctru_linear_heap_size = 8 * 1024 * 1024;
@@ -138,7 +143,10 @@ namespace dusk::native {
 // the system FS module fault on hardware.
 // The ring lives in the linear heap: the executable's static size must stay at
 // the 114 baseline (code+bss+96 MiB heaps fill the New 3DS application region).
-namespace { constexpr std::size_t logRingBytes=128*1024; char* logRing{}; std::size_t logHead{},logFlushed{}; LightLock logLock=1; FILE* sdLog{}; bool sdLogTried{}; }
+namespace { constexpr std::size_t logRingBytes=128*1024; char* logRing{}; std::size_t logHead{},logFlushed{}; LightLock logLock=1; DurableLog sdLog{}; bool sdLogTried{};
+// Each start keeps the logs of the three before it (log-1.txt is the last
+// one): a console that froze and was switched off keeps its evidence.
+void openSdLog(){ if(sdLogTried)return; sdLogTried=true; durableRotate("/3ds/DuskLight/log","txt",3); durableLogOpen(sdLog,"/3ds/DuskLight/log.txt"); } }
 void logText(const char* text) {
     const auto length=__builtin_strlen(text);
     svcOutputDebugString(text, length);
@@ -151,43 +159,98 @@ void logText(const char* text) {
 }
 void flushNativeLog(){
     LightLock_Lock(&logLock);
-    if(!sdLogTried){sdLogTried=true;sdLog=std::fopen("sdmc:/3ds/DuskLight/log.txt","wb");}
+    openSdLog();
     if(logHead-logFlushed>logRingBytes)logFlushed=logHead-logRingBytes;
-    char chunk[1024];
-    while(sdLog&&logRing&&logFlushed<logHead){
+    // Written through the FS service with a flush: it is on the card when
+    // this returns, even if the console has to be switched off next.
+    char chunk[4096];
+    while(sdLog.open&&logRing&&logFlushed<logHead){
         std::size_t n=0;
         while(n<sizeof(chunk)&&logFlushed+n<logHead){chunk[n]=logRing[(logFlushed+n)%logRingBytes];++n;}
-        std::fwrite(chunk,1,n,sdLog);logFlushed+=n;
+        if(!durableLogAppend(sdLog,chunk,n))break;
+        logFlushed+=n;
     }
-    if(sdLog)std::fflush(sdLog);
+    LightLock_Unlock(&logLock);
+}
+std::size_t nativeLogPosition(){return logHead;}
+void writeNativeLogSince(std::size_t mark,std::FILE* file){
+    LightLock_Lock(&logLock);
+    if(logHead-mark>logRingBytes)mark=logHead-logRingBytes;
+    char chunk[1024];
+    while(file&&logRing&&mark<logHead){
+        std::size_t n=0;
+        while(n<sizeof(chunk)&&mark+n<logHead){chunk[n]=logRing[(mark+n)%logRingBytes];++n;}
+        std::fwrite(chunk,1,n,file);mark+=n;
+    }
     LightLock_Unlock(&logLock);
 }
 // ARM11 exception report (data/prefetch abort, undefined instruction).
-void logException(ERRF_ExceptionInfo* info,CpuRegisters* regs){
-    char text[256];
-    std::snprintf(text,sizeof(text),"Native EXCEPTION type=%u far=%08lx fsr=%08lx pc=%08lx lr=%08lx sp=%08lx r0=%08lx r1=%08lx r2=%08lx r3=%08lx thread=%p\n",
-        unsigned(info->type),static_cast<unsigned long>(info->far),static_cast<unsigned long>(info->fsr),
+void logException(ERRF_ExceptionInfo* sdkInfo,CpuRegisters* regs){
+    // The SDK struct has an enum member: read it with the SDK's layout (ctru_abi.hpp).
+    static char text[2048]; // not on the faulting stack
+    std::size_t used=0;
+    auto add=[&](const char* format,auto... values){
+        const int n=std::snprintf(text+used,sizeof(text)-used,format,values...);
+        if(n>0)used=std::min(sizeof(text)-1,used+std::size_t(n));
+    };
+    add("Native EXCEPTION type=%u far=%08lx fsr=%08lx pc=%08lx lr=%08lx sp=%08lx r0=%08lx r1=%08lx r2=%08lx r3=%08lx thread=%p\n",
+        abi::exceptionKind(sdkInfo),static_cast<unsigned long>(abi::exceptionFar(sdkInfo)),static_cast<unsigned long>(abi::exceptionFsr(sdkInfo)),
         static_cast<unsigned long>(regs->pc),static_cast<unsigned long>(regs->lr),static_cast<unsigned long>(regs->sp),
         static_cast<unsigned long>(regs->r[0]),static_cast<unsigned long>(regs->r[1]),static_cast<unsigned long>(regs->r[2]),static_cast<unsigned long>(regs->r[3]),
         static_cast<void*>(threadGetCurrent()));
+    // The rest of the registers and the call chain: every stack word that
+    // points into the program's code is a return-address candidate
+    // (arm-none-eabi-addr2line -f -C -i -e dusklight-native.elf <address>).
+    add("Native EXCEPTION registers r4=%08lx r5=%08lx r6=%08lx r7=%08lx r8=%08lx r9=%08lx r10=%08lx r11=%08lx r12=%08lx cpsr=%08lx\n",
+        static_cast<unsigned long>(regs->r[4]),static_cast<unsigned long>(regs->r[5]),static_cast<unsigned long>(regs->r[6]),
+        static_cast<unsigned long>(regs->r[7]),static_cast<unsigned long>(regs->r[8]),static_cast<unsigned long>(regs->r[9]),
+        static_cast<unsigned long>(regs->r[10]),static_cast<unsigned long>(regs->r[11]),static_cast<unsigned long>(regs->r[12]),
+        static_cast<unsigned long>(regs->cpsr));
+    {MemInfo memory{};PageInfo page{};u32 codeEnd=0x00100000;
+     if(R_SUCCEEDED(svcQueryMemory(&memory,&page,0x00100000)))codeEnd=memory.base_addr+memory.size;
+     const u32 sp=regs->sp&~3u;
+     if(R_SUCCEEDED(svcQueryMemory(&memory,&page,sp))&&(memory.perm&MEMPERM_READ)){
+        const u32 end=memory.base_addr+memory.size;unsigned found=0;
+        add("Native EXCEPTION stack code addresses:");
+        for(u32 at=sp;at+4<=end&&at-sp<0x3000&&found<48;at+=4){
+            const u32 word=*reinterpret_cast<const u32*>(at);
+            if(word>=0x00100000&&word<codeEnd){add(" +%lx=%08lx",static_cast<unsigned long>(at-sp),static_cast<unsigned long>(word));++found;}
+        }
+        add("\n");
+     }}
     svcOutputDebugString(text,__builtin_strlen(text));
     // Best effort, no lock (the faulting thread may hold it): append to ring, write once.
     if(logRing)for(std::size_t n=0;text[n];++n)logRing[(logHead+n)%logRingBytes]=text[n];
     logHead+=__builtin_strlen(text);
-    if(!sdLogTried){sdLogTried=true;sdLog=std::fopen("sdmc:/3ds/DuskLight/log.txt","wb");}
-    if(sdLog&&logRing){
+    openSdLog();
+    if(sdLog.open&&logRing){
         if(logHead-logFlushed>logRingBytes)logFlushed=logHead-logRingBytes;
-        while(logFlushed<logHead){std::fputc(logRing[logFlushed%logRingBytes],sdLog);++logFlushed;}
-        std::fflush(sdLog);
+        char chunk[256];
+        while(logFlushed<logHead){
+            std::size_t n=0;
+            while(n<sizeof(chunk)&&logFlushed+n<logHead){chunk[n]=logRing[(logFlushed+n)%logRingBytes];++n;}
+            if(!durableLogAppend(sdLog,chunk,n))break;
+            logFlushed+=n;
+        }
     }
     svcExitProcess();
 }
 void installExceptionLogger(){threadOnException(logException,RUN_HANDLER_ON_FAULTING_STACK,WRITE_DATA_TO_HANDLER_STACK);}
+namespace { bool fatalUnattended; }
+void setFatalUnattended(bool unattended){fatalUnattended=unattended;}
 [[noreturn]] void fatal(const char* text) {
     logText("Native fatal: ");logText(text);logText("\n");flushNativeLog();
     // A worker thread cannot own the console (the main loop redraws it) and
     // would hang silently: keep the log and terminate the whole process.
     if (threadGetCurrent() != nullptr) { logText("Native fatal on a worker thread: process exit\n"); flushNativeLog(); svcExitProcess(); }
+    if (fatalUnattended && graphicsReady) {
+        std::printf("\x1b[2JNative fatal error\n%.200s\n\nAutomatic test: restarting.\nIf the game does not reopen,\nopen it again: the test resumes.\n", text);
+        gfxFlushBuffers(); svcSleepThread(3000000000LL);
+        // Leave through APT so the system relaunches this title; the kernel
+        // then ends the process with its workers and storage intact.
+        aptSetChainloaderToSelf(); aptExit();
+        svcExitProcess();
+    }
     if (graphicsReady && !platformGpuFailurePending()) {
         std::printf("\x1b[2JNative fatal error\n%.200s\nSTART: exit\n", text);
         while (aptMainLoop()) {
@@ -201,6 +264,22 @@ void installExceptionLogger(){threadOnException(logException,RUN_HANDLER_ON_FAUL
     logText("Native fatal containment: kernel process exit; normal shutdown incomplete\n");
     svcExitProcess();
 }
+// Console GPU guard: the PICA stopped on a draw. The evidence is on the SD;
+// with `restart` the system is asked to start the game again (the guard leaves
+// that draw out), otherwise the message stays until START.
+[[noreturn]] void restartAfterGpuHang(const char* text,bool restart) {
+    logText("Native GPU guard: ");logText(text);logText("\n");flushNativeLog();
+    if (graphicsReady) {
+        // Restarting the title does not reset a stopped PICA (CIA g: the next
+        // start stopped on its first clear), so ask for a power cycle.
+        std::printf("\x1b[2JDuskLight: the GPU stopped.\n%.300s\n\nSaved on the SD card.\n%s\n", text,
+            restart ? "\nHold POWER until the console\nswitches off, switch it on and\nopen DuskLight again: it goes on\nwithout that draw."
+                    : "\nPlease send the /3ds/DuskLight\nfolder. Hold POWER to switch off.");
+        gfxFlushBuffers();
+        for (;;) svcSleepThread(1000000000LL);
+    }
+    svcExitProcess();
+}
 void waitForRetrace() { waitVideoRetrace(); }
 void invalidateCache(void* memory, std::uint32_t size) {
     auto& profile=cacheMaintenanceProfile;
@@ -209,19 +288,29 @@ void invalidateCache(void* memory, std::uint32_t size) {
     // on hardware (Azahar accepts them); the kernel call covers any mapped
     // process memory. A failure is reported once, never fatal: these ranges are
     // CPU data, and every GPU-consumed buffer is maintained by the renderer.
-    if (R_FAILED(svcInvalidateProcessDataCache(CUR_PROCESS_HANDLE, reinterpret_cast<u32>(memory), size))) {
+    // Clean before invalidating: on the GameCube a DMA filled these ranges, here
+    // the CPU did (fread, Yaz0, ARAM copies) and the game's paired DCStoreRange
+    // is no longer forwarded. A plain invalidate discarded those dirty lines on
+    // a New 3DS (archives rejected as malformed, then a crash); Azahar has no
+    // cache, so it never showed. Only loads call this; gameplay frames make 0.
+    if (R_FAILED(svcFlushProcessDataCache(CUR_PROCESS_HANDLE, reinterpret_cast<u32>(memory), size))) {
         static bool reported; if (!reported) { reported = true; logText("Native cache invalidation failed once (ignored)\n"); }
     }
     if(profile.active){profile.invalidateTicks+=svcGetSystemTick()-start;profile.invalidateBytes+=size;++profile.invalidateCalls;}
 }
+static bool gameCacheFlush; // SD switch game-cache-flush.txt: the previous behaviour, for a console A/B.
 void flushCache(void* memory, std::uint32_t size) {
+    // Game DCFlushRange/DCStoreRange on ordinary process memory (display
+    // lists, deformed vertices, CPU-drawn images). On the GameCube this
+    // published the bytes to the GPU; here the translator reads them on the
+    // CPU, and every buffer the PICA or the DSP consumes is flushed by its
+    // owner (renderer, audio). The kernel call was pure cost: about 100 calls
+    // per frame in a field scene. Only the diagnostic count is kept.
     auto& profile=cacheMaintenanceProfile;
-    const auto start=profile.active?svcGetSystemTick():0;
-    if (R_FAILED(svcFlushProcessDataCache(CUR_PROCESS_HANDLE, reinterpret_cast<u32>(memory), size))) {
-        static bool reported; if (!reported) { reported = true; logText("Native cache flush failed once (ignored)\n"); }
-    }
-    if(profile.active){profile.flushTicks+=svcGetSystemTick()-start;profile.flushBytes+=size;++profile.flushCalls;}
+    if(profile.active){profile.flushBytes+=size;++profile.flushCalls;}
+    if(gameCacheFlush)svcFlushProcessDataCache(CUR_PROCESS_HANDLE, reinterpret_cast<u32>(memory), size);
 }
+void setGameCacheFlush(bool forward) { gameCacheFlush = forward; }
 }
 int main() {
     using namespace dusk::native;

@@ -1,3 +1,4 @@
+#include "runtime/gx_state_serial.hpp"
 #include "runtime/copy_lifecycle_probe.hpp"
 #include "runtime/gx_copy_pixels.hpp"
 #include "runtime/fused_color.hpp"
@@ -5,6 +6,7 @@
 #include "runtime/texture_gx.hpp"
 #include "runtime/gpu_sync.hpp"
 #include "runtime/gx_profile.hpp"
+#include "runtime/gx_texture_commands.hpp"
 #include "runtime/clock.hpp"
 #include <3ds/types.h>
 #include <3ds/result.h>
@@ -26,7 +28,17 @@ extern "C" {
 namespace dusk::native {
 bool fusedColorCopyEnabled{};
 namespace {
-struct CachedTexture { gx::TextureHandle handle; C3D_Tex texture; NativeTexturePlan extent; bool dirty{},immutable{},gpuResident{};std::uint64_t used{}; };
+struct CachedTexture { gx::TextureHandle handle; C3D_Tex texture; NativeTexturePlan extent; bool dirty{},immutable{},gpuResident{};
+    // In VRAM and rendered by the PICA itself (see gpuCaptureVramTexture):
+    // never decoded from CPU bytes and never evicted for linear memory.
+    bool vram{};
+    std::uint64_t used{};std::uint32_t frame{}; // frame of the last bind
+    // Checksum of the source bytes of the last decode (mutable images only).
+    // The per-frame global invalidation marks every game-written image dirty;
+    // an unchanged source keeps its decoded pixels instead of a new decode
+    // and GPU cache flush. Cleared whenever the GPU copy stops mirroring the
+    // CPU bytes (explicit image invalidation, GPU capture, fused copy).
+    bool summed{};std::uint64_t sourceSum{}; };
 std::array<CachedTexture,128> cache{};
 unsigned cacheSlots=64;
 bool rgb565Reference{};
@@ -59,6 +71,27 @@ struct DecodeEvent{std::uint64_t handle;unsigned w,h,fmt,bytes;bool dirty;std::u
 std::array<DecodeEvent,8> recentDecodes{};unsigned recentDecodeNext;
 void noteDecode(const gx::Texture& input,const NativeTexturePlan& e,bool dirty,std::uint64_t ticks){
     recentDecodes[recentDecodeNext++&7]={input.handle,input.width,input.height,input.format,unsigned(e.outputBytes),dirty,ticks};
+}
+std::uint64_t dirtyUnchanged;
+// Set by every image invalidation. Draws queued before it may still read an
+// image's pixels, so the first re-decode after it waits for the GPU once
+// (GX syncs no longer wait: gx_gpu_sync.cpp). Images first bound after that
+// wait are decoded before any draw can read them.
+bool decodeFence;
+std::uint64_t linearEvictions; // images released because the linear heap refused an allocation
+// Header, palette and texels: exactly the bytes the decoder reads.
+std::uint64_t sourceChecksum(const gx::Texture& input,const NativeTexturePlan& plan){
+    std::uint32_t a=2166136261u,b=0x9e3779b9u;
+    auto run=[&](std::span<const std::uint8_t> bytes){
+        std::size_t i=0;
+        for(;i+4<=bytes.size();i+=4){std::uint32_t w;std::memcpy(&w,bytes.data()+i,4);a=(a^w)*16777619u;b=((b<<5)|(b>>27))+w;}
+        for(;i<bytes.size();++i){a=(a^bytes[i])*16777619u;b=((b<<5)|(b>>27))+bytes[i];}
+    };
+    run(input.bti.first(std::min<std::size_t>(32,input.bti.size())));
+    if(plan.paletteEntries&&plan.paletteOffset<=input.bti.size()&&std::size_t(plan.paletteEntries)*2<=input.bti.size()-plan.paletteOffset)
+        run(input.bti.subspan(plan.paletteOffset,std::size_t(plan.paletteEntries)*2));
+    run(input.image);
+    return (std::uint64_t(a)<<32)|b;
 }
 C3D_Tex idleTexture{};
 std::array<gx::TextureHandle,3> protectedHandles{};
@@ -130,6 +163,23 @@ bool protectedImage(gx::TextureHandle handle){
     for(const auto value:protectedHandles)if(value&&value==handle)return true;
     return false;
 }
+// Eviction victim. Images the current frame has not used go first, oldest
+// first. When every image was used this frame (its set does not fit), evict the
+// most recently used one: plain LRU evicts exactly the image the next frame
+// needs first and re-decodes the whole set every frame (title shots decoded
+// ~9 MB a frame); this way only the part that does not fit is decoded again.
+CachedTexture* evictionCandidate(std::span<CachedTexture* const> taken={}){
+    CachedTexture* stale=nullptr;CachedTexture* recent=nullptr;
+    for(auto& item:activeCache()){
+        // A VRAM image frees no linear memory and is redrawn every frame.
+        if(!item.handle||item.vram||protectedImage(item.handle))continue;
+        bool skip=false;for(auto* value:taken)skip|=value==&item;
+        if(skip)continue;
+        if(item.frame!=gx::textureFrameCounter){if(!stale||item.used<stale->used)stale=&item;}
+        else if(!recent||item.used>recent->used)recent=&item;
+    }
+    return stale?stale:recent;
+}
 bool prepareIdleTexture(){
     if(idleTexture.data)return true;
     if(!C3D_TexInitWithParams(&idleTexture,nullptr,{8,8,0,GPU_RGBA8,GPU_TEX_2D,false}))return reject("GX idle texture allocation failed");
@@ -140,7 +190,7 @@ bool prepareIdleTexture(){
     C3D_TexSetWrap(&idleTexture,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);return true;
 }
 bool retire(CachedTexture& entry,copyprobe::Reason reason=copyprobe::Reason::evict){
-    ++gxProfileTotals.evictions;
+    ++gxProfileTotals.evictions;++gxPicaStateSerial;
     bool bound=false;for(const auto& sampler:samplers)bound|=sampler.data==entry.texture.data;
     if(bound&&!prepareIdleTexture())return false;
     for(unsigned unit=0;unit<samplers.size();++unit)if(samplers[unit].data==entry.texture.data){
@@ -156,11 +206,7 @@ bool makeRoom(std::size_t bytes){
     if(!drawScope)return reject(free?"GX texture cache budget exceeded":"GX texture cache slots exhausted");
     std::array<CachedTexture*,128> victims{};unsigned count{};std::size_t reclaim{};
     while((!free&&!count)||bytes>budget-allocated+reclaim){
-        CachedTexture* oldest=nullptr;
-        for(auto& item:activeCache())if(item.handle&&!protectedImage(item.handle)){
-            bool selected=false;for(unsigned n=0;n<count;++n)selected|=victims[n]==&item;
-            if(!selected&&(!oldest||item.used<oldest->used))oldest=&item;
-        }
+        CachedTexture* oldest=evictionCandidate({victims.data(),count});
         if(!oldest)return reject("GX protected draw textures exceed cache capacity");
         victims[count++]=oldest;reclaim+=oldest->extent.outputBytes;
     }
@@ -174,7 +220,7 @@ bool makeRoom(std::size_t bytes){
 }
 bool configureGxTextureCache(std::size_t bytes,unsigned images,bool rgb565Rgba8Reference,
                              std::span<const NativeTextureFingerprint> halfResolutionAllowlist,bool enableFusedColorCopy){
-    if(!bytes||bytes>10*1024*1024||!images||images>cache.size()||allocated||drawScope||idleTexture.data||halfResolutionAllowlist.size()>halfAllowlist.size())
+    if(!bytes||bytes>12*1024*1024||!images||images>cache.size()||allocated||drawScope||idleTexture.data||halfResolutionAllowlist.size()>halfAllowlist.size())
         return reject("GX cache configuration requires empty bounded cache");
     // Validate everything before publishing policy; caller storage may expire.
     halfAllowlist={};std::copy(halfResolutionAllowlist.begin(),halfResolutionAllowlist.end(),halfAllowlist.begin());
@@ -203,6 +249,7 @@ GxTextureDrawScope::GxTextureDrawScope(std::span<const gx::Texture> textures){
 GxTextureDrawScope::~GxTextureDrawScope(){if(active){protectedHandles={};drawScope=false;}}
 bool bindGxTexture(const gx::Texture& input, float& scaleU, float& scaleV,unsigned unit,bool projective) {
     GxProfileScope profile(GxProfilePart::texture);
+    ++gxPicaStateSerial;
     if(unit>=samplers.size())return reject("PICA texture unit out of range");
     if(projective&&unit!=0)return reject("PICA projected texture needs unit zero");
     if (!input.handle || input.wrapS>2 || input.wrapT>2 || input.minFilter > 5 || input.magFilter > 1)
@@ -226,7 +273,19 @@ bool bindGxTexture(const gx::Texture& input, float& scaleU, float& scaleV,unsign
         if(!makeRoom(e.outputBytes))return false;
         for (auto& item : activeCache()) if (!item.handle) { entry = &item; break; }
         if(!entry)return reject("GX texture eviction did not provide a slot");
-        if (!C3D_TexInitWithParams(&entry->texture,nullptr,{u16(e.paddedWidth),u16(e.paddedHeight),u8(e.mipCount-1),gpuFormat(e.format),GPU_TEX_2D,false}))
+        const C3D_TexInitParams params{u16(e.paddedWidth),u16(e.paddedHeight),u8(e.mipCount-1),gpuFormat(e.format),GPU_TEX_2D,false};
+        bool created=C3D_TexInitWithParams(&entry->texture,nullptr,params);
+        // The linear heap can be full or fragmented before the cache budget
+        // is: release the images used longest ago and try again.
+        for(bool fenced=false;!created&&drawScope;){
+            CachedTexture* oldest=evictionCandidate();
+            if(!oldest)break;
+            if(!fenced){if(platformCompleteGpu(500000000)!=GpuCompletion::complete)break;fenced=true;}
+            if(!retire(*oldest,copyprobe::Reason::evict))return false;
+            ++linearEvictions;
+            created=C3D_TexInitWithParams(&entry->texture,nullptr,params);
+        }
+        if (!created)
             return reject("GX texture GPU allocation failed");
         auto& gpu = entry->texture;
         auto bytes = std::span(static_cast<std::uint8_t*>(gpu.data), std::size_t(C3D_TexCalcTotalSize(gpu.size,gpu.maxLevel)));
@@ -243,12 +302,15 @@ bool bindGxTexture(const gx::Texture& input, float& scaleU, float& scaleV,unsign
         entry->extent = e;
         entry->handle = input.handle;
         entry->immutable=input.immutablePixels;
+        entry->summed=!input.immutablePixels;
+        if(entry->summed)entry->sourceSum=sourceChecksum(input,e);
         allocated += e.outputBytes;
     }
     if(!descriptorMatches(input,entry->extent)||entry->immutable!=input.immutablePixels)
         return reject("GX cached texture descriptor mismatch");
     if(projective&&entry->extent.sourceMip)return reject("GX texture half policy forbids projected content");
     if((input.wrapS&&entry->extent.width!=entry->extent.paddedWidth)||(input.wrapT&&entry->extent.height!=entry->extent.paddedHeight))return reject("GX repeated padded texture unsupported");
+    if (entry->vram) entry->dirty = false; // the PICA owns these pixels
     if (entry->dirty) {
         // GX invalidation already completed every preceding GPU use. Borrow
         // the current binding's live resource, never retain/dereference an old
@@ -259,6 +321,13 @@ bool bindGxTexture(const gx::Texture& input, float& scaleU, float& scaleV,unsign
             return reject("GX invalidated texture descriptor mismatch");
         auto& gpu = entry->texture;
         const auto bytes = std::size_t(C3D_TexCalcTotalSize(gpu.size, gpu.maxLevel));
+        const std::uint64_t sum=sourceChecksum(input,current);
+        if(entry->summed&&entry->sourceSum==sum&&!copyprobe::enabled)++dirtyUnchanged;
+        else{
+        if(decodeFence){
+            if(platformCompleteGpu(500000000)!=GpuCompletion::complete)return reject("GX texture re-decode GPU completion failed");
+            decodeFence=false;
+        }
         bool decoded;
         std::uint64_t decodeTicks;
         {GxProfileScope decoding(GxProfilePart::decode);gxProfileTotals.decodedBytes+=current.outputBytes;const auto t0=gxProfileTick();
@@ -269,10 +338,17 @@ bool bindGxTexture(const gx::Texture& input, float& scaleU, float& scaleV,unsign
         noteDecode(input,current,true,decodeTicks);
         C3D_TexFlush(&gpu);++contentSerial;
         if(copyprobe::enabled)copyprobe::flushUnknown(input.handle);
+        entry->sourceSum=sum;entry->summed=true;
+        }
         entry->dirty = false;
     }
     C3D_Tex sampler=entry->texture;
-    sampler.param=(sampler.param&~GPU_TEXTURE_MODE(7))|GPU_TEXTURE_MODE(projective?GPU_TEX_PROJECTION:GPU_TEX_2D);
+    // Bound in plain 2D mode: the rigid shaders divide a projected coordinate
+    // per vertex. The CPU vertex route asks for the PICA projection mode
+    // afterwards (setGxTextureProjection) when a draw needs the per-pixel
+    // divide.
+    (void)projective;
+    sampler.param=(sampler.param&~GPU_TEXTURE_MODE(7))|GPU_TEXTURE_MODE(GPU_TEX_2D);
     const bool minLinear=input.minFilter==1||input.minFilter==3||input.minFilter==5;
     C3D_TexSetFilter(&sampler,input.magFilter?GPU_LINEAR:GPU_NEAREST,minLinear?GPU_LINEAR:GPU_NEAREST);
     C3D_TexSetFilterMipmap(&sampler,input.minFilter>=4?GPU_LINEAR:GPU_NEAREST);
@@ -292,9 +368,24 @@ bool bindGxTexture(const gx::Texture& input, float& scaleU, float& scaleV,unsign
         last.desc=sampler;last.serial=contentSerial;last.valid=true;++bindApplies;
     }
     if(copyprobe::enabled)copyprobe::bindSuccess(input.handle,probeReason);
-    entry->used=++clock;
+    entry->used=++clock;entry->frame=gx::textureFrameCounter;
     scaleU = float(entry->extent.width) / entry->extent.paddedWidth;
     scaleV = float(entry->extent.height) / entry->extent.paddedHeight;
+    return true;
+}
+// Sampling mode of the texture bound to unit 0. In projection mode the PICA
+// divides the coordinate by its third component at every pixel: exact for a
+// texture mapped in screen space, where a per-vertex divide is wrong across
+// any triangle with depth (and leaves the ground near the camera black: every
+// build from 2026-11-13 h to 2026-11-14 i did, after the mode was blamed for a
+// GPU stop it did not cause). The next bind of unit 0 returns to 2D.
+bool setGxTextureProjection(bool projective){
+    auto& last=unitBinds[0];
+    if(!last.valid)return !projective;
+    const u32 mode=GPU_TEXTURE_MODE(projective?GPU_TEX_PROJECTION:GPU_TEX_2D);
+    if((last.desc.param&GPU_TEXTURE_MODE(7))==mode)return true;
+    last.desc.param=(last.desc.param&~GPU_TEXTURE_MODE(7))|mode;
+    samplers[0]=last.desc;C3D_TexBind(0,&samplers[0]);++bindApplies;
     return true;
 }
 FusedColorCopyResult refreshResidentColorCopy(gx::TextureHandle handle,const ColorCopyPlan& p,
@@ -346,7 +437,7 @@ FusedColorCopyResult refreshResidentColorCopy(gx::TextureHandle handle,const Col
        !inspectForCache(current,verified)||verified!=plan){
         reject("GX fused copy publication metadata changed");return Result::failed;
     }
-    entry->dirty=false;++contentSerial;
+    entry->dirty=false;entry->summed=false;++contentSerial;++gxPicaStateSerial;
     return Result::published;
 }
 void observeCopyLifecycleResidency(gx::TextureHandle handle,const ColorCopyPlan& p,bool depth,bool indexed,std::size_t snapshotBytes){
@@ -395,6 +486,31 @@ void* gpuCaptureTexture(gx::TextureHandle handle,unsigned& width,unsigned& heigh
        entry->extent.sourceMip||entry->extent.mipCount!=1||!entry->texture.data)return nullptr;
     width=entry->extent.width;height=entry->extent.height;return &entry->texture;
 }
+// Moves a GPU-resident capture into VRAM once, so the PICA renders straight
+// into the texture its receivers sample. The console's transfer engine never
+// finished the per-frame VRAM->linear copy of the shadow image (Alpha 0, run
+// 10: TextureCopy job silent for 6 s on the first gameplay frame); this path
+// has no copy at all.
+void* gpuCaptureVramTexture(gx::TextureHandle handle,unsigned& width,unsigned& height){
+    auto* entry=findCached(handle);
+    if(!entry||entry->immutable||drawScope||protectedImage(handle)||entry->extent.format!=NativeTextureFormat::rgba8||
+       entry->extent.sourceMip||entry->extent.mipCount!=1||!entry->texture.data||entry->texture.maxLevel)return nullptr;
+    if(!entry->vram){
+        // The linear copy may still be read by queued draws.
+        if(platformCompleteGpu(500000000)!=GpuCompletion::complete)return nullptr;
+        C3D_Tex moved{};
+        if(!C3D_TexInitWithParams(&moved,nullptr,{entry->texture.width,entry->texture.height,0,entry->texture.fmt,GPU_TEX_2D,true}))return nullptr;
+        bool bound=false;for(const auto& sampler:samplers)bound|=sampler.data==entry->texture.data;
+        if(bound&&!prepareIdleTexture()){C3D_TexDelete(&moved);return nullptr;}
+        for(unsigned unit=0;unit<samplers.size();++unit)if(samplers[unit].data==entry->texture.data){
+            samplers[unit]=idleTexture;C3D_TexBind(unit,&samplers[unit]);unitBinds[unit].valid=false;
+        }
+        C3D_TexSetWrap(&moved,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);
+        C3D_TexDelete(&entry->texture);entry->texture=moved;
+        entry->vram=true;entry->dirty=false;entry->summed=false;++gxPicaStateSerial;
+    }
+    width=entry->extent.width;height=entry->extent.height;return &entry->texture;
+}
 bool gpuCaptureRead(gx::TextureHandle handle,std::span<std::uint8_t> out,unsigned paddedWidth,unsigned paddedHeight){
     auto* entry=findCached(handle);
     if(!entry||entry->texture.width!=paddedWidth||entry->texture.height!=paddedHeight||out.size()>entry->extent.outputBytes)return false;
@@ -402,10 +518,10 @@ bool gpuCaptureRead(gx::TextureHandle handle,std::span<std::uint8_t> out,unsigne
     std::memcpy(out.data(),entry->texture.data,out.size());return true;
 }
 void gpuCaptureCommit(gx::TextureHandle handle){
-    if(auto* entry=findCached(handle)){entry->dirty=false;entry->gpuResident=true;entry->used=++clock;}
+    if(auto* entry=findCached(handle)){entry->dirty=false;entry->gpuResident=true;entry->summed=false;entry->used=++clock;entry->frame=gx::textureFrameCounter;}
     ++contentSerial;invalidateGxTextureBindings();
 }
-void invalidateGxTextureBindings(){for(auto& b:unitBinds)b.valid=false;}
+void invalidateGxTextureBindings(){for(auto& b:unitBinds)b.valid=false;++gxPicaStateSerial;}
 void gxTextureDecodeReport(){
     for(unsigned n=0;n<recentDecodes.size();++n){const auto& d=recentDecodes[n];
         if(d.handle)OSReport("Native recent decode handle=%llu %ux%u gxfmt=%u picabytes=%u %s %.3f ms\n",(unsigned long long)d.handle,d.w,d.h,d.fmt,d.bytes,d.dirty?"dirty":"new",d.ticks*1000.0/dusk::native::nativeTickFrequency);}
@@ -413,6 +529,14 @@ void gxTextureDecodeReport(){
 }
 void gxTextureBindStatistics(std::uint64_t& skips,std::uint64_t& applies){skips=bindSkips;applies=bindApplies;}
 std::size_t gxTextureBytes() { return allocated; }
+std::uint64_t gxTextureLinearEvictions() { return linearEvictions; }
+bool releaseLeastNeededTexture(bool& fenced){
+    CachedTexture* victim=evictionCandidate();
+    if(!victim)return false;
+    if(!fenced){if(platformCompleteGpu(500000000)!=GpuCompletion::complete)return false;fenced=true;}
+    if(!retire(*victim,copyprobe::Reason::evict))return false;
+    ++linearEvictions;return true;
+}
 std::size_t gxTextureIdleBytes(){return idleTexture.data?256:0;}
 GxTextureHalfStatus gxTextureHalfStatus(){
     GxTextureHalfStatus result{halfAllowlistSize+sceneryCount};
@@ -430,13 +554,19 @@ GxTextureHalfStatus gxTextureHalfStatus(){
     return result;
 }
 void invalidateGxTextures() {
+    ++gxPicaStateSerial;
     if(copyprobe::enabled)copyprobe::globalInvalidate();
     // GPU-resident captures own their pixels on the GPU; the CPU bytes are stale.
     for (auto& item : cache) if (item.handle&&!item.immutable&&!item.gpuResident) item.dirty = true;
+    decodeFence = true;
 }
 bool invalidateGxTexture(gx::TextureHandle handle){
+    ++gxPicaStateSerial;
     if(copyprobe::enabled)copyprobe::imageInvalidate(handle);
-    for(auto& item:cache)if(item.handle==handle){item.dirty=true;item.gpuResident=false;return true;}
+    for(auto& item:cache)if(item.handle==handle){
+        if(item.vram)return true; // rendered by the PICA, never from CPU bytes
+        item.dirty=true;item.gpuResident=false;item.summed=false;decodeFence=true;return true;
+    }
     return true; // A registered image may not have reached a GPU binding yet.
 }
 bool releaseGxTexture(gx::TextureHandle handle){
