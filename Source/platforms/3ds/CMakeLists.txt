@@ -3,35 +3,54 @@ project(dusklight_native_3ds LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# Enums are int-sized, as the game code assumes (its GameCube original and the
+# PC port): it reads enums out of file data and keeps out-of-range values in
+# them. devkitARM defaults to -fshort-enums, which made every such read zero
+# (the cutscene camera lost its interpolation and stepped from key to key).
+# libctru and Citro3D stay prebuilt with short enums: runtime/ctru_abi.hpp
+# mirrors their few structs whose layout differs.
+add_compile_options(-fno-short-enums)
+add_link_options(-Wl,--no-enum-size-warning)
 get_filename_component(DUSK_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 get_filename_component(WORKSPACE "${DUSK_ROOT}/.." ABSOLUTE)
 set(DEVKITPRO "/opt/devkitpro" CACHE PATH "Existing devkitPro installation")
 find_program(THREEDSXTOOL 3dsxtool HINTS "${DEVKITPRO}/tools/bin" REQUIRED)
 find_program(SMDHTOOL smdhtool HINTS "${DEVKITPRO}/tools/bin" REQUIRED)
 find_program(PICASSO picasso HINTS "${DEVKITPRO}/tools/bin" REQUIRED)
+# Every compiled shader must pass the console output rule before it is used:
+# all four components of each output register written on every path to END
+# (the PICA never finishes such a vertex on a New 3DS; Azahar accepts it).
+find_program(DUSK_SHADER_PYTHON python3 REQUIRED)
+get_filename_component(DUSK_SHADER_CHECK "${CMAKE_CURRENT_SOURCE_DIR}/../../../Tools/3ds/check_pica_shader.py" ABSOLUTE)
 
 # Independent native renderer. The game-model integration option below links
 # this library and redirects real packet entrypoints; asset/input migration is
 # incomplete. Building this target alone never creates a game executable.
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin"
-    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin" "${CMAKE_CURRENT_SOURCE_DIR}/native/scene.v.pica"
-    DEPENDS native/scene.v.pica VERBATIM)
+    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin.unchecked" "${CMAKE_CURRENT_SOURCE_DIR}/native/scene.v.pica"
+    COMMAND "${DUSK_SHADER_PYTHON}" -I "${DUSK_SHADER_CHECK}" "${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin.unchecked"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin.unchecked" "${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin"
+    DEPENDS "${DUSK_SHADER_CHECK}" native/scene.v.pica VERBATIM)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_shader.cpp"
     COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin"
         "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_shader.cpp" -DSYMBOL=native_scene_shader -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
     DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/native_scene.shbin" embed_shader.cmake VERBATIM)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin"
-    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin" "${CMAKE_CURRENT_SOURCE_DIR}/native/scene_rigid.v.pica"
-    DEPENDS native/scene_rigid.v.pica VERBATIM)
+    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin.unchecked" "${CMAKE_CURRENT_SOURCE_DIR}/native/scene_rigid.v.pica"
+    COMMAND "${DUSK_SHADER_PYTHON}" -I "${DUSK_SHADER_CHECK}" "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin.unchecked"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin.unchecked" "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin"
+    DEPENDS "${DUSK_SHADER_CHECK}" native/scene_rigid.v.pica VERBATIM)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid_shader.cpp"
     COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin"
         "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid_shader.cpp" -DSYMBOL=native_scene_rigid_shader -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
     DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/native_scene_rigid.shbin" embed_shader.cmake VERBATIM)
 foreach(native_variant IN ITEMS uv rigid_uv projective rigid_projective)
     add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin"
-        COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin"
+        COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin.unchecked"
             "${CMAKE_CURRENT_SOURCE_DIR}/native/scene_${native_variant}.v.pica"
-        DEPENDS "native/scene_${native_variant}.v.pica" VERBATIM)
+        COMMAND "${DUSK_SHADER_PYTHON}" -I "${DUSK_SHADER_CHECK}" "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin.unchecked"
+        COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin.unchecked" "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin"
+        DEPENDS "${DUSK_SHADER_CHECK}" "native/scene_${native_variant}.v.pica" VERBATIM)
     add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}_shader.cpp"
         COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}.shbin"
             "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/native_scene_${native_variant}_shader.cpp"
@@ -48,31 +67,39 @@ target_compile_options(dusk_pica_engine PRIVATE -O2 -ffunction-sections -fdata-s
     -Wall -Wextra -Werror -fno-exceptions -fno-rtti -fstack-usage)
 
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/preview.shbin"
-    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/preview.shbin" "${CMAKE_CURRENT_SOURCE_DIR}/preview.v.pica"
-    DEPENDS preview.v.pica VERBATIM)
+    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/preview.shbin.unchecked" "${CMAKE_CURRENT_SOURCE_DIR}/preview.v.pica"
+    COMMAND "${DUSK_SHADER_PYTHON}" -I "${DUSK_SHADER_CHECK}" "${CMAKE_CURRENT_BINARY_DIR}/preview.shbin.unchecked"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_BINARY_DIR}/preview.shbin.unchecked" "${CMAKE_CURRENT_BINARY_DIR}/preview.shbin"
+    DEPENDS "${DUSK_SHADER_CHECK}" preview.v.pica VERBATIM)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/preview_shader.cpp"
     COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/preview.shbin"
         "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/preview_shader.cpp" -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
     DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/preview.shbin" embed_shader.cmake VERBATIM)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gx_color.shbin"
-    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/gx_color.shbin" "${CMAKE_CURRENT_SOURCE_DIR}/gx_color.v.pica"
-    DEPENDS gx_color.v.pica VERBATIM)
+    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/gx_color.shbin.unchecked" "${CMAKE_CURRENT_SOURCE_DIR}/gx_color.v.pica"
+    COMMAND "${DUSK_SHADER_PYTHON}" -I "${DUSK_SHADER_CHECK}" "${CMAKE_CURRENT_BINARY_DIR}/gx_color.shbin.unchecked"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_BINARY_DIR}/gx_color.shbin.unchecked" "${CMAKE_CURRENT_BINARY_DIR}/gx_color.shbin"
+    DEPENDS "${DUSK_SHADER_CHECK}" gx_color.v.pica VERBATIM)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gx_color_shader.cpp"
     COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/gx_color.shbin"
         "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/gx_color_shader.cpp" -DSYMBOL=gx_color_shader -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
     DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/gx_color.shbin" embed_shader.cmake VERBATIM)
 
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid.shbin"
-    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid.shbin" "${CMAKE_CURRENT_SOURCE_DIR}/gx_rigid.v.pica"
-    DEPENDS gx_rigid.v.pica VERBATIM)
+    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid.shbin.unchecked" "${CMAKE_CURRENT_SOURCE_DIR}/gx_rigid.v.pica"
+    COMMAND "${DUSK_SHADER_PYTHON}" -I "${DUSK_SHADER_CHECK}" "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid.shbin.unchecked"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid.shbin.unchecked" "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid.shbin"
+    DEPENDS "${DUSK_SHADER_CHECK}" gx_rigid.v.pica VERBATIM)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_shader.cpp"
     COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/gx_rigid.shbin"
         "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_shader.cpp" -DSYMBOL=gx_rigid_shader -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
     DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid.shbin" embed_shader.cmake VERBATIM)
 
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin"
-    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin" "${CMAKE_CURRENT_SOURCE_DIR}/gx_rigid_mt.v.pica"
-    DEPENDS gx_rigid_mt.v.pica VERBATIM)
+    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin.unchecked" "${CMAKE_CURRENT_SOURCE_DIR}/gx_rigid_mt.v.pica"
+    COMMAND "${DUSK_SHADER_PYTHON}" -I "${DUSK_SHADER_CHECK}" "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin.unchecked"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin.unchecked" "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin"
+    DEPENDS "${DUSK_SHADER_CHECK}" gx_rigid_mt.v.pica VERBATIM)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt_shader.cpp"
     COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin"
         "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt_shader.cpp" -DSYMBOL=gx_rigid_mt_shader -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
@@ -209,12 +236,19 @@ add_executable(dusklight-native
     "${CMAKE_CURRENT_BINARY_DIR}/gx_color_shader.cpp" "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_shader.cpp" "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt_shader.cpp" runtime/disc.cpp runtime/dump_io.cpp runtime/developer_script.cpp
     runtime/resource_archive.cpp runtime/texture_ia8.cpp runtime/texture_i4.cpp runtime/texture_gx.cpp "${CMAKE_CURRENT_BINARY_DIR}/preview_shader.cpp"
     runtime/os_sync.cpp runtime/os_thread.cpp runtime/thread_backend_ctru.cpp
-    runtime/os_time.cpp runtime/os_arena.cpp runtime/primitives_ctru.cpp runtime/video_retrace_ctru.cpp runtime/gpu_sync_ctru.cpp
+    runtime/os_time.cpp runtime/os_arena.cpp runtime/primitives_ctru.cpp runtime/video_retrace_ctru.cpp runtime/gpu_sync_ctru.cpp runtime/gpu_canary_ctru.cpp runtime/durable_file_ctru.cpp
     runtime/gx_framebuffer_ctru.cpp runtime/font_pages.cpp runtime/font_batch.cpp runtime/texture_resources.cpp
     runtime/os_system.cpp runtime/os_system_ctru.cpp runtime/video_mode.cpp
     $<TARGET_OBJECTS:dusk_native_kernel> $<TARGET_OBJECTS:dusk_native_math>
     $<TARGET_OBJECTS:dusk_native_display_list>)
 set_target_properties(dusklight-native PROPERTIES SUFFIX ".elf")
+# SDK structs whose layout depends on the enum size are read through
+# runtime/ctru_abi.hpp only; a direct member access fails the build here.
+get_filename_component(DUSK_ABI_CHECK "${CMAKE_CURRENT_SOURCE_DIR}/../../../Tools/3ds/check_ctru_abi.py" ABSOLUTE)
+add_custom_target(dusk_check_ctru_abi
+    COMMAND "${DUSK_SHADER_PYTHON}" -I "${DUSK_ABI_CHECK}" "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Checking SDK struct access (enum size boundary)" VERBATIM)
+add_dependencies(dusklight-native dusk_check_ctru_abi)
 target_include_directories(dusklight-native PRIVATE
     "${DUSK_ROOT}/include" "${DUSK_ROOT}/extern/aurora/include" "${DUSK_ROOT}/src" "${DEVKITPRO}/libctru/include")
 target_compile_definitions(dusklight-native PRIVATE TARGET_PC=1 DUSK_TARGET_3DS=1 DUSK_NATIVE_THREAD_RUNTIME=1)
@@ -230,6 +264,8 @@ endforeach()
 target_link_directories(dusklight-native PRIVATE "${DEVKITPRO}/libctru/lib")
 target_link_options(dusklight-native PRIVATE -specs=3dsx.specs
     "-Wl,--wrap=GX_BindQueue"
+    "-Wl,--wrap=GX_ProcessCommandList"
+    "-Wl,--wrap=C3D_DrawElements"
     "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/dusklight-native.map")
 # Keep the pinned queue body unchanged. A strong public IRQ forwarding gate is
 # necessary: --wrap cannot intercept the event TU's co-located weak default.
@@ -441,9 +477,14 @@ if(DUSK_GAME_STARTUP)
     set(DUSK_DUMP_BUILD_ID "unavailable-unsealed-native-integration" CACHE STRING
         "Private candidate/source fingerprint recorded in application RAM dumps")
     target_sources(dusk_native_kernel PRIVATE
-        runtime/application_dump.cpp runtime/application_dump_ctru.cpp)
-    set_property(SOURCE runtime/application_dump_ctru.cpp APPEND PROPERTY
+        runtime/application_dump.cpp runtime/application_dump_ctru.cpp runtime/dev_console.cpp)
+    set_property(SOURCE runtime/application_dump_ctru.cpp runtime/dev_console.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS DUSK_DUMP_BUILD_ID="${DUSK_DUMP_BUILD_ID}")
+    # Packed application dumps compress their blocks (zstd from portlibs).
+    set_property(SOURCE runtime/application_dump_ctru.cpp APPEND PROPERTY
+        INCLUDE_DIRECTORIES "${DEVKITPRO}/portlibs/3ds/include")
+    target_link_directories(dusklight-native PRIVATE "${DEVKITPRO}/portlibs/3ds/lib")
+    target_link_libraries(dusklight-native PRIVATE zstd)
     if(NOT DUSK_GAMEPLAY_LINK_GATE OR DUSK_PROFILE_LINK_SELECTION)
         message(FATAL_ERROR "Original game startup requires the complete original profile list")
     endif()
@@ -453,7 +494,7 @@ if(DUSK_GAME_STARTUP)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_audio.cmake"
         DEPENDS vendor/opendsp/opendsp.cdc embed_audio.cmake embed_shader.cmake VERBATIM)
     target_sources(dusk_native_kernel PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/opendsp_component.cpp")
-    target_sources(dusk_native_kernel PRIVATE runtime/game_startup.cpp runtime/fused_color_config.cpp runtime/aram.cpp runtime/gx_fifo.cpp runtime/card.cpp runtime/audio_ndsp.cpp
+    target_sources(dusk_native_kernel PRIVATE runtime/game_startup.cpp runtime/frame_telemetry.cpp runtime/fused_color_config.cpp runtime/aram.cpp runtime/gx_fifo.cpp runtime/card.cpp runtime/audio_ndsp.cpp
         "${DUSK_ROOT}/src/dusk/audio/DuskDsp.cpp"
         "${DUSK_ROOT}/src/dusk/audio/Adpcm.cpp"
         "${DUSK_ROOT}/libs/freeverb/revmodel.cpp"
