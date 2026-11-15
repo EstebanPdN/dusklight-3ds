@@ -1,6 +1,3 @@
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-#include "../../platforms/3ds/runtime/scene_create_probe_hooks.hpp"
-#endif
 /**
  * f_pc_create_req.cpp
  * Framework - Process Create Request
@@ -59,9 +56,6 @@ BOOL fpcCtRq_Delete(create_request* i_request) {
         i_request->process->create_req = NULL;
     }
 
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-    if (dusk::native::sceneProbeEnabled()) dusk::native::sceneProbeFreed(i_request->id);
-#endif
     cMl::free(i_request);
     return TRUE;
 }
@@ -69,9 +63,6 @@ BOOL fpcCtRq_Delete(create_request* i_request) {
 BOOL fpcCtRq_Cancel(create_request* i_request) {
     if (i_request != NULL && !i_request->is_cancel) {
         i_request->is_cancel = TRUE;
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-        if (dusk::native::sceneProbeEnabled()) dusk::native::sceneProbeLifecycle(i_request->id, 3);
-#endif
 
         if (i_request->process != NULL && !fpcDt_Delete(i_request->process))
             return FALSE;
@@ -115,17 +106,7 @@ BOOL fpcCtRq_Do(create_request* i_request) {
 
     switch (phase) {
     case cPhs_COMPLEATE_e: {
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-        const int probe_admission = fpcEx_ToExecuteQ(i_request->process);
-        if (dusk::native::sceneProbeEnabled()) {
-            dusk::native::sceneProbeRefresh(i_request->id,
-                dusk::native::sceneProbeIdentity(*i_request, -1));
-            dusk::native::sceneProbeLifecycle(i_request->id, probe_admission ? 1 : 2);
-        }
-        if (probe_admission == 0)
-#else
         if (fpcEx_ToExecuteQ(i_request->process) == 0)
-#endif
             return fpcCtRq_Cancel(i_request);
         else
             return fpcCtRq_Delete(i_request);

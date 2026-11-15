@@ -34,6 +34,8 @@ public:
 // GPU-resident EFB capture: the cached RGBA8 texture of a copy image (null when
 // not resident/eligible) and the commit that marks it current without a decode.
 void* gpuCaptureTexture(gx::TextureHandle,unsigned& width,unsigned& height); // C3D_Tex*
+// The same texture, moved once into VRAM so the PICA can render into it.
+void* gpuCaptureVramTexture(gx::TextureHandle,unsigned& width,unsigned& height); // C3D_Tex*
 void gpuCaptureCommit(gx::TextureHandle);
 // Diagnostic: copy the resident texture bytes (after the GPU finished).
 bool gpuCaptureRead(gx::TextureHandle,std::span<std::uint8_t> out,unsigned paddedWidth,unsigned paddedHeight);
@@ -42,8 +44,16 @@ void invalidateGxTextureBindings();
 void gxTextureDecodeReport();
 void gxTextureBindStatistics(std::uint64_t& skips,std::uint64_t& applies);
 bool bindGxTexture(const gx::Texture& texture, float& scaleU, float& scaleV,unsigned unit=0,bool projective=false);
+// Unit 0 after bindGxTexture: PICA projection mode (per-pixel divide by the
+// third coordinate) or plain 2D. False when no texture is bound to unit 0.
+bool setGxTextureProjection(bool projective);
 const char* gxTextureFailure();
 std::size_t gxTextureBytes(); // Live PICA allocations in the bounded cache.
+// Cached images released because the linear heap refused a new image.
+std::uint64_t gxTextureLinearEvictions();
+// Render owner: release the cached image the current frame needs least (one
+// GPU fence first, tracked by the caller's flag). False when none can go.
+bool releaseLeastNeededTexture(bool& fenced);
 std::size_t gxTextureIdleBytes(); // At most 256 bytes for retired, unused unit bindings.
 struct GxTextureHalfStatus {
     std::size_t policyEntries{}, residentImages{}, residentBytes{}, sameImagesFullBytes{};

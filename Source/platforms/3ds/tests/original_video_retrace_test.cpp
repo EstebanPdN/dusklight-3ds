@@ -20,6 +20,7 @@ std::uint64_t wallMilliseconds(){return epoch1900To2000Ms;}
 u32 platformVideoRetraceCount(){return retrace;}
 void platformWaitVideoRetrace(){++retrace;++waits;}
 void platformSleepNanoseconds(std::int64_t){}
+std::uint64_t platformPaceTick(){return 0;}
 }
 // Explicit host hardware backends. The production VI mode/framebuffer/copy
 // providers remain unresolved; an unexpected unimplemented copy aborts here.

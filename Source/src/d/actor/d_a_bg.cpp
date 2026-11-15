@@ -1,12 +1,3 @@
-#if defined(DUSK_TARGET_3DS) && DUSK_BG_BUDGET_EXPERIMENT_76
-#include "../../../platforms/3ds/runtime/bg_budget_experiment.hpp"
-#endif
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-#include "../../../platforms/3ds/runtime/ground_create_probe_hooks.hpp"
-#endif
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-#include "../../../platforms/3ds/runtime/scene_create_probe_hooks.hpp"
-#endif
 /**
  * @file d_a_bg.cpp
  * 
@@ -150,10 +141,6 @@ static void clearBgMaterialAnm(const char* arcName, JKRHeap* heap) {
 static int checkCreateHeap(fopAc_ac_c* i_this) {
     daBg_c* a_this = (daBg_c*)i_this;
     int rt = a_this->createHeap();
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-    if (dusk::native::groundProbeEnabled())
-        dusk::native::groundBgHeapResult(a_this->id, rt, JKRGetCurrentHeap());
-#endif
     if (rt == 0) {
         clearBgMaterialAnm(a_this->setArcName(), mDoExt_getCurrentHeap());
     }
@@ -179,10 +166,6 @@ int daBg_c::createHeap() {
 
     const char* arcName = setArcName();
     int roomNo = fopAcM_GetParam(this);
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-    if (dusk::native::groundProbeEnabled())
-        dusk::native::groundBgHeapBegin(id, JKRGetCurrentHeap());
-#endif
     daBg_Part* bgPart = mBgParts;
 
     for (int i = 0; i < 6; i++) {
@@ -191,9 +174,6 @@ int daBg_c::createHeap() {
             modelData = (J3DModelData*)dComIfG_getStageRes(arcName, l_modelName2[i]);
         }
 
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-        dusk::native::groundBgModel(id, i, modelData != NULL, false);
-#endif
         if (modelData != NULL) {
             mDoExt_setupStageTexture(modelData);
             u32 modelFlags = 0x11000084;
@@ -208,16 +188,10 @@ int daBg_c::createHeap() {
             if (btk != NULL) {
                 bgPart->btk = JKR_NEW daBg_btkAnm_c();
                 if (bgPart->btk == NULL) {
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-                    dusk::native::groundBgFailure(id, dusk::native::GroundFailure::btkAlloc, i);
-#endif
                     return 0;
                 }
 
                 if (!bgPart->btk->create(modelData, btk, TRUE)) {
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-                    dusk::native::groundBgFailure(id, dusk::native::GroundFailure::btkCreate, i);
-#endif
                     return 0;
                 }
 
@@ -231,16 +205,10 @@ int daBg_c::createHeap() {
             if (brk != NULL) {
                 bgPart->brk = JKR_NEW daBg_brkAnm_c();
                 if (bgPart->brk == NULL) {
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-                    dusk::native::groundBgFailure(id, dusk::native::GroundFailure::brkAlloc, i);
-#endif
                     return 0;
                 }
 
                 if (!bgPart->brk->create(modelData, brk, TRUE)) {
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-                    dusk::native::groundBgFailure(id, dusk::native::GroundFailure::brkCreate, i);
-#endif
                     return 0;
                 }
             } else {
@@ -271,20 +239,11 @@ int daBg_c::createHeap() {
             if (bgPart->model != NULL) dusk_bg_scenery_textures(modelData, true);
 #endif
             if (bgPart->model == NULL) {
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-                dusk::native::groundBgFailure(id, dusk::native::GroundFailure::model, i);
-#endif
                 return 0;
             }
 
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-            dusk::native::groundBgModel(id, i, true, true);
-#endif
             bgPart->tevstr = JKR_NEW dKy_tevstr_c();
             if (bgPart->tevstr == NULL) {
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-                dusk::native::groundBgFailure(id, dusk::native::GroundFailure::tevstr, i);
-#endif
                 return 0;
             }
 
@@ -295,26 +254,14 @@ int daBg_c::createHeap() {
     }
 
     cBgD_t* dzb = (cBgD_t*)dComIfG_getStageRes(arcName, "room.dzb");
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-    dusk::native::groundBgResource(id, 0, dzb);
-#endif
     if (dzb != NULL) {
         mpKCol = NULL;
         mpBgW = JKR_NEW dBgW();
         if (mpBgW == NULL) {
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-            dusk::native::groundBgFailure(id, dusk::native::GroundFailure::dzbAlloc, -1);
-#endif
             return 0;
         }
 
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-        dusk::native::groundBgCollision(id, 1, mpBgW);
-#endif
         if (mpBgW->Set(dzb, cBgW::GLOBAL_e, NULL)) {
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-            dusk::native::groundBgFailure(id, dusk::native::GroundFailure::dzbSet, -1);
-#endif
             return 0;
         }
 
@@ -323,26 +270,16 @@ int daBg_c::createHeap() {
     } else {
         void* kcl = dComIfG_getStageRes(arcName, "room.kcl");
         void* plc = dComIfG_getStageRes(arcName, "room.plc");
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-        dusk::native::groundBgResource(id, 1, kcl);
-        dusk::native::groundBgResource(id, 2, plc);
-#endif
 
 
         if (kcl != NULL && plc != NULL) {
             mpBgW = NULL;
             mpKCol = JKR_NEW dBgWKCol();
             if (mpKCol == NULL) {
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-                dusk::native::groundBgFailure(id, dusk::native::GroundFailure::kcolAlloc, -1);
-#endif
                 return 0;
             }
 
             mpKCol->create(kcl, plc);
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-            dusk::native::groundBgCollision(id, 2, mpKCol);
-#endif
             mpKCol->SetPriority(dBgW_Base::PRIORITY_0);
         } else {
             mpBgW = NULL;
@@ -633,37 +570,13 @@ static int daBg_IsDelete(daBg_c* i_this) {
 }
 
 static int daBg_Delete(daBg_c* i_this) {
-#if defined(DUSK_TARGET_3DS) && DUSK_BG_BUDGET_EXPERIMENT_76
-    if (!dusk::bg76::owner()) return 0;
-    auto budgetTicket = dusk::bg76::ticket(i_this, i_this->id);
-    auto budgetId = i_this->id;
-    // Capture before destructor; never read ended actor lifetime for bookkeeping.
-    auto* budgetHeap = i_this->heap;
-    if (budgetTicket.generation && !dusk::bg76::releasable(budgetTicket, i_this, budgetId, budgetHeap)) return 0;
-#endif
     i_this->~daBg_c();
-#if defined(DUSK_TARGET_3DS) && DUSK_BG_BUDGET_EXPERIMENT_76
-    if (budgetTicket.generation) {
-        if (!dusk::bg76::release(budgetTicket, i_this, budgetId, budgetHeap)) return 0;
-        // Actor scheduler's established post-destructor base storage contract.
-        i_this->heap = NULL;
-    }
-#endif
     return 1;
 }
 
 static int daBg_Create(fopAc_ac_c* i_this) {
     daBg_c* a_this = (daBg_c*)i_this;
-#if defined(DUSK_TARGET_3DS) && DUSK_BG_BUDGET_EXPERIMENT_76
-    if (!dusk::bg76::mayCreate(a_this, a_this->id)) return cPhs_ERROR_e;
-#endif
     int rt = a_this->create();
-#if defined(DUSK_TARGET_3DS) && DUSK_BG_BUDGET_EXPERIMENT_76
-    dusk::bg76::outer(a_this, a_this->id, rt);
-#endif
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-    dusk::native::groundBgOuter(a_this->id, rt);
-#endif
     return rt;
 }
 
@@ -680,47 +593,33 @@ int daBg_c::create() {
         current.roomNo = roomNo;
 
         JKRExpHeap* room_heap = dStage_roomControl_c::getMemoryBlock(roomNo);
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-        dusk::native::groundBgBegin(id, roomNo, parentActorID, this, room_heap);
-#endif
-#if defined(DUSK_TARGET_3DS) && DUSK_BG_BUDGET_EXPERIMENT_76
-        if (room_heap != NULL && dusk::bg76::enabled()) {
-            auto* info = dComIfG_getStageResInfo(setArcName());
-            dusk::bg76::Context context{this, id, roomNo,
-                dStage_roomControl_c::getMemoryBlockID(roomNo), room_heap,
-                info && info->getArchive() ? info->getArchive()->mHeap : NULL,
-                info && info->getDataHeap() ? info->getDataHeap()->getParent() : NULL};
-            dusk::bg76::Ticket budgetTicket;
-            JKRHeap* old = mDoExt_getCurrentHeap();
-            auto* admitted = dusk::bg76::begin(context, dusk::bg76::reservation(),
-                fopAcM::HeapAdjustEntry != 0, budgetTicket);
-            if (admitted == NULL) return cPhs_ERROR_e;
-            this->heap = admitted;
-            mDoExt_setCurrentHeap(admitted);
-            int rt = createHeap();
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-            dusk::native::groundBgHeapResult(id, rt, heap);
-#endif
-            if (rt == 0) clearBgMaterialAnm(setArcName(), heap);
-            mDoExt_setCurrentHeap(old);
-            dusk::bg76::finish(budgetTicket, rt);
-            if (rt != 1) return cPhs_ERROR_e;
-        } else
-#endif
         if (room_heap != NULL) {
             JKRHeap* old = mDoExt_getCurrentHeap();
             this->heap = JKRCreateSolidHeap(-1, room_heap, false);
             JUT_ASSERT(471, heap != NULL);
+#if defined(DUSK_TARGET_3DS)
+            if (heap == NULL) {
+                // The block is already full (its room archive and a neighbour
+                // took all of it): same fallback as a background that does not
+                // fit. Without a background the player never finds ground and
+                // the stage never starts.
+                OSReport("Native room %d background has no room left in its memory block; using the game heap\n", roomNo);
+                u32 size = 0x20040;
+                size |= 0x80000000;
+                if (!fopAcM_entrySolidHeap(this, checkCreateHeap, size)) {
+                    OSReport("Native room %d background does not fit the game heap either\n", roomNo);
+                    return cPhs_ERROR_e;
+                }
+            } else {
+#else
             if (heap == NULL) {
                 return cPhs_ERROR_e;
             }
+#endif
             JKRHEAP_NAME(heap, "d_a_bg Anms");
 
             mDoExt_setCurrentHeap(this->heap);
             int rt = createHeap();
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-            dusk::native::groundBgHeapResult(id, rt, heap);
-#endif
 
             if (rt == 0) {
                 clearBgMaterialAnm(setArcName(), heap);
@@ -728,18 +627,41 @@ int daBg_c::create() {
             JUT_ASSERT(476, rt == 1);
 
             mDoExt_setCurrentHeap(old);
+#if defined(DUSK_TARGET_3DS)
+            if (rt != 1) {
+                // A room memory block has the original console's size, while
+                // actor heap estimates are doubled on this target. When what
+                // is left of the block cannot hold this room's models, build
+                // them in an actor heap from the game heap, exactly as a room
+                // without a memory block does.
+                static int reported;
+                if (reported < 4) {
+                    ++reported;
+                    OSReport("Native room %d background does not fit its memory block (%lu bytes); using the game heap\n",
+                             roomNo, static_cast<unsigned long>(this->heap->getHeapSize()));
+                }
+                mDoExt_destroySolidHeap(this->heap);
+                this->heap = NULL;
+                u32 size = 0x20040;
+                size |= 0x80000000;
+                if (!fopAcM_entrySolidHeap(this, checkCreateHeap, size)) {
+                    OSReport("Native room %d background does not fit the game heap either\n", roomNo);
+                    return cPhs_ERROR_e;
+                }
+            } else {
+                this->heap->adjustSize();
+            }
+            }
+#else
             if (rt != 1) {
                 return cPhs_ERROR_e;
             }
             this->heap->adjustSize();
+#endif
         } else {
             u32 size = 0x20040;
             size |= 0x80000000;
             if (!fopAcM_entrySolidHeap(this, checkCreateHeap, size)) {
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-                if (dusk::native::sceneProbeEnabled())
-                    dusk::native::sceneProbeDetail(id, dusk::native::SceneProbeKind::background, 1, roomNo, 0);
-#endif
                 return cPhs_ERROR_e;
             }
         }
@@ -792,33 +714,13 @@ int daBg_c::create() {
         }
 
         if (mpBgW != NULL) {
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-            bool groundRegResult = dComIfG_Bgsp().Regist(mpBgW, this);
-            dusk::native::groundBgRegist(id, 1, mpBgW, groundRegResult, mpBgW->GetId(), mpBgW->ChkUsed());
-            if (groundRegResult) {
-#else
             if (dComIfG_Bgsp().Regist(mpBgW, this)) {
-#endif
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-                if (dusk::native::sceneProbeEnabled())
-                    dusk::native::sceneProbeDetail(id, dusk::native::SceneProbeKind::background, 2, roomNo, 0);
-#endif
                 return cPhs_ERROR_e;
             }
         }
 
         if (mpKCol != NULL) {
-#if defined(DUSK_TARGET_3DS) && DUSK_GROUND_CREATE_PROBE
-            bool groundRegResult = dComIfG_Bgsp().Regist(mpKCol, this);
-            dusk::native::groundBgRegist(id, 2, mpKCol, groundRegResult, mpKCol->GetId(), mpKCol->ChkUsed());
-            if (groundRegResult) {
-#else
             if (dComIfG_Bgsp().Regist(mpKCol, this)) {
-#endif
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-                if (dusk::native::sceneProbeEnabled())
-                    dusk::native::sceneProbeDetail(id, dusk::native::SceneProbeKind::background, 3, roomNo, 0);
-#endif
                 return cPhs_ERROR_e;
             }
         }
@@ -833,10 +735,6 @@ int daBg_c::create() {
 
     if (bgp != NULL) {
         if (!bgp->execute(false)) {
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-            if (dusk::native::sceneProbeEnabled())
-                dusk::native::sceneProbeDetail(id, dusk::native::SceneProbeKind::background, 4, roomNo, 0);
-#endif
             return cPhs_INIT_e;
         }
     }
@@ -846,10 +744,6 @@ int daBg_c::create() {
 
     IF_DUSK(draw_interp_frame = true);
 
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-    if (dusk::native::sceneProbeEnabled())
-        dusk::native::sceneProbeDetail(id, dusk::native::SceneProbeKind::background, 5, roomNo, 0);
-#endif
     return cPhs_COMPLEATE_e;
 }
 

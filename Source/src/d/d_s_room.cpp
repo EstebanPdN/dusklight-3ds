@@ -1,6 +1,3 @@
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-#include "../../platforms/3ds/runtime/scene_create_probe_hooks.hpp"
-#endif
 /**
  * d_s_room.cpp
  * Gameplay Room Scene
@@ -505,15 +502,7 @@ static int dScnRoom_Create(scene_class* i_this) {
     };
 
     room_of_scene_class* room = static_cast<room_of_scene_class*>(i_this);
-#if defined(DUSK_TARGET_3DS) && DUSK_SCENE_CREATE_PROBE
-    int ret = dComLbG_PhaseHandler(&room->phase, l_method, i_this);
-    if (dusk::native::sceneProbeEnabled())
-        dusk::native::sceneProbeDetail(fopScnM_GetID(i_this), dusk::native::SceneProbeKind::room,
-            room->phase.id, room->field_0x1d4, ret);
-    return ret;
-#else
     return dComLbG_PhaseHandler(&room->phase, l_method, i_this);
-#endif
 }
 
 static scene_method_class l_dScnRoom_Method = {

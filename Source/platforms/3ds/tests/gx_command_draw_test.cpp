@@ -52,15 +52,18 @@ bool fogMode;
 bool fogPrimary;
 bool constantFogTest;
 bool redFogTest;
+bool relaxedAlphaTest;
 std::vector<GpuVertex> expandedVertices;
 std::vector<u16> expandedIndices;
 std::array<TextureHandle,3> protectedTextures{};
 }
+// Texture-command diagnostics report through the game log on the console.
+extern "C" void OSReport(const char*,...){}
 namespace dusk::native {
 std::uint64_t gxProfileTick(){return std::chrono::steady_clock::now().time_since_epoch().count();}
 std::uint32_t residentIndexEpoch(){assert(false&&"resident replay is outside this adapter fixture");return 0;}
 std::uint16_t* allocateResidentIndices(const std::uint16_t*,unsigned){assert(false&&"resident replay is outside this adapter fixture");return nullptr;}
-bool submitNativeRigid(const RasterPlan&,const PicaMaterialPlan&,const RigidVertexPlan&,const void*,const std::uint16_t*,unsigned){assert(false&&"resident replay is outside this adapter fixture");return false;}
+bool submitNativeRigid(const RasterPlan&,const PicaMaterialPlan&,const RigidVertexPlan&,const void*,const std::uint16_t*,unsigned,bool){assert(false&&"resident replay is outside this adapter fixture");return false;}
 GxTextureDrawScope::GxTextureDrawScope(std::span<const gx::Texture> textures):active(!scopeFailure){
     assert((textures.size()<=3&&protectedTextures==std::array<TextureHandle,3>{}));
     for(unsigned n=0;n<textures.size();++n)protectedTextures[n]=textures[n].handle;
@@ -72,18 +75,27 @@ bool cancelGxGeometry(const GpuGeometryBatch& b){return arena.cancel(b)&&!cancel
 const char* gxGeometryFailure(){return "test arena failure";}
 const char* gxPicaFailure(){return "test GPU failure";}
 const char* gxTextureFailure(){return textureFailureReason;}
+// Per-pixel projection switch of an already bound unit 0; the host model has
+// no texture unit state to change.
+bool setGxTextureProjection(bool){return true;}
 bool bindGxTexture(const Texture& texture,float& u,float& v,unsigned unit,bool projective){
     assert(!projective||unit==0);
     assert(texture.handle&&unit<3&&protectedTextures[unit]==texture.handle);++binds;u=1;v=.5;
     if(carrierMode){carrierTextures[unit]=texture;if(unit==carrierFailBind)return false;if(carrierInvalidScale)u=std::numeric_limits<float>::quiet_NaN();}
     return !textureFailure;
 }
+// The host has no stencil target: triangle fog keeps the CPU pair form.
+bool picaRigidTriangleFogAvailable(){return false;}
+bool submitGxRigidFogGeometry(const RasterPlan&,const PicaMaterialPlan&,const RasterPlan&,const PicaMaterialPlan&,
+    const GpuGeometryBatch&,const RigidVertexPlan&,const RigidVertexPlan&){assert(false);return false;}
 bool submitGxRigidGeometry(const RasterPlan&,const PicaMaterialPlan&,const GpuGeometryBatch& b,const RigidVertexPlan& p){
     assert(rigidTestMode&&arena.owns(b)&&(p.compact?validateCompactRigidGeometry(b):validateGpuGeometry(b))&&rigidExpected.size()==b.vertices.size());
     if(p.compact)++compactSubmissions;
     assert(p.uniformCount()<=94&&p.matrices<=10);
     auto close=[](float a,float expected){assert(std::abs(a-expected)<2e-4f*(1+std::abs(expected)));};
-    for(unsigned i=0;i<b.vertices.size();++i){const auto actual=rigidReference(p,p.compact?expandCompactRigid(p,std::as_bytes(b.vertices),i):b.vertices[i]);const auto& expected=rigidExpected[i];
+    // gx_rigid_reference.hpp models the single-texture shader only; the
+    // multi-texture records (gx_rigid_mt.v.pica) are checked in Azahar.
+    if(!p.multiTexture)for(unsigned i=0;i<b.vertices.size();++i){const auto actual=rigidReference(p,p.compact?expandCompactRigid(p,std::as_bytes(b.vertices),i):b.vertices[i]);const auto& expected=rigidExpected[i];
         for(unsigned c=0;c<4;++c){close(actual.position[c],expected.position[c]);close(actual.color[c],expected.color[c]);}
         for(unsigned t=0;t<3;++t)for(unsigned c=0;c<2;++c)close(actual.texcoord[t][c],expected.texcoord[t][c]);
         close(actual.textureQ,expected.textureQ);}
@@ -135,7 +147,8 @@ bool submitGxCommandGeometry(const RasterPlan& r,const PicaMaterialPlan& materia
         assert(stage.rgb.function==MaterialFunction::interpolate&&stage.rgb.inputs[2].source==(fogPrimary?MaterialSource::primary:MaterialSource::texture1));
         assert(stage.alpha.function==MaterialFunction::replace&&stage.alpha.inputs[0].source==MaterialSource::previous);
     }
-    assert(r.writeRgb&&!r.writeAlpha&&r.cull==0&&r.alpha.comparison==7);
+    assert(r.writeRgb&&!r.writeAlpha&&r.cull==0);
+    assert(relaxedAlphaTest?r.alphaRelaxed&&r.alpha.comparison==4&&r.alpha.reference==75:!r.alphaRelaxed&&r.alpha.comparison==7);
     assert(r.depth.enabled&&r.depth.write&&r.depth.compare==GX_LEQUAL);
     assert(!r.scissor.empty&&r.scissor.left==0&&r.scissor.right==240&&r.scissor.top==0&&r.scissor.bottom==400);
     if(expandedMode) {
@@ -192,6 +205,20 @@ static void signedQCases(const CommandDraw& draw){
         assert(!drawGxCommand(candidate,&c)&&c.rejected==1&&!c.submitted&&!c.culled);
         assert(arena.used()==used&&submissions==sent&&!c.signedQNegativeDraws&&!c.signedQMixedDraws);};
     reject(false); // Default strict, visible mixed q is fatal.
+    // Explicit degraded policy only: the same visible quad keeps positions,
+    // indices, colour, s and t; nonpositive divisors become a small positive one.
+    {arena=savedArena;auto c=enabled();c.allowDirectSignedQDiagnostic=false;c.allowProjectiveDivisorFallback=true;
+        assert(drawGxCommand(candidate,&c)&&c.submitted==1&&!c.rejected&&!c.signedQNegativeDraws&&!c.signedQMixedDraws);
+        assert(c.simplifiedDraws==1&&c.simplifiedByReason[unsigned(DrawVisualFallback::projectiveDivisor)]==1);
+        assert((expandedIndices==std::vector<u16>{0,1,2,2,3,0})&&expandedVertices.size()==4);
+        for(unsigned i=0;i<4;++i){const auto& v=expandedVertices[i];
+            const float q=qMixed[i]>0?qMixed[i]:1.f/4096;
+            assert((v.position==std::array<float,4>{y[i],-x[i],-1,2}));
+            assert(v.textureQ==q&&v.texcoord[0][0]==.5f*qMixed[i]+.125f&&v.texcoord[0][1]==q-.09375f);}
+        // The per-pass policy can still refuse it.
+        arena=savedArena;c=enabled();c.allowDirectSignedQDiagnostic=false;c.allowProjectiveDivisorFallback=true;
+        c.allowVisualFallback=[](const CommandDraw&,DrawVisualFallback reason){return reason!=DrawVisualFallback::projectiveDivisor;};
+        assert(!drawGxCommand(candidate,&c)&&c.rejected==1&&!c.submitted);}
     auto oracle=[&](const float* qs,GeometryQPolicy expectedPolicy){
         assert(capturedPolicy==expectedPolicy);
         assert((expandedIndices==std::vector<u16>{0,1,2,2,3,0})&&expandedVertices.size()==4);
@@ -347,10 +374,51 @@ static void negativeCases(const CommandDraw& draw){
     regs.bp[0x43]|=64;regs.bp[0xf3]=128|(1u<<16)|(7u<<19);
     reject(changed,"GX early depth plus alpha unsupported");regs=draw.registers;
     regs.bp[0xf3]=50|(200u<<8)|(4u<<16)|(1u<<19);
-    reject(changed,"GX dual alpha comparison unsupported");regs=draw.registers;
+    reject(changed,"GX dual alpha comparison unsupported");
+    {   // Relaxed planning never turns that interior interval into one test:
+        // it keeps the lower bound for the hardware and reports the upper
+        // one, which the adapter folds into the combiner alpha.
+        RasterPlan interior;RasterError error;
+        assert(planRaster(regs,interior,&error,FogPolicy::vertexApproximation,ColorStoragePolicy::rgba8ForRgba6,
+            ClipPolicy::validateGeometry,true,true,{},true)&&interior.alphaBand&&!interior.alphaRelaxed&&
+            interior.alpha.comparison==6&&interior.alpha.reference==51&&interior.alphaBandUpper==199);
+        // Three appended stages: 4*(upper+1-alpha), eight times that, then
+        // the captured original alpha times the factor. Colour passes through.
+        PicaMaterialPlan band;band.stageCount=2;
+        assert(appendAlphaBand(band,199)&&band.stageCount==5&&band.bufferUpdateAlpha==2&&band.stages[2].constant[3]==200&&
+            band.stages[2].alpha.function==MaterialFunction::subtract&&band.stages[2].alpha.scale==2&&
+            band.stages[3].alpha.function==MaterialFunction::add&&band.stages[3].alpha.scale==2&&
+            band.stages[4].alpha.function==MaterialFunction::modulate&&band.stages[4].alpha.inputs[1].source==MaterialSource::buffer&&
+            band.stages[4].rgb.function==MaterialFunction::replace&&band.stages[4].rgb.inputs[0].source==MaterialSource::previous);
+        // No room for three stages, or no upper bound to fold: unchanged.
+        PicaMaterialPlan full;full.stageCount=4;const auto untouched=full;
+        assert(!appendAlphaBand(full,199)&&!std::memcmp(&full,&untouched,sizeof(full)));
+        full.stageCount=2;assert(!appendAlphaBand(full,255));
+        // Hyrule Field BP state: alpha>75 AND alpha<255. Strict planning refuses
+        // it; relaxed planning keeps the lower bound and loses only alpha 255.
+        regs.bp[0xf3]=0x0cff4b;RasterPlan field;
+        assert(!planRaster(regs,field,&error,FogPolicy::vertexApproximation,ColorStoragePolicy::rgba8ForRgba6,
+            ClipPolicy::validateGeometry,true,true)&&error==RasterError::alpha);
+        assert(planRaster(regs,field,&error,FogPolicy::vertexApproximation,ColorStoragePolicy::rgba8ForRgba6,
+            ClipPolicy::validateGeometry,true,true,{},true)&&field.alphaRelaxed&&field.alpha.comparison==4&&field.alpha.reference==75);
+        // The adapter needs the explicit context opt-in as well as degraded draws.
+        reject(changed,"GX dual alpha comparison unsupported");
+        const auto before=arena;
+        CommandDrawContext c;c.allowDegradedDraws=c.allowAlphaCompareFallback=true;
+        c.allowVisualFallback=[](const CommandDraw&,DrawVisualFallback reason){return reason!=DrawVisualFallback::alphaCompare;};
+        assert(!drawGxCommand(changed,&c)&&!std::strcmp(c.failure,"GX dual alpha comparison unsupported"));
+        c={};c.allowDegradedDraws=c.allowAlphaCompareFallback=true;
+        c.allowVisualFallback=[](const CommandDraw&,DrawVisualFallback){return true;};
+        relaxedAlphaTest=true;
+        assert(drawGxCommand(changed,&c)&&c.submitted==1&&c.simplifiedDraws==1&&
+            c.simplifiedByReason[unsigned(DrawVisualFallback::alphaCompare)]==1);
+        relaxedAlphaTest=false;arena=before;submissions=submitted;
+    }
+    regs=draw.registers;
     // Exact Ordon spring BP state: XNOR(GE185,LE100) accepts 101..184.
     // Neither degraded rendering nor the disjoint-OR opt-in may turn an
-    // unsupported interior interval into acceptance, including UI passes.
+    // interior interval into acceptance, including UI passes: only the
+    // explicit alpha-comparison opt-in draws it (as a combiner band).
     for(unsigned perspective:{0u,1u}){
         regs.bp[0xf3]=0xde64b9;regs.bp[0x43]=0x41;regs.bp[0x40]=7;regs.bp[0x41]=0xf42d;
         regs.xf[0x1026]=perspective;
@@ -1154,7 +1222,9 @@ int main(){
     assert(arena.end()&&arena.begin());rigidTestMode=true;
     // Execute identical original GX packets through CPU and rigid GPU packing.
     // The GPU substitute independently interprets the published uniform plan.
-    context.allowRigidGpu=false;context.allowVertexFog=true;
+    // The single-texture shader is the fallback route in the game (multi-
+    // texture is the default); these cases check its uniform plan.
+    context.allowRigidGpu=false;context.allowVertexFog=true;context.allowSingleRigidShader=true;
     GXSetNumTexGens(1);GXSetTexCoordGen2(GX_TEXCOORD0,GX_TG_MTX2x4,GX_TG_TEX0,GX_IDENTITY,GX_FALSE,GX_PTIDENTITY);
     GXSetTevOrder(GX_TEVSTAGE0,GX_TEXCOORD0,GX_TEXMAP0,GX_COLOR0A0);GXSetTevOp(GX_TEVSTAGE0,GX_MODULATE);
     GXSetChanCtrl(GX_COLOR0,GX_TRUE,GX_SRC_REG,GX_SRC_VTX,GX_LIGHT0,GX_DF_CLAMP,GX_AF_SPOT);

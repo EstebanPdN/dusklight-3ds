@@ -146,6 +146,10 @@ public:
     /* 0xD0 */ J3DVtxColorCalc* mVtxColorCalc;
     /* 0xD4 */ J3DUnkCalc1* mUnkCalc1;
     /* 0xD8 */ J3DUnkCalc2* mUnkCalc2;
+#if defined(DUSK_TARGET_3DS)
+    // Native model shadows: caster slot of this frame (0 = casts no shadow).
+    u8 mNativeShadowSlot;
+#endif
 #if TARGET_PC
     Mtx mPresentationBase;
 #endif

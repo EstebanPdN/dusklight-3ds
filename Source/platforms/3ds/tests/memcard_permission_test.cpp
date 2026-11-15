@@ -36,6 +36,8 @@ std::vector<char> storedBytes() {
 }
 
 extern "C" {
+// runtime/card.cpp reports save I/O failures; the fixture has no log.
+void OSReport(const char*, ...) {}
 void OSInitMutex(OSMutex* mutex) { assert(locks.try_emplace(mutex).second); }
 void OSLockMutex(OSMutex* mutex) { locks.at(mutex).lock(); }
 void OSUnlockMutex(OSMutex* mutex) { locks.at(mutex).unlock(); }

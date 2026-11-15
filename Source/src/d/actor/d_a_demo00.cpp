@@ -3,6 +3,14 @@
  * 
 */
 
+#if defined(DUSK_TARGET_3DS)
+#include "../../../platforms/3ds/runtime/gx_profile.hpp"
+#define DEMO00_SPAN(name) static const unsigned span_##name = dusk::native::registerGxNamedProfile("demo00." #name); dusk::native::GxNamedProfileSpan timed_##name(span_##name)
+#define DEMO00_STOP(name) timed_##name.stop()
+#else
+#define DEMO00_SPAN(name)
+#define DEMO00_STOP(name)
+#endif
 #include "d/dolzel_rel.h" // IWYU pragma: keep
 
 #include "d/actor/d_a_demo00.h"
@@ -1525,9 +1533,11 @@ int daDemo00_c::draw() {
             tevStr.TevColor.a = 0xFF;
         }
 
+        DEMO00_SPAN(light);
         g_env_light.settingTevStruct(field_0x6ac, &eyePos, &tevStr);
         g_env_light.setLightTevColorType_MAJI(mModel.field_0x5d4, &tevStr);
         dKy_bg_MAxx_proc(mModel.field_0x5d4);
+        DEMO00_STOP(light);
 
         if (mModel.mpBtpAnm != NULL) {
             mModel.mpBtpAnm->entry(mModel.field_0x5d4->getModelData());
@@ -1568,6 +1578,7 @@ int daDemo00_c::draw() {
             dComIfGd_setListFilter();
         }
 
+        DEMO00_SPAN(model);
         if (mModel.field_0x5d8 != NULL) {
             mModel.mpModelMorf->modelCalc();
             if (field_0x6b5 != 0) {
@@ -1582,6 +1593,7 @@ int daDemo00_c::draw() {
         } else if (mModel.mpModelMorf != NULL) {
             mModel.mpModelMorf->modelCalc();
         }
+        DEMO00_STOP(model);
 
         if (mModel.field_0x5d4->getSkinDeform() != NULL) {
             dComIfGd_setList();
@@ -1653,6 +1665,7 @@ int daDemo00_c::draw() {
             }
         }
 
+        DEMO00_SPAN(shadow);
         if (mModel.mShadow != NULL && field_0x6b7 != 0 && field_0x6b5 != 0 && field_0x6a1 != 0) {
             cXyz sp98, spa4, spb0;
 
@@ -1675,6 +1688,7 @@ int daDemo00_c::draw() {
             }
         }
 
+        DEMO00_STOP(shadow);
         if (mModel.mpBtpAnm != NULL) {
             mModel.mpBtpAnm->remove(mModel.field_0x5d4->getModelData());
         }

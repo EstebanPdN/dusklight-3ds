@@ -1,6 +1,7 @@
 #include "runtime/gx_state.hpp"
 #include "runtime/gx_tev_commands.hpp"
 #include "runtime/gx_stream.hpp"
+#include "runtime/gx_profile.hpp"
 #include <bit>
 #include <dolphin/os.h>
 #include "runtime/gx_lighting_commands.hpp"
@@ -107,6 +108,9 @@ void GXSetArray(GXAttr attribute,const void* data,u32 size,u8 stride,bool little
 void GXBegin(GXPrimitive primitive,GXVtxFmt format,u16 count) {
     if(auto* stream=bridge::commandStream()){
         const unsigned kind=static_cast<unsigned>(primitive),vat=static_cast<unsigned>(format);
+        // Merge scope: this primitive continues the one held by the stream
+        // (nothing was written between them, so no state can have changed).
+        if(vat<=7&&count&&count!=GX_AUTO&&stream->continuesHeld(u8(kind|vat))){GXCmd1u8(kind|vat);GXCmd1u16(count);return;}
         if(vat>7||(kind!=GX_QUADS&&kind!=GX_TRIANGLES&&kind!=GX_TRIANGLESTRIP&&
            kind!=GX_TRIANGLEFAN&&kind!=GX_LINES&&kind!=GX_LINESTRIP&&kind!=GX_POINTS)||!stream->finish())
             streamFailure("GXBegin/primitive or unfinished draw");
@@ -199,12 +203,15 @@ void GXInitTexObjLOD(GXTexObj* object,GXTexFilter min,GXTexFilter mag,f32 minLod
     bridge::setTextureObjectLod(object,min,mag,minLod,maxLod,bias,clamp,edge,anisotropy);
 }
 void GXLoadTexObj(GXTexObj* object,GXTexMapID unit) {
+    static const auto profileIndex=dusk::native::registerGxNamedProfile("gx.loadTexObj");
+    dusk::native::GxNamedProfileScope profile(profileIndex);
     bridge::finishCommandBoundary("GXLoadTexObj");bridge::loadTextureObject(object,unit);
 #if defined(__3DS__)
     bridge::Texture texture;
     if(bridge::commandStream()&&!bridge::textureBinding(unit,texture)){
         bridge::queryTextureObject(object,texture);
-        OSReport("Native unavailable texture: %ux%u format %u handle %llu unit %u caller %p\n",
+        static unsigned reported;
+        if(reported<8&&++reported)OSReport("Native unavailable texture: %ux%u format %u handle %llu unit %u caller %p\n",
             texture.width,texture.height,texture.format,static_cast<unsigned long long>(texture.handle),
             static_cast<unsigned>(unit),__builtin_return_address(0));
     }
@@ -212,20 +219,26 @@ void GXLoadTexObj(GXTexObj* object,GXTexMapID unit) {
     bridge::commandTextureBinding(unit);
 }
 void GXDestroyTexObj(GXTexObj* object) { bridge::finishCommandBoundary("GXDestroyTexObj"); bridge::destroyTextureObject(object); }
+// Game policy (skip unavailable textures): a getter on an object that has no
+// record answers zero instead of ending the game; draws with it are left out.
+static void textureObjectGetterFailure(const char* call){
+    if(bridge::commandSkipUnavailableTextures)return;
+    streamFailure(call);
+}
 u16 GXGetTexObjWidth(GXTexObj* object) {
-    bridge::Texture metadata;if(!bridge::queryTextureObject(object,metadata))streamFailure("GXGetTexObjWidth/object");
+    bridge::Texture metadata;if(!bridge::queryTextureObject(object,metadata))textureObjectGetterFailure("GXGetTexObjWidth/object");
     return metadata.width;
 }
 u16 GXGetTexObjHeight(GXTexObj* object) {
-    bridge::Texture metadata;if(!bridge::queryTextureObject(object,metadata))streamFailure("GXGetTexObjHeight/object");
+    bridge::Texture metadata;if(!bridge::queryTextureObject(object,metadata))textureObjectGetterFailure("GXGetTexObjHeight/object");
     return metadata.height;
 }
 GXTexWrapMode GXGetTexObjWrapS(GXTexObj* object) {
-    bridge::Texture metadata;if(!bridge::queryTextureObject(object,metadata))streamFailure("GXGetTexObjWrapS/object");
+    bridge::Texture metadata;if(!bridge::queryTextureObject(object,metadata))textureObjectGetterFailure("GXGetTexObjWrapS/object");
     return static_cast<GXTexWrapMode>(metadata.wrapS);
 }
 GXTexWrapMode GXGetTexObjWrapT(GXTexObj* object) {
-    bridge::Texture metadata;if(!bridge::queryTextureObject(object,metadata))streamFailure("GXGetTexObjWrapT/object");
+    bridge::Texture metadata;if(!bridge::queryTextureObject(object,metadata))textureObjectGetterFailure("GXGetTexObjWrapT/object");
     return static_cast<GXTexWrapMode>(metadata.wrapT);
 }
 u32 GXGetTexBufferSize(u16 width,u16 height,u32 format,GXBool mipmap,u8 maxLod) {

@@ -303,13 +303,20 @@ void J3DShape::makeVcdVatCmd() {
 
 DUSK_GAME_DATA void* J3DShape::sOldVcdVatCmd;
 
+#if defined(DUSK_TARGET_3DS)
+extern "C" void duskNativeCallVertexSetup(const void* data, u32 size);
+#define J3D_CALL_VERTEX_SETUP(list, size) duskNativeCallVertexSetup(list, size)
+#else
+#define J3D_CALL_VERTEX_SETUP(list, size) GXCallDisplayList(list, size)
+#endif
+
 void J3DShape::loadCurrentMtx() const {
     mCurrentMtx.load();
 }
 
 void J3DShape::loadPreDrawSetting() const {
     if (sOldVcdVatCmd != mVcdVatCmd) {
-        GXCallDisplayList(mVcdVatCmd, kVcdVatDLSize);
+        J3D_CALL_VERTEX_SETUP(mVcdVatCmd, kVcdVatDLSize);
         sOldVcdVatCmd = mVcdVatCmd;
     }
 
@@ -347,7 +354,7 @@ void J3DShape::drawFast() const {
     ZoneScoped;
 #endif
     if (sOldVcdVatCmd != mVcdVatCmd) {
-        GXCallDisplayList(mVcdVatCmd, kVcdVatDLSize);
+        J3D_CALL_VERTEX_SETUP(mVcdVatCmd, kVcdVatDLSize);
         sOldVcdVatCmd = mVcdVatCmd;
     }
 
@@ -429,7 +436,7 @@ void J3DShape::simpleDraw() const {
 
 void J3DShape::simpleDrawCache() const {
     if (sOldVcdVatCmd != mVcdVatCmd) {
-        GXCallDisplayList(mVcdVatCmd, kVcdVatDLSize);
+        J3D_CALL_VERTEX_SETUP(mVcdVatCmd, kVcdVatDLSize);
         sOldVcdVatCmd = mVcdVatCmd;
     }
 

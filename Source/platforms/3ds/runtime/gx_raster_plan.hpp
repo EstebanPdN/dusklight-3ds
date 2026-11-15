@@ -18,6 +18,16 @@ struct RasterPlan {
     bool clipDisabled{};
     bool earlyDepthAlpha{};
     bool subtractBlend{};
+    // The dual alpha comparison was approximated by one test (degraded draw).
+    bool alphaRelaxed{};
+    // Band test lower <= alpha <= alphaBandUpper: `alpha` holds the lower
+    // bound; the caller folds the upper one into the combiner alpha
+    // (appendAlphaBand). Degraded draws only.
+    bool alphaBand{};
+    std::uint8_t alphaBandUpper{};
+    // Plans are compared as bytes (applied state, shape chain): no member may
+    // leave indeterminate padding behind it.
+    std::uint8_t reserved[2]{};
 };
 enum class ClipPolicy { requireEnabled, validateGeometry };
 enum class FogPolicy { requireSupported, diagnosticDisabled, vertexApproximation };
@@ -32,6 +42,7 @@ enum class RasterError { none, missingState, blend, earlyDepth, alpha, pixelForm
 // visual divergence. Diagnostics retain the default strict RGB8 policy.
 bool planRaster(const CommandRegisters&,RasterPlan&,RasterError* = nullptr,
                 FogPolicy = FogPolicy::requireSupported,ColorStoragePolicy = ColorStoragePolicy::rgb8Only,ClipPolicy = ClipPolicy::requireEnabled,
-                bool validateConstantEarlyAlpha=false,bool allowAlphaUnion=false,AlphaIntervalPolicy intervalPolicy={});
+                bool validateConstantEarlyAlpha=false,bool allowAlphaUnion=false,AlphaIntervalPolicy intervalPolicy={},
+                bool relaxDualAlpha=false);
 const char* rasterErrorText(RasterError);
 }

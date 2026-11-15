@@ -110,10 +110,17 @@ static struct {
 std::uint64_t fill(ndspWaveBuf& wave){
     const auto started=svcGetSystemTick();
     auto* pcm=static_cast<s16*>(wave.data_pcm16);
-    JASCriticalSection section;
-    if(JASDriver::getSubFrames()!=subframes)dusk::native::fatal("Native audio subframe count changed");
-    JASAudioThread::setDSPSyncCount(subframes);
+    {
+        JASCriticalSection section;
+        if(JASDriver::getSubFrames()!=subframes)dusk::native::fatal("Native audio subframe count changed");
+        JASAudioThread::setDSPSyncCount(subframes);
+    }
     for(unsigned at=0;at<subframes;++at){
+        // The original audio thread took its exclusion once per DSP subframe
+        // and the game ran between them. Dolphin's interrupt exclusion is one
+        // process-wide lock here: holding it for the whole 10-subframe block
+        // stalled every game-thread critical section for a complete mix.
+        JASCriticalSection section;
         OutputSubframe output{};JASDriver::updateDSP();DspRender(output);
         std::span<const f32> extra;
         if(JASDriver::extMixCallback&&JASDriver::sMixMode==MIX_MODE_INTERLEAVE){

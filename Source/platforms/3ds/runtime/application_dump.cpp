@@ -32,24 +32,25 @@ bool Trigger::update(std::uint32_t keys,std::uint64_t ms,bool busy) {
     if ((held&((1u<<8)|(1u<<9)))==((1u<<8)|(1u<<9))) suppress_=true;
     if (!held && !busy) {ready_=true;timing_=suppress_=false;return false;}
     if (busy) {ready_=timing_=false;suppress_=true;return false;}
+    // Instant: the frame the third button joins the other two (owner's
+    // request, 2026-11-13). The buttons must all be released to rearm.
+    (void)ms;
     if (held==chord) {
         suppress_=true;
-        if (ready_) {ready_=false;timing_=true;since_=ms;}
-        if (timing_ && ms<since_) {timing_=false;return false;}
-        if (timing_ && ms-since_>=1000) {timing_=false;return true;}
-    } else if (timing_) {timing_=ready_=false;} // partial release cannot rearm
+        if (ready_) {ready_=false;timing_=false;return true;}
+    }
     return false;
 }
 const char* resultText(Result r) {
     switch(r) {
-    case Result::success:return "Volcado completo verificado";
-    case Result::cancelled:return "Volcado cancelado";
-    case Result::invalidMap:return "Error: mapa de memoria no valido";
-    case Result::insufficientSpace:return "Error: espacio SD insuficiente";
-    case Result::readError:return "Error: memoria cambio o no es legible";
-    case Result::screensError:return "Error al capturar pantalla";
-    case Result::pathError:return "Error al crear carpeta exclusiva";
-    default:return "Error de escritura o verificacion SD";
+    case Result::success:return "Full dump written and verified";
+    case Result::cancelled:return "Dump cancelled";
+    case Result::invalidMap:return "Error: invalid memory map";
+    case Result::insufficientSpace:return "Error: not enough space on the SD card";
+    case Result::readError:return "Error: memory changed or is not readable";
+    case Result::screensError:return "Error: screen capture failed";
+    case Result::pathError:return "Error: could not create the dump folder";
+    default:return "Error: SD write or verification failed";
     }
 }
 namespace {
@@ -161,7 +162,7 @@ Result run(const char* root,const Metadata& m,Services& s,Workspace& w,char (&ou
         if(!s.supplement(s.context,dir,w,supplement))return fail(supplement.cancelled?Result::cancelled:Result::ioError);
         if(!supplement.inventoryBytes||supplement.inventoryBytes>4096||supplement.payloadBytes>8ull*1024*1024)return fail(Result::ioError);
     }
-    progress(s,"Volcando RAM + LCD + VRAM",0,total);
+    progress(s,"Dumping RAM + LCD + VRAM",0,total);
     path(w,dir,"map.txt");auto* map=std::fopen(w.path,"wx");
     if(!map)return fail(Result::ioError);
     bool mapOkay=true;std::uint64_t mapBytes=0;std::uint32_t mapHash=2166136261u;
@@ -196,7 +197,7 @@ Result run(const char* root,const Metadata& m,Services& s,Workspace& w,char (&ou
             path(w,dir,name);std::uint32_t hash{};
             if(!write(s,w,w.path,w.data,n,hash,true)){status=Result::ioError;break;}
             line("chunk %s %08x %08x fnv1a32=%08x\n",name,unsigned(a),unsigned(n),unsigned(hash));
-            a+=n;done+=n;progress(s,"Volcando y verificando RAM",done,total);
+            a+=n;done+=n;progress(s,"Dumping and verifying RAM",done,total);
         }
     }
     if(!flushDumpFile(map))mapOkay=false;
@@ -212,7 +213,7 @@ Result run(const char* root,const Metadata& m,Services& s,Workspace& w,char (&ou
         "file=extras.txt bytes=%llu fnv1a32=%08x\nsupplement_bytes=%llu\ndisplay_source=GSP-presented-LCD-frontbuffers\n",
         (unsigned long long)supplement.inventoryBytes,unsigned(supplement.inventoryHash),(unsigned long long)supplement.payloadBytes);
     const int n=std::snprintf(w.text,sizeof(w.text),
-        "format=DUSKLIGHT_APPLICATION_DUMP_1\nmode=full-readable-allowlisted-application\nchord=L+R+A hold=1000ms\n"
+        "format=DUSKLIGHT_APPLICATION_DUMP_1\nmode=full-readable-allowlisted-application\nchord=L+R+A instant\n"
         "coherence=chunked-live-non-atomic\nworkers=running-not-suspended\nregisters=unsupported\n"
         "kernel=not-captured\nforeign-processes=not-captured\nmap-stability=best-effort-query-before-copy-not-pinned\n"
         "build=%.127s\nframe=%llu\ntimestamp_ms_2000=%llu\nscene=%.15s\nroom=%d\n"

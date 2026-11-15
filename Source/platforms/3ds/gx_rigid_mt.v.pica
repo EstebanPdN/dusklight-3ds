@@ -5,11 +5,18 @@
 ;   v5 TEX1.st (short).
 ; Uniform layout matches gx_rigid.v.pica for 0..79 (matrix palette, projection,
 ; ambient, fog, flags, lights) plus:
-;   u[80]      per-unit role (x,y,z): 0 none, 1 texture coordinate, 0.5 fog ramp;
-;              w = 1 clamps clip z into [-w,0] (GX clip-disabled draws)
-;   u[81+4n..] unit n rows: S0 (TEX0 input), S1 (TEX1 input), T0, T1.
+;   Unit roles: 0 none, 1 texture coordinate, 0.5 fog ramp, 2 (unit 0 only)
+;              texture projected from the position. Unit 0 in u[13].z, unit 1
+;              in u[13].w, unit 2 in u[18].w (components the fog rows leave
+;              free), so row 80 belongs to the matrix palette.
+;   u[10].w    1 clamps clip z into [-w,0] (GX clip-disabled draws)
+;   Unit rows  S0 (TEX0 input), S1 (TEX1 input), T0, T1: unit 0 in u[89..92],
+;              unit 1 in u[85..88], unit 2 in u[81..84]. Units are used from
+;              0 up, so the rows of unused units continue the palette upward
+;              (one texture: palette to row 88, the single-texture capacity).
 ;              s' = S0.(s0,t0,1,1) + S1.(s1,t1,0,0); t' likewise. Texture
 ;              scale, fixed-point fraction and the vertical flip are folded in.
+;              Role 2: u[89..91] = S, T, Q rows on (position,1), u[92].xy scales.
 ;   u[93]      material color.
 .fvec u[94]
 .ivec lightLoop
@@ -35,14 +42,13 @@
     dp4 r2.z, u[8], r0
     dp4 r2.w, u[9], r0
     ; GX clip-disabled draws (sky, backdrops): keep z inside [-w, 0] so the
-    ; PICA's mandatory near/far clipping never removes them (u[80].w = 1).
-    cmp u[80].w, gt, gt, r15.x
+    ; PICA's mandatory near/far clipping never removes them (u[10].w = 1).
+    cmp u[10].w, gt, gt, r15.x
     ifc cmp.x
         min r2.z, r15.x, r2.z
         mul r8.x, -epsilon.z, r2.w
         max r2.z, r8.x, r2.z
     .end
-    mov outpos, r2
     mul r14.xyz, u[11].w, v1
     dp3 r1.x, u[a0.y+0], r14
     dp3 r1.y, u[a0.y+1], r14
@@ -101,7 +107,9 @@
         mul r10.w, u[15].w, r10.w
     .end
     mul r10.xyz, r10, r3
-    mov outcolor, r10
+    ; The colour waits in r3 for the single write at the end (r10 is scratch
+    ; for the fog below, which may still replace one component of it).
+    mov r3, r10
     ; Texture coordinate generators: in0=(TEX0,1,1), in1=(TEX1,0,0).
     mov r12.xy, v2.xy
     mov r12.zw, k.yy
@@ -110,25 +118,57 @@
     mov r5, k.xxxx
     mov r6, k.xxxx
     mov r7, k.xxxx
-    dp4 r4.x, u[81], r12
-    dp4 r4.y, u[82], r13
-    add r5.x, r4.x, r4.y
-    dp4 r4.x, u[83], r12
-    dp4 r4.y, u[84], r13
-    add r5.y, r4.x, r4.y
-    dp4 r4.x, u[85], r12
-    dp4 r4.y, u[86], r13
-    add r6.x, r4.x, r4.y
-    dp4 r4.x, u[87], r12
-    dp4 r4.y, u[88], r13
-    add r6.y, r4.x, r4.y
-    dp4 r4.x, u[89], r12
-    dp4 r4.y, u[90], r13
-    add r7.x, r4.x, r4.y
-    dp4 r4.x, u[91], r12
-    dp4 r4.y, u[92], r13
-    add r7.y, r4.x, r4.y
+    ; Only a unit with role 1 reads its rows: the rows of the others may hold
+    ; palette matrices, and a material can sample a role-less unit, whose
+    ; coordinate must then be a constant (0,0) (the minimap does).
+    mov r8.x, k.y
+    cmp u[13].z, eq, eq, r8.x
+    ifc cmp.x
+        dp4 r4.x, u[89], r12
+        dp4 r4.y, u[90], r13
+        add r5.x, r4.x, r4.y
+        dp4 r4.x, u[91], r12
+        dp4 r4.y, u[92], r13
+        add r5.y, r4.x, r4.y
+    .end
+    cmp u[13].w, eq, eq, r8.x
+    ifc cmp.x
+        dp4 r4.x, u[85], r12
+        dp4 r4.y, u[86], r13
+        add r6.x, r4.x, r4.y
+        dp4 r4.x, u[87], r12
+        dp4 r4.y, u[88], r13
+        add r6.y, r4.x, r4.y
+    .end
+    cmp u[18].w, eq, eq, r8.x
+    ifc cmp.x
+        dp4 r4.x, u[81], r12
+        dp4 r4.y, u[82], r13
+        add r7.x, r4.x, r4.y
+        dp4 r4.x, u[83], r12
+        dp4 r4.y, u[84], r13
+        add r7.y, r4.x, r4.y
+    .end
     mov r5.z, k.y
+    ; Unit 0 projected from the position (role 2): rows S, T and Q on
+    ; (position,1), divided here per vertex as in gx_rigid.v.pica; u[92].xy
+    ; are the texture scales. A divisor at or behind the projector becomes a
+    ; small positive one (the sample lands far outside the image). r8.x is 1.
+    cmp u[13].z, gt, gt, r8.x
+    ifc cmp.x
+        mov r14.xyz, v0
+        mov r14.w, k.y
+        dp4 r4.x, u[89], r14
+        dp4 r4.y, u[90], r14
+        dp4 r4.z, u[91], r14
+        max r4.z, epsilon.w, r4.z
+        rcp r4.w, r4.z
+        mul r4.x, u[92].x, r4.x
+        mul r5.x, r4.x, r4.w
+        mul r4.y, u[92].y, r4.y
+        mul r4.y, r4.y, r4.w
+        add r5.y, k.y, -r4.y
+    .end
     ; Fog depth and range factor; camera-crossing vertices use near fog.
     mov r9, k.xxxx
     cmp u[12].x, gt, gt, r15.x
@@ -184,31 +224,46 @@
         add r9.y, -u[11].z, r9.y
         max r9.y, k.x, r9.y
         min r9.y, k.y, r9.y
+        ; Fog carrier in the primary colour: u[12].z = 1 alpha, 2 red (the
+        ; material does not read the vertex colour then).
         cmp u[12].z, gt, gt, r15.x
         ifc cmp.x
-            mov outcolor.w, r9.y
+            mov r9.z, k.y
+            cmp u[12].z, gt, gt, r9.z
+            ifc cmp.x
+                mov r3.x, r9.y
+            .else
+                mov r3.w, r9.y
+            .end
         .end
         mul r9.y, epsilon.z, r9.y
         add r9.y, epsilon.w, r9.y
         mov r9.z, k.z
         ; Route the fog ramp coordinate to the unit whose role is 0.5.
         mov r8, k.zzzz
-        cmp u[80].x, eq, eq, r8.x
+        cmp u[13].z, eq, eq, r8.x
         ifc cmp.x
             mov r5.x, r9.y
             mov r5.y, r9.z
         .end
-        cmp u[80].y, eq, eq, r8.x
+        cmp u[13].w, eq, eq, r8.x
         ifc cmp.x
             mov r6.x, r9.y
             mov r6.y, r9.z
         .end
-        cmp u[80].z, eq, eq, r8.x
+        cmp u[18].w, eq, eq, r8.x
         ifc cmp.x
             mov r7.x, r9.y
             mov r7.y, r9.z
         .end
     .end
+    ; Outputs: the console PICA takes each component of each output register
+    ; exactly once. One left unwritten stopped it on every vertex (gx_rigid,
+    ; 2026-11-13); a later second write is ignored or stops it too (3dbrew,
+    ; GPU/Pitfalls). Every program therefore builds its outputs in registers
+    ; and writes each output once, whole (Tools/3ds/check_pica_shader.py).
+    mov outpos, r2
+    mov outcolor, r3
     mov outtex, r5
     mov outtex1, r6
     mov outtex2, r7

@@ -1,5 +1,6 @@
 // Execute the actual PICA arena adapter with a shadow GPU memory model. Draws
 // observe only successfully flushed bytes when the simulated queue executes.
+#include "../runtime/gx_compact_cache.hpp"
 #include "../gx_geometry_pica.hpp"
 #include "../runtime/gpu_sync.hpp"
 #include "../runtime/gx_fog_pass.hpp"
@@ -53,9 +54,10 @@ void BufInfo_Init(C3D_BufInfo*){}
 int BufInfo_Add(C3D_BufInfo*,const void* data,ptrdiff_t bytes,int count,u64 permutation){
     vertices=data;stride=bytes;assert(unsigned(count)==layout.size());
     if(bytes==sizeof(gx::CompactRigidVertex)){
-        assert(count==5&&permutation==0x43210);
-        const Attribute expected[]{{0,GPU_FLOAT,3},{1,GPU_SHORT,3},{2,GPU_SHORT,2},{4,GPU_SHORT,1},{3,GPU_UNSIGNED_BYTE,4}};
-        for(unsigned i=0;i<5;++i)assert(layout[i].reg==expected[i].reg&&layout[i].type==expected[i].type&&layout[i].count==expected[i].count);
+        // Six attributes, the unused v5 included (see CompactRigidVertex).
+        assert(count==6&&permutation==0x543210);
+        const Attribute expected[]{{0,GPU_FLOAT,3},{1,GPU_SHORT,3},{2,GPU_SHORT,2},{5,GPU_SHORT,2},{4,GPU_BYTE,2},{3,GPU_UNSIGNED_BYTE,4}};
+        for(unsigned i=0;i<6;++i)assert(layout[i].reg==expected[i].reg&&layout[i].type==expected[i].type&&layout[i].count==expected[i].count);
     }else{
         assert(bytes==sizeof(gx::GpuVertex)&&count==6&&permutation==0x543210);
         for(unsigned i=0;i<6;++i)
@@ -79,13 +81,19 @@ static void assertPublished(const void* p,std::size_t bytes){
 }
 static void executeQueue(){for(auto q:queued){assertPublished(q.vertex,q.vertexBytes);assertPublished(q.index,q.indexBytes);}queued.clear();}
 namespace dusk::native {
+// Frame-begin hooks of other modules (copy execution, PICA state filter,
+// compact cache); this fixture has none of them.
+void dropPendingCapture(){}
+void invalidatePicaCommandState(){}
+namespace gx {StaticCompactCache* staticCompactCache(){return nullptr;}}
 bool platformBeginGpuCommands(){assert(queued.empty());return true;}
 GpuCompletion platformReserveGpuEntries(unsigned n,std::uint64_t){assert(n==2);return GpuCompletion::complete;}
 GpuCompletion platformCompleteGpu(std::uint64_t){++completions;if(!flushGxGeometry())return GpuCompletion::exhausted;executeQueue();return GpuCompletion::complete;}
 }
 static gx::GpuGeometryBatch make(unsigned count,float value){
     gx::GpuGeometryBatch b;assert(reserveGxGeometry(count,3,b));
-    for(auto& v:b.vertices){v={};v.position={value,2,3,1};v.color={.2f,.4f,.6f,1};v.texcoord[0]={value,.5f};}
+    // w=64 keeps every vertex inside the hardware clip guard (|x|,|y| <= 8w).
+    for(auto& v:b.vertices){v={};v.position={value,2,3,64};v.color={.2f,.4f,.6f,1};v.texcoord[0]={value,.5f};}
     b.indices[0]=0;b.indices[1]=1;b.indices[2]=count-1;return b;
 }
 int main(){
@@ -129,7 +137,7 @@ int main(){
     // and published bytes, including a nonzero palette selector.
     auto compact=make(3,0);
     for(unsigned i=0;i<3;++i){
-        gx::CompactRigidVertex v{{float(i),2,3},{-16384,0,16384},{-8192,4096},std::int16_t(i*39)};
+        gx::CompactRigidVertex v{{float(i),2,3},{-16384,0,16384},{-8192,4096},{std::int16_t(i*39)}};
         std::memcpy(std::as_writable_bytes(compact.vertices).data()+i*sizeof(v),&v,sizeof(v));
     }
     assert(submitGxCompactRigidGeometry(compact));assert(flushGxGeometry());executeQueue();assert(compactDraws==1);

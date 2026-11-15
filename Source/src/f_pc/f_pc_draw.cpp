@@ -3,6 +3,9 @@
  * Framework - Process Draw
  */
 
+#if defined(DUSK_TARGET_3DS)
+#include "../../platforms/3ds/runtime/gx_profile.hpp"
+#endif
 #include "f_pc/f_pc_draw.h"
 #include "SSystem/SComponent/c_API_graphic.h"
 #include "f_pc/f_pc_leaf.h"
@@ -29,6 +32,9 @@ int fpcDw_Execute(base_process_class* i_proc) {
         }
     
         fpcLy_SetCurrentLayer(i_proc->layer_tag.layer);
+#if defined(DUSK_TARGET_3DS)
+        dusk::native::GxProcessProfileScope processProfile(1, i_proc->profname);
+#endif
         ret = draw_func(i_proc);
         fpcLy_SetCurrentLayer(save_layer);
         return ret;

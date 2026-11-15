@@ -96,8 +96,10 @@ public:
         bool supported;     // draw func list contains only batchable funcs
         bool hasPtclColor;  // per-particle JPARegist* func is present
         bool hasPtclTexMtx; // JPALoadCalcTexCrdMtxAnm is present
+        bool hasPtclTex;    // per-particle JPALoadTexAnm is present (native 3DS batch only)
     };
     BatchInfo mBatchInfo;
+    BatchInfo mChildBatchInfo; // child particles (native 3DS batch only)
 
     void initBatchInfo();
 #endif

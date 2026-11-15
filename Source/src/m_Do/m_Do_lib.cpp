@@ -48,6 +48,15 @@ u32 mDoLib_setResTimgObj(ResTIMG const* i_img, TGXTexObj* o_texObj, u32 tlut_nam
     return i_img->indexTexture;
 }
 
+#if defined(DUSK_TARGET_3DS)
+void mDoLib_retainNativeTexture(const ResTIMG* i_img, const void* i_texObj) {
+    dusk::native::gx::Texture metadata;
+    dusk::native::gx::queryTextureObject(i_texObj,metadata);
+    if(!dusk::native::retainArchiveTextureForLifetime(i_img,metadata.handle))
+        OSPanic(__FILE__,__LINE__,"Native resource texture: %s",dusk::native::textureResourceFailure());
+}
+#endif
+
 DUSK_GAME_DATA J3DUClipper mDoLib_clipper::mClipper;
 
 DUSK_GAME_DATA f32 mDoLib_clipper::mSystemFar;

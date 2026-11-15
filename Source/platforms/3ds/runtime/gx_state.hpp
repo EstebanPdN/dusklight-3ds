@@ -130,6 +130,16 @@ bool registeredTextureAt(std::size_t slot,Texture& output);
 // Unknown/destroyed objects return false and clear the snapshot.
 // The original mirror's explicit native null/zero-size/RGBA8 sentinel is a
 // known empty descriptor: width/height queries return zero, binding still fails.
+// Diagnostic: live GX texture objects and the table size.
+void textureObjectUsage(unsigned& used,unsigned& capacity,unsigned* reclaimed=nullptr);
+// Development switch (texture-object-limit.txt): run the stale-record sweep
+// once this many records are in use, to exercise it in a short session.
+void setTextureObjectSoftLimit(unsigned limit);
+// Optional game hooks (unset in host tools): is the storage of a GX texture
+// object still an allocation, and notification that its record was dropped.
+// Consulted only when the object table is full.
+inline bool (*textureObjectStorageLive)(const void* address)=nullptr;
+inline void (*textureObjectReclaimed)(const void* address)=nullptr;
 bool queryTextureObject(const void* object,Texture& output);
 // Native display lists encode a bounded registration identity, never an ARM
 // address. Tokens are not reused; owner unregister invalidates every old list.
@@ -194,6 +204,5 @@ void setTlutObjectData(void* object,const void* palette);
 void loadTlutObject(const void* object,unsigned tlut);
 void destroyTlutObject(void* object);
 void unsupportedOperation(const char* call);
-void unsupportedPalette(const char* call);
 void end();
 }

@@ -14,6 +14,10 @@ boot-stage parsing, bootstrap/controller integration, USA/PAL bundle round trips
 dump verification and card-permission consumer recovery. Generated binaries and
 fixtures stay in `Build/public-host/`; no original disc is opened.
 
+The packed-dump cases of `dump-verifier` need Python 3.14 or later (the
+standard `compression.zstd` module); older versions report them as skipped.
+CI runs Python 3.14.
+
 Use `--compiler PATH` to choose a host compiler and `--output PATH` to choose
 an output directory. The runner fails on compilation, assertion, sanitizer or
 Python test failure. It records commands and outcomes in `results.json`.
@@ -138,11 +142,29 @@ expect `/opt/devkitpro`, a user-provided disc, fetched public references or
 historical private baselines under `Diagnostics/`. Such tests need those local
 inputs and should not be represented as passing in a clean checkout.
 
-The historical audio PCM runner currently fails its host lifecycle compile because
-its test substitutes do not declare the production `threadCreate` initialization
-path. Its source is retained; it is outside the passing public host suite. The
-full native game build compiles that production path with the real SDK. Host
-PCM lifecycle coverage must be updated before it can be claimed again.
+These research runners were brought up to date with the current runtime on
+2026-11-15 and pass on macOS with Apple Clang (ASan/UBSan):
+
+| Runner | Notes |
+| --- | --- |
+| `test_audio_pcm.py --evidence PATH` | NDSP lifecycle, PCM capture and WAV export |
+| `test_gpu_queue_lifecycle.py --output PATH` | GPU queue, GPU guard timeouts and hang records |
+| `test_gx_indexed_geometry.py --output PATH` | Geometry arena, flush and clip-guard contracts |
+| `test_framebuffer_viewport.py --output PATH` | Framebuffer raster-state scope |
+| `test_vertex_decode.py --output PATH` | Vertex decoders, compact records and their caches |
+| `test_depth_retained_probe.py --output PATH` | Developer depth probe on the transfer read-back path |
+| `test_alpha_interval.py --output PATH` | Alpha-interval backend, negative control, command-draw adapter |
+| `test_alpha_interval_ownership.py --output PATH` | Target ownership, guarded copies and clears |
+
+The two alpha-interval runners compile against the libctru 2.7.0 and Citro3D
+1.7.1 sources extracted under `Upstream/extracted/` (not tracked). The depth
+probe and ownership fixtures model transfer-engine read-backs and select them
+with the SD switch `readback-transfer.txt` in their working directory; the
+CPU read-back the game uses by default is compared byte for byte in Azahar
+([ADR 0003](decisions/0003-cpu-readbacks-and-transfer-stops.md)). The
+command-draw adapter cases check the single-texture rigid shader with a host
+model; the multi-texture shader, the default route, has no host model and is
+checked in Azahar.
 
 Do not run every historical `test_*.py` through discovery: several files are
 executable research workflows with different prerequisites and evidence paths.

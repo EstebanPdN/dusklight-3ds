@@ -88,6 +88,10 @@ void JPAEmitterManager::calc(u8 group_id) {
     }
 }
 
+#if defined(DUSK_TARGET_3DS)
+void JPANativeBatchEnd(); // JPAResource.cpp
+#endif
+
 void JPAEmitterManager::draw(JPADrawInfo const* drawInfo, u8 group_id) {
 #if !defined(DUSK_TARGET_3DS)
     ZoneScoped;
@@ -120,11 +124,28 @@ void JPAEmitterManager::draw(JPADrawInfo const* drawInfo, u8 group_id) {
     for (JSULink<JPABaseEmitter>* pLink = pEmtrUseList[group_id].getFirst();
          pLink != pEmtrUseList[group_id].getEnd(); pLink = pLink->getNext()) {
         JPABaseEmitter* emtr = pLink->getObject();
+#if defined(DUSK_TARGET_3DS)
+        // No particle alive: nothing would reach the screen. Only the draw
+        // callbacks run (some manage the emitter's lifetime there).
+        if (emtr->getParticleNumber() == 0) {
+            if (!emtr->checkStatus(0x04) && emtr->mpEmtrCallBack != NULL) {
+                emtr->mpEmtrCallBack->draw(emtr);
+                // draw() may detach the callback from the emitter.
+                if (emtr->mpEmtrCallBack != NULL) {
+                    emtr->mpEmtrCallBack->drawAfter(emtr);
+                }
+            }
+            continue;
+        }
+#endif
         if (!emtr->checkStatus(0x04)) {
             pWd->mpResMgr = pResMgrAry[emtr->mResMgrID];
             emtr->pRes->draw(pWd, emtr);
         }
     }
+#if defined(DUSK_TARGET_3DS)
+    JPANativeBatchEnd();
+#endif
 }
 
 void JPAEmitterManager::forceDeleteAllEmitter() {

@@ -426,17 +426,6 @@ bool Disc::readFile(const DiscFile& input, std::uint64_t offset, void* output, s
     return validated && input.owner == this && input.generation == generation &&
            contains(input.bytes, offset, size) && readBytes(std::uint64_t(input.offset) + offset, output, size);
 }
-const char* discFileStatusText(DiscFileStatus status) {
-    switch (status) {
-    case DiscFileStatus::ready: return "Resource extent validated";
-    case DiscFileStatus::notFound: return "Resource not found";
-    case DiscFileStatus::notReady: return "Disc is not validated";
-    case DiscFileStatus::invalidPath: return "Invalid resource path";
-    case DiscFileStatus::ioError: return "Resource index read failed";
-    case DiscFileStatus::malformed: return "Invalid or ambiguous resource index";
-    }
-    return "Unknown resource error";
-}
 const char* discStatusText(DiscStatus status) {
     switch (status) {
     case DiscStatus::ready: return "GCN USA/PAL r0 structure validated";

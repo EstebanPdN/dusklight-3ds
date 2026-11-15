@@ -1,8 +1,9 @@
 #include "gx_raster_plan.hpp"
 #include "gx_commands.hpp"
 #include <algorithm>
+#include <cstring>
 namespace dusk::native::gx {
-bool planRaster(const CommandRegisters& r,RasterPlan& out,RasterError* error,FogPolicy fogPolicy,ColorStoragePolicy colorPolicy,ClipPolicy clipPolicy,bool validateConstantEarlyAlpha,bool allowAlphaUnion,AlphaIntervalPolicy intervalPolicy){
+bool planRaster(const CommandRegisters& r,RasterPlan& out,RasterError* error,FogPolicy fogPolicy,ColorStoragePolicy colorPolicy,ClipPolicy clipPolicy,bool validateConstantEarlyAlpha,bool allowAlphaUnion,AlphaIntervalPolicy intervalPolicy,bool relaxDualAlpha){
     out={};if(error)*error=RasterError::none;
     auto fail=[&](RasterError e){if(error)*error=e;return false;};
     for(unsigned reg:{0u,0x20u,0x21u,0x40u,0x41u,0x42u,0x43u,0xf1u,0xf3u,0xf5u})
@@ -23,7 +24,10 @@ bool planRaster(const CommandRegisters& r,RasterPlan& out,RasterError* error,Fog
     if(r.bpValid[0x59]&&(r.bp[0x59]&0x3ffff)!=(171u|(171u<<9)))return fail(RasterError::scissorOffset);
     const auto blend=r.bp[0x41],depth=r.bp[0x40],alpha=r.bp[0xf3];
     if(blend&(1u<<1))return fail(RasterError::blend);
-    RasterPlan p;p.clipDisabled=clipDisabled;
+    // Plans are compared as bytes (applied-state filter, shape continuation):
+    // build this one in zeroed storage and hand it out as bytes, so that no
+    // padding byte differs between two equal plans.
+    RasterPlan p;std::memset(static_cast<void*>(&p),0,sizeof(p));p.clipDisabled=clipDisabled;
     p.blend={std::uint8_t(blend&1),std::uint8_t((blend>>8)&7),std::uint8_t((blend>>5)&7),std::uint8_t((blend>>12)&15)};
     p.subtractBlend=(blend&1)&&(blend&(1u<<11));
     p.depth={bool(depth&1),std::uint8_t((depth>>1)&7),bool(depth&16)};
@@ -35,8 +39,17 @@ bool planRaster(const CommandRegisters& r,RasterPlan& out,RasterError* error,Fog
         std::array<AlphaPlan,2> pair;
         if(allowAlphaUnion&&splitAlphaUnion(compare,pair)){
             p.alpha=pair[0];p.alphaSecond=pair[1];p.alphaUnion=true;
+        }else if(!intervalPolicy.enabled||!planAlphaInterval(compare,p.alphaInterval)){
+            // No exact route. Degraded draws may approximate with one test.
+            p.alphaInterval={};
+            if(!relaxDualAlpha)return fail(RasterError::alpha);
+            if(relaxAlpha(compare,p.alpha))p.alphaRelaxed=true;
+            else{
+                AlphaInterval band;
+                if(!planAlphaInterval(compare,band))return fail(RasterError::alpha);
+                p.alpha={6,band.lower};p.alphaBand=true;p.alphaBandUpper=band.upper;
+            }
         }else{
-            if(!intervalPolicy.enabled||!planAlphaInterval(compare,p.alphaInterval))return fail(RasterError::alpha);
             if(!intervalPolicy.ownsTarget)return fail(RasterError::alphaIntervalOwnership);
             // Keep UI strict. This candidate has no orthographic exception.
             if(!r.xfValid[0x1026]||r.xf[0x1026]!=0)return fail(RasterError::alphaIntervalUi);
@@ -49,15 +62,16 @@ bool planRaster(const CommandRegisters& r,RasterPlan& out,RasterError* error,Fog
         }
     }
     p.earlyDepthAlpha=(r.bp[0x43]&64)&&p.depth.enabled&&p.depth.write&&p.alpha.comparison!=7;
-    if(p.earlyDepthAlpha&&(!validateConstantEarlyAlpha||p.alphaUnion||p.alphaInterval.enabled))return fail(RasterError::earlyDepth);
+    if(p.earlyDepthAlpha&&(!validateConstantEarlyAlpha||p.alphaUnion||p.alphaInterval.enabled||p.alphaBand))return fail(RasterError::earlyDepth);
     const auto hwCull=(r.bp[0]>>14)&3;p.cull=hwCull==1?2:hwCull==2?1:hwCull;
     const int x=int((r.bp[0x20]>>12)&2047)-342,y=int(r.bp[0x20]&2047)-342;
     const int right=int((r.bp[0x21]>>12)&2047)-341,bottom=int(r.bp[0x21]&2047)-341;
     if(!currentTargetExtent.valid())return fail(RasterError::missingState);
     const int w=currentTargetExtent.logicalWidth,h=currentTargetExtent.logicalHeight;
     const int x0=std::clamp(x,0,w),y0=std::clamp(y,0,h),x1=std::clamp(right,0,w),y1=std::clamp(bottom,0,h);
-    p.scissor=picaScissor({unsigned(x0),unsigned(y0),unsigned(std::max(0,x1-x0)),unsigned(std::max(0,y1-y0))});
-    out=p;return true;
+    const auto scissor=picaScissor({unsigned(x0),unsigned(y0),unsigned(std::max(0,x1-x0)),unsigned(std::max(0,y1-y0))});
+    p.scissor.left=scissor.left;p.scissor.top=scissor.top;p.scissor.right=scissor.right;p.scissor.bottom=scissor.bottom;p.scissor.empty=scissor.empty;
+    std::memcpy(static_cast<void*>(&out),&p,sizeof(p));return true;
 }
 const char* rasterErrorText(RasterError e){
     switch(e){case RasterError::none:return "none";

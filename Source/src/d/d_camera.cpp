@@ -23,6 +23,9 @@
 #include "m_Do/m_Do_lib.h"
 #include <cmath>
 #include <cstring>
+#if defined(DUSK_TARGET_3DS)
+extern "C" bool duskNativeCameraLog __attribute__((weak));
+#endif
 
 #if DEBUG
 #include "d/d_debug_pad.h"
@@ -11292,6 +11295,14 @@ static void store(camera_process_class* i_camera) {
         OS_REPORT("camera: ERROR: bad eye !!\n");
     }
 
+#if defined(DUSK_TARGET_3DS)
+    // Developer log of the camera handed to the renderer (SD switch camera-log.txt).
+    if (&duskNativeCameraLog && duskNativeCameraLog) {
+        OSReport("CAMLOG store demo=%d frame=%d eye=%.1f %.1f %.1f center=%.1f %.1f %.1f fovy=%.2f bank=%d\n",
+                 int(demoCamera != NULL), demoCamera != NULL ? int(dDemo_c::getFrame()) : -1, eye.x,
+                 eye.y, eye.z, center.x, center.y, center.z, fovy, int(angle.Val()));
+    }
+#endif
     if (!error) {
         fopCamM_SetCenter(camera, center.x, center.y, center.z);
         fopCamM_SetEye(camera, eye.x, eye.y, eye.z);

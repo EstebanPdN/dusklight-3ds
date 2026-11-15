@@ -7,4 +7,6 @@ void waitVideoRetrace();
 std::uint32_t platformVideoRetraceCount();
 void platformWaitVideoRetrace();
 void platformSleepNanoseconds(std::int64_t);
+// Monotonic native tick used only to account time spent in the display wait.
+std::uint64_t platformPaceTick();
 }

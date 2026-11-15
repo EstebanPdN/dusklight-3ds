@@ -2230,6 +2230,19 @@ static void dKr_cullVtx_Set(IF_DUSK(bool const vtxColor = false)) {
 #endif
 }
 
+// Native 3DS: a colour that changes per sprite travels in the vertices instead
+// of a TEV register, so a whole loop of sprites shares one GX state and the
+// merge scope of its packet (NativeImmediateMerge) makes it one draw.
+#if defined(DUSK_TARGET_3DS)
+#define KYR_3DS(x) x
+#define KYR_NOT_3DS(x)
+#define KYR_3DS_ELSE(a, b) a
+#else
+#define KYR_3DS(x)
+#define KYR_NOT_3DS(x) x
+#define KYR_3DS_ELSE(a, b) b
+#endif
+
 static void dKyr_draw_rev_moon(Mtx drawMtx, u8** tex) {
 #if !defined(DUSK_TARGET_3DS)
     ZoneScoped;
@@ -3393,22 +3406,27 @@ void dKyr_drawRain(Mtx drawMtx, u8** tex) {
             TGXTexObj texobj;
             dKyr_set_btitex(&texobj, (ResTIMG*)tex[0]);
 #endif
+#if defined(DUSK_TARGET_3DS)
+            GXSetNumChans(1);
+            GXSetChanCtrl(GX_COLOR0A0, GX_DISABLE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+#else
             GXSetNumChans(0);
             GXSetTevColor(GX_TEVREG0, color_reg0);
+#endif
             GXSetNumTexGens(1);
             GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
             GXSetNumTevStages(1);
-            GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
-            GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_C0, GX_CC_TEXC, GX_CC_ZERO);
+            GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, KYR_3DS_ELSE(GX_COLOR0A0, GX_COLOR_NULL));
+            GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, KYR_3DS_ELSE(GX_CC_RASC, GX_CC_C0), GX_CC_TEXC, GX_CC_ZERO);
             GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-            GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A0, GX_CA_TEXA, GX_CA_ZERO);
+            GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, KYR_3DS_ELSE(GX_CA_RASA, GX_CA_A0), GX_CA_TEXA, GX_CA_ZERO);
             GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
             GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_SET);
             GXSetAlphaCompare(GX_GREATER, 0, GX_AOP_OR, GX_GREATER, 0);
             GXSetZMode(GX_ENABLE, GX_LEQUAL, GX_DISABLE);
             GXSetClipMode(GX_CLIP_DISABLE);
             GXSetNumIndStages(0);
-            dKr_cullVtx_Set();
+            dKr_cullVtx_Set(KYR_3DS(true));
 
             Mtx rotMtx;
             MTXRotRad(rotMtx, 'Z', DEG_TO_RAD(rot));
@@ -3428,7 +3446,7 @@ void dKyr_drawRain(Mtx drawMtx, u8** tex) {
                         color_reg0.a = 20.0f * rain_packet->mRainEff[i].mAlpha;
                     }
 
-                    GXSetTevColor(GX_TEVREG0, color_reg0);
+                    KYR_NOT_3DS(GXSetTevColor(GX_TEVREG0, color_reg0));
                     sp3C.x = rain_packet->mRainEff[i].mBasePos.x + rain_packet->mRainEff[i].mPosition.x;
                     sp3C.y = rain_packet->mRainEff[i].mBasePos.y + rain_packet->mRainEff[i].mPosition.y;
                     sp3C.z = rain_packet->mRainEff[i].mBasePos.z + rain_packet->mRainEff[i].mPosition.z;
@@ -3489,12 +3507,16 @@ void dKyr_drawRain(Mtx drawMtx, u8** tex) {
 
                         GXBegin(GX_QUADS, GX_VTXFMT0, 4);
                         GXPosition3f32(pos[0].x + add_table[j].x, pos[0].y + add_table[j].y, pos[0].z + add_table[j].z);
+                        KYR_3DS(GXColor4u8(color_reg0.r, color_reg0.g, color_reg0.b, color_reg0.a));
                         GXTexCoord2s16(0, 0);
                         GXPosition3f32(pos[1].x + add_table[j].x, pos[1].y + add_table[j].y, pos[1].z + add_table[j].z);
+                        KYR_3DS(GXColor4u8(color_reg0.r, color_reg0.g, color_reg0.b, color_reg0.a));
                         GXTexCoord2s16(0xFF, 0);
                         GXPosition3f32(pos[2].x + add_table[j].x, pos[2].y + add_table[j].y, pos[2].z + add_table[j].z);
+                        KYR_3DS(GXColor4u8(color_reg0.r, color_reg0.g, color_reg0.b, color_reg0.a));
                         GXTexCoord2s16(0xFF, 0xFF);
                         GXPosition3f32(pos[3].x + add_table[j].x, pos[3].y + add_table[j].y, pos[3].z + add_table[j].z);
+                        KYR_3DS(GXColor4u8(color_reg0.r, color_reg0.g, color_reg0.b, color_reg0.a));
                         GXTexCoord2s16(0, 0xFF);
                         GXEnd();
                     }
@@ -5076,16 +5098,21 @@ void drawVrkumo(Mtx drawMtx, GXColor& color, u8** tex) {
             dKyr_set_btitex(&texobj, (ResTIMG*)tex[j]);
 #endif
 
+#if defined(DUSK_TARGET_3DS)
+            GXSetNumChans(1);
+            GXSetChanCtrl(GX_COLOR0A0, GX_DISABLE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+#else
             GXSetNumChans(0);
             GXSetTevColor(GX_TEVREG0, color);
+#endif
             GXSetTevColor(GX_TEVREG1, color_reg1);
             GXSetNumTexGens(1);
             GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
             GXSetNumTevStages(1);
-            GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
-            GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_C1, GX_CC_C0, GX_CC_TEXC, GX_CC_ZERO);
+            GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, KYR_3DS_ELSE(GX_COLOR0A0, GX_COLOR_NULL));
+            GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_C1, KYR_3DS_ELSE(GX_CC_RASC, GX_CC_C0), GX_CC_TEXC, GX_CC_ZERO);
             GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-            GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A0, GX_CA_TEXA, GX_CA_ZERO);
+            GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, KYR_3DS_ELSE(GX_CA_RASA, GX_CA_A0), GX_CA_TEXA, GX_CA_ZERO);
             GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
             GXSetFog(GX_FOG_NONE, 0.0f, 1.0f, 0.1f, 1.0f, color);
             GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_SET);
@@ -5103,9 +5130,11 @@ void drawVrkumo(Mtx drawMtx, GXColor& color, u8** tex) {
             GXSetNumIndStages(0);
             GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_CLR_RGBA, GX_F32, 0);
             GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_CLR_RGBA, GX_RGBA4, 8);
+            KYR_3DS(GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0));
             GXClearVtxDesc();
             GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
             GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+            KYR_3DS(GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT));
 
             if (pass == 1 && j == 0) {
                 MTXRotRad(rotMtx, 'Z', DEG_TO_RAD(rot));
@@ -5179,12 +5208,14 @@ void drawVrkumo(Mtx drawMtx, GXColor& color, u8** tex) {
                     }
 
                     if (!(vrkumo_packet->mVrkumoEff[k].mAlpha <= 0.000001f)) {
-#if TARGET_PC
+#if defined(DUSK_TARGET_3DS)
+                        // The layer's texture is already bound (loaded above for this j).
+#elif TARGET_PC
                         GXLoadTexObj(loaded_texobj, GX_TEXMAP0);
 #else
                         GXLoadTexObj(&texobj, GX_TEXMAP0);
 #endif
-                        GXSetTevColor(GX_TEVREG0, color);
+                        KYR_NOT_3DS(GXSetTevColor(GX_TEVREG0, color));
 
                         sp60 = sp68 * (0.2f + (0.2f * (k / 100.0f)));
                         sp5C = sp68 * (0.55f + (0.3f * (k / 100.0f)));
@@ -5337,12 +5368,16 @@ void drawVrkumo(Mtx drawMtx, GXColor& color, u8** tex) {
                         if (sp84 == 0) {
                             GXBegin(GX_QUADS, GX_VTXFMT0, 4);
                             GXPosition3f32(pos[0].x, pos[0].y, pos[0].z);
+                            KYR_3DS(GXColor4u8(color.r, color.g, color.b, color.a));
                             GXTexCoord2s16(0, 0);
                             GXPosition3f32(pos[1].x, pos[1].y, pos[1].z);
+                            KYR_3DS(GXColor4u8(color.r, color.g, color.b, color.a));
                             GXTexCoord2s16(0xFF, 0);
                             GXPosition3f32(pos[2].x, pos[2].y, pos[2].z);
+                            KYR_3DS(GXColor4u8(color.r, color.g, color.b, color.a));
                             GXTexCoord2s16(0xFF, 0xFF);
                             GXPosition3f32(pos[3].x, pos[3].y, pos[3].z);
+                            KYR_3DS(GXColor4u8(color.r, color.g, color.b, color.a));
                             GXTexCoord2s16(0, 0xFF);
                             GXEnd();
                         }
@@ -5389,18 +5424,22 @@ void drawVrkumo(Mtx drawMtx, GXColor& color, u8** tex) {
 
                                 y_pos = -pos[0].y;
                                 GXPosition3f32(pos[0].x, y_pos, pos[0].z);
+                                KYR_3DS(GXColor4u8(color.r, color.g, color.b, color.a));
                                 GXTexCoord2s16(0, 0);
 
                                 y_pos = -pos[1].y;
                                 GXPosition3f32(pos[1].x, y_pos, pos[1].z);
+                                KYR_3DS(GXColor4u8(color.r, color.g, color.b, color.a));
                                 GXTexCoord2s16(0xFF, 0);
 
                                 y_pos = -pos[2].y;
                                 GXPosition3f32(pos[2].x, y_pos, pos[2].z);
+                                KYR_3DS(GXColor4u8(color.r, color.g, color.b, color.a));
                                 GXTexCoord2s16(0xFF, 0xFF);
 
                                 y_pos = -pos[3].y;
                                 GXPosition3f32(pos[3].x, y_pos, pos[3].z);
+                                KYR_3DS(GXColor4u8(color.r, color.g, color.b, color.a));
                                 GXTexCoord2s16(0, 0xFF);
                                 GXEnd();
                             }

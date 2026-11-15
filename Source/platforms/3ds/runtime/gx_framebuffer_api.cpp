@@ -82,7 +82,7 @@ void dusk::native::peekFramebufferDepthBatch(std::span<const FramebufferDepthQue
     if(!needed)return; // Preserve GXPeekZ's null-output and empty-queue behavior.
     finish("depth batch");
     std::span<const std::byte> snapshot;
-    check(platformReadFramebufferDepthImage(activeFramebuffer(),snapshot),"depth batch read");
+    check(platformReadFramebufferDepthView(activeFramebuffer(),snapshot),"depth batch read");
     std::array<u32,maxFramebufferDepthQueries> values{};
     for(std::size_t i=0;i<queries.size();++i)if(queries[i].output)
         check(sampleFramebufferDepthImage(extent,snapshot,queries[i].x,queries[i].y,values[i]),"depth batch sample");

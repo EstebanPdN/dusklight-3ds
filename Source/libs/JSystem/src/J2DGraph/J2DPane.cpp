@@ -10,6 +10,9 @@
 #ifndef __MWERKS__
 #include "helpers/math.h"
 #endif
+#if defined(DUSK_TARGET_3DS)
+#include "../../../../platforms/3ds/runtime/gx_profile.hpp"
+#endif
 
 J2DPane::J2DPane() : mBounds(), mGlobalBounds(), mClipRect(), mPaneTree(this) {
     mTransform = NULL;
@@ -337,6 +340,10 @@ void J2DPane::draw(f32 x, f32 y, J2DGrafContext const* p_grafCtx, bool isOrthoGr
                 tmpGraf.setScissor();
             }
             GXSetCullMode((GXCullMode)mCullMode);
+#if defined(DUSK_TARGET_3DS)
+            static const auto selfIndex = dusk::native::registerGxNamedProfile("j2d.drawSelf");
+            dusk::native::GxNamedProfileScope selfScope(selfIndex);
+#endif
             drawSelf(x, y, &tmpGraf.mPosMtx);
         }
 

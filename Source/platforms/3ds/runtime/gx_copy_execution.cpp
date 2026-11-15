@@ -1,4 +1,5 @@
 #include "copy_lifecycle_probe.hpp"
+#include "gx_state_serial.hpp"
 #include "gx_copy_pixels.hpp"
 #include "gx_copy_images.hpp"
 #include "texture_gx.hpp"
@@ -6,6 +7,7 @@
 #include "gx_framebuffer.hpp"
 #include "gx_stream.hpp"
 #include "gpu_sync.hpp"
+#include "gpu_canary.hpp"
 #include "gx_profile.hpp"
 #include "gx_texture_commands.hpp"
 #include "gx_state.hpp"
@@ -161,6 +163,18 @@ bool gpuCaptureResident(const void* identity,gx::TextureHandle handle){
     float su,sv;const bool bound=bindGxTexture(texture,su,sv,0);invalidateGxTextureBindings();
     return bound&&gpuCaptureTexture(handle,w,h);
 }
+}
+// Native render-to-texture: the copy image whose resident RGBA8 texture a
+// renderer may draw into (see drawGxShadowCasters).
+bool gpuRenderDestination(const void* identity,gx::TextureHandle& handle){
+    if(!gpuCaptureEnabled())return false;
+    for(auto& value:images)if(value.identity==identity){
+        if(!value.handle||!value.palette.empty()||!gpuCaptureResident(value.identity,value.handle))return false;
+        handle=value.handle;return true;
+    }
+    return false;
+}
+namespace {
 // Diagnostic: compare the GPU result with the CPU reference path (readback,
 // GX encode, PICA decode) under the four axis flips of the image region.
 void checkGpuCapture(FramebufferHandle framebuffer,const ColorCopyPlan& plan,const CopyImage& image){
@@ -198,7 +212,9 @@ void executeTextureCopy(void* identity,GXBool doClear,const gx::CopySurface& s,c
     const auto planner=s.depth?planDepthCopy:planColorCopy;
     if(!planner(gx::currentTargetExtent,s.source[0],s.source[1],s.source[2],s.source[3],s.width,s.height,unsigned(s.format),plan))
         fail("copy format/extent");
-    if(!s.depth&&gpuCaptureEnabled()){
+    // GPU-resident capture takes two transfer-engine copies per capture; a
+    // console whose transfer engine stopped takes the CPU path (no transfers).
+    if(!s.depth&&gpuCaptureEnabled()&&!gpuCanaryTransferLevel()){
         CopyImage* existing=nullptr;
         for(auto& value:images)if(value.identity==identity){existing=&value;break;}
         if(existing&&existing->handle&&existing->palette.empty()&&existing->bytes==plan.bytes+32&&existing->bti[0]==plan.format&&
@@ -277,6 +293,7 @@ namespace dusk::native {
 void optionalCopyStatistics(std::uint64_t& skipped,std::uint64_t& done,std::uint64_t& materialized){skipped=optionalCopiesSkipped;done=optionalCopiesDone;materialized=deferredMaterialized;}
 }
 extern "C" void GXCopyTex(void* identity,GXBool doClear){
+    ++dusk::native::gxPicaStateSerial; // a copy can change or defer texture contents
     using namespace dusk::native;
     const bool optional=optionalNextCopy;optionalNextCopy=false;
     GxProfileScope profile(GxProfilePart::copy);
@@ -307,7 +324,13 @@ extern "C" void GXCopyTex(void* identity,GXBool doClear){
             identity,static_cast<unsigned long>(token),static_cast<void*>(existing),existing?static_cast<unsigned long long>(existing->handle):0ull,int(sameLayout),
             static_cast<unsigned long long>(gx::textureFrameCounter),static_cast<unsigned long long>(gx::watchedCaptureLastUse),
             existing?static_cast<unsigned long>(existing->bytes):0ul,static_cast<unsigned long>(plan.bytes+32));}}
-        if(sameLayout&&token&&gx::textureFrameCounter-gx::watchedCaptureLastUse>30){
+        // Each capture of the frame is judged by its own consumers: with the
+        // water on screen only the capture taken before it is copied, not the
+        // later one that nothing samples.
+        static std::uint32_t slotFrame=~0u;static unsigned slot=0;
+        if(slotFrame!=gx::textureFrameCounter){slotFrame=gx::textureFrameCounter;slot=0;}else if(slot<3)++slot;
+        gx::watchedCaptureSlot=slot;
+        if(sameLayout&&token&&gx::textureFrameCounter-gx::watchedCaptureSlotUse[slot]>30){
             // Defer: a same-frame consumer (full-screen effect) materializes it
             // right before its draw; unused captures are never read back.
             pendingCapture={true,identity,s,activeFramebuffer()};
@@ -320,6 +343,7 @@ extern "C" void GXCopyTex(void* identity,GXBool doClear){
     executeTextureCopy(identity,doClear,s,&r,activeFramebuffer(),__builtin_extract_return_addr(__builtin_return_address(0)));
 }
 extern "C" void GXDestroyCopyTex(void* identity){
+    ++dusk::native::gxPicaStateSerial; // a copy can change or defer texture contents
     using namespace dusk::native;
     if(!identity)return;
     (void)registers();
@@ -327,6 +351,7 @@ extern "C" void GXDestroyCopyTex(void* identity){
     for(auto& image:images)if(image.identity==identity){discard(image);return;}
 }
 extern "C" void GXCopyDisp(void* identity,GXBool doClear){
+    ++dusk::native::gxPicaStateSerial; // a copy can change or defer texture contents
     using namespace dusk::native;
     const auto& r=registers();const auto& s=r.copy.display;
     if(!identity||!s.sourceReady||!s.destinationReady||!activeFramebuffer())fail("display descriptor");
@@ -335,7 +360,9 @@ extern "C" void GXCopyDisp(void* identity,GXBool doClear){
     if(!planColorCopy(gx::currentTargetExtent,s.source[0],s.source[1],s.source[2],s.source[3],s.width,s.height,6,validated))fail("display extent");
     // C3D_FrameEnd transfers this actual main surface to the top LCD. Original
     // XFB allocations are identities; C3D owns presentation/storage on 3DS.
-    if(platformCompleteGpu(500000000)!=GpuCompletion::complete)fail("display completion");
+    // The LCD transfer follows the frame's draws in the GPU queue: the CPU
+    // need not wait here (see nativeGxSyncWaits).
+    if(nativeGxSyncWaits()&&platformCompleteGpu(500000000)!=GpuCompletion::complete)fail("display completion");
     // Clearing must occur after the deferred LCD transfer, at next frame begin.
     // Main's frame loop clears then; an immediate fill would erase this frame.
     if(doClear){

@@ -85,6 +85,8 @@ static void publishNativeSceneCamera(const Mtx44 projection, const view_port_cla
 #include <algorithm>
 #if defined(DUSK_TARGET_3DS)
 #include "../../platforms/3ds/runtime/gx_copy_images.hpp"
+#include "../../platforms/3ds/runtime/screen_effects.hpp"
+#include "helpers/native_effects.h"
 #include "../../platforms/3ds/runtime/gx_profile.hpp"
 #undef GX_DEBUG_GROUP
 #define GX_DEBUG_GROUP(name, ...) do { \
@@ -1079,9 +1081,16 @@ static void drawDepth_blurTex(TGXTexObj &dst) {
 }
 #endif
 
+#if defined(DUSK_TARGET_3DS)
+static void retry_captue_frame(view_class* param_0, view_port_class* param_1, int param_2);
+#endif
 static void drawDepth2(view_class* param_0, view_port_class* param_1, int param_2) {
 #if defined(DUSK_TARGET_3DS)
-    // Native baseline intentionally disables optional depth-of-field feedback.
+    // Native: no depth-of-field pass, but its frame copy stays. The lists drawn
+    // next (refracting water, heat haze) sample the scene as it is now; without
+    // this copy they read the one taken after they were drawn in the previous
+    // frame and feed on their own image until only the fog colour is left.
+    retry_captue_frame(param_0, param_1, param_2);
     return;
 #endif
     DUSK_DESKTOP_ONLY(ZoneScoped;)
@@ -1771,6 +1780,32 @@ void mDoGph_gInf_c::bloom_c::draw2() {
 
 void mDoGph_gInf_c::bloom_c::draw() {
     DUSK_DESKTOP_ONLY(ZoneScoped;)
+#if defined(DUSK_TARGET_3DS)
+    // Native bloom and monochrome filter (platforms/3ds/runtime/screen_effects.hpp).
+    const bool filters = (mEnable || mMonoColor.a != 0) && dusk::native_effects::bloom != 0;
+    const dusk::native_effects::Haze haze = dusk::native_effects::haze;
+    dusk::native_effects::haze = {};
+    if (filters || haze.alpha != 0) {
+        static unsigned hazePhase;
+        dusk::native::BloomSettings settings;
+        settings.haze = haze.alpha;
+        settings.hazeAmplitude = haze.amplitude;
+        settings.hazePhase = ++hazePhase;
+        settings.glow = filters && mEnable;
+        if (filters) {
+            settings.mono = {mMonoColor.r, mMonoColor.g, mMonoColor.b, mMonoColor.a};
+        }
+        settings.point = mPoint;
+        settings.blurSize = mBlureSize;
+        settings.blurRatio = mBlureRatio;
+        settings.mode = mMode;
+        settings.blend = {mBlendColor.r, mBlendColor.g, mBlendColor.b, mBlendColor.a};
+        if (dusk::native::drawGxBloom(settings)) {
+            dusk::native_effects::counters.bloomPasses++;
+        }
+    }
+    return;
+#endif
 #if !defined(DUSK_TARGET_3DS)
     if (dusk::getSettings().game.bloomMode.getValue() == dusk::BloomMode::Dusk) {
         draw2();
@@ -2457,7 +2492,9 @@ int mDoGph_Painter() {
             fapGm_HIO_c::startCpuTimer();
             #endif
 
+#if !defined(DUSK_TARGET_3DS)
             GX_DEBUG_GROUP(dComIfGd_drawShadow, camera_p->view.viewMtx);
+#endif
 
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
             dusk::mods::gfx_run_stage(GFX_STAGE_SCENE_AFTER_TERRAIN, &camera_p->view, view_port);
@@ -2487,6 +2524,13 @@ int mDoGph_Painter() {
 #endif
 
             GX_DEBUG_GROUP(dComIfGd_drawOpaListPacket);
+#if defined(DUSK_TARGET_3DS)
+            // Native shadows are drawn after the opaque lists: the model
+            // shadows are made from the PICA draws those lists just issued
+            // (no second draw of the casters), and the depth test keeps the
+            // shadows on the floor behind everything drawn so far.
+            GX_DEBUG_GROUP(dComIfGd_drawShadow, camera_p->view.viewMtx);
+#endif
 
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
             dusk::mods::gfx_run_stage(GFX_STAGE_SCENE_AFTER_OPAQUE, &camera_p->view, view_port);

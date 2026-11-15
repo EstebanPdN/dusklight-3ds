@@ -12,7 +12,9 @@ def main():
  inputs=[Path(__file__).resolve(),*[s/x for x in units+headers]];hashes={str(x.relative_to(ROOT)):digest(x)for x in inputs}
  common=['-std=c++20','-DTARGET_PC=1','-DDUSK_TARGET_3DS=1','-I'+str(s/'extern/aurora/include'),'-I'+str(s/'include'),'-Wall','-Wextra','-Werror','-Wno-invalid-noreturn']
  commands=[['clang++',*common,'-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',*[str(s/x)for x in units],'-o',str(out/'test')]]
- arm=['/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++',*common,'-O2','-g','-march=armv6k','-mtune=mpcore','-mfloat-abi=hard','-mfpu=vfp','-mtp=soft','-D__3DS__','-fstack-usage']
+ # The pinned toolchain may live in /opt or in the owner's home directory.
+ sdk=Path(os.environ.get('DEVKITPRO') or next((p for p in (Path.home()/'devkitpro',Path('/opt/devkitpro')) if p.is_dir()),'/opt/devkitpro'))
+ arm=[str(sdk/'devkitARM/bin/arm-none-eabi-g++'),*common,'-O2','-g','-march=armv6k','-mtune=mpcore','-mfloat-abi=hard','-mfpu=vfp','-mtp=soft','-D__3DS__','-fstack-usage']
  commands.append([*arm,'-c',str(s/'platforms/3ds/runtime/video_retrace.cpp'),'-o',str(out/'video-retrace-arm.o')])
  rec={'status':'running','origin':'Synthetic host IRQ/sleep source, actual native adapter and original OS queue; not GSP execution, full video or game acceptance','commands':commands,'input_sha256':hashes}
  try:

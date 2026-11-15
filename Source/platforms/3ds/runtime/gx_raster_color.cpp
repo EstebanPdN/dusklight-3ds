@@ -103,8 +103,9 @@ bool evaluateRasterColor(const RasterColorPlan& p,const DecodedVertex& v,std::ar
             if(channel.diffuse||channel.attenuation!=2){
                 for(unsigned c=0;c<3;++c){if(!std::isfinite(transformed->viewPosition[c]))return fail(RasterColorError::nonfinite,error);direction[c]=light.position[c]-transformed->viewPosition[c];}
                 distance2=dot(direction,direction);distance=std::sqrt(distance2);
-                if(!std::isfinite(distance)||distance==0)return fail(RasterColorError::lighting,error);
-                for(auto& c:direction)c/=distance;
+                if(!std::isfinite(distance)||(p.strictFinite&&distance==0))return fail(RasterColorError::lighting,error);
+                // A vertex exactly at the light keeps a zero direction.
+                if(distance!=0)for(auto& c:direction)c/=distance;
             }
             float attenuation=1,diffuse=1;
             if(channel.attenuation!=2){
@@ -125,13 +126,17 @@ bool evaluateRasterColor(const RasterColorPlan& p,const DecodedVertex& v,std::ar
                 if(channel.attenuation==1)denominator=light.distance[0]+light.distance[1]*distance+light.distance[2]*distance2;
                 else {
                     auto coefficients=light.distance;
-                    if(channel.diffuse){const float length=std::sqrt(dot(coefficients,coefficients));if(!std::isfinite(length)||length==0)return fail(RasterColorError::lighting,error);for(auto& c:coefficients)c/=length;}
+                    if(channel.diffuse){const float length=std::sqrt(dot(coefficients,coefficients));if(!std::isfinite(length)||(p.strictFinite&&length==0))return fail(RasterColorError::lighting,error);if(length!=0)for(auto& c:coefficients)c/=length;}
                     const float raw=polynomial(coefficients,cosine);
                     if(p.strictFinite&&!std::isfinite(raw))return fail(RasterColorError::nonfinite,error);
                     denominator=std::max(0.f,raw);
                 }
-                if(!std::isfinite(denominator)||denominator==0||(p.strictFinite&&denominator<0))return fail(RasterColorError::lighting,error);
-                const float raw=polynomial(light.cosine,cosine)/denominator;
+                if(!std::isfinite(denominator)||(p.strictFinite&&denominator<=0))return fail(RasterColorError::lighting,error);
+                // The game leaves lights with all-zero distance coefficients
+                // enabled (Hyrule Castle). GX then divides by zero; as in the
+                // reference software renderer, n/0 is one for n > 0, else zero.
+                const float numerator=polynomial(light.cosine,cosine);
+                const float raw=denominator==0?(numerator>0?1.f:0.f):numerator/denominator;
                 if(p.strictFinite&&!std::isfinite(raw))return fail(RasterColorError::nonfinite,error);
                 attenuation=std::max(0.f,raw);
             }

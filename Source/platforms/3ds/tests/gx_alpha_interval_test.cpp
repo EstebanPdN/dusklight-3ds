@@ -2,6 +2,7 @@
 // Samples/coverage are scripted; this is not a PICA rasterizer or native proof.
 #include "../gx_pica.cpp"
 #include "../runtime/gx_commands.hpp"
+#include "../runtime/gx_compact_cache.hpp"
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -78,7 +79,8 @@ void reset(){
 }
 GpuGeometryBatch batch(unsigned triangles){
  GpuGeometryBatch b;assert(reserveGxGeometry(triangles*3,triangles*3,b));
- for(unsigned n=0;n<b.vertices.size();++n){auto& v=b.vertices[n];v={};v.position={float(n),0,-.5f,1};v.color={.8f,.2f,.3f,.7f};b.indices[n]=n;}
+ // w=64 keeps every vertex inside the hardware clip guard (|x|,|y| <= 8w).
+ for(unsigned n=0;n<b.vertices.size();++n){auto& v=b.vertices[n];v={};v.position={float(n),0,-.5f,64};v.color={.8f,.2f,.3f,.7f};b.indices[n]=n;}
  immutable.assign(std::as_bytes(b.vertices).begin(),std::as_bytes(b.vertices).end());return b;
 }
 void restored(const RasterPlan& r){
@@ -258,6 +260,11 @@ void C3D_DrawElements(GPU_Primitive_t prim,int count,int type,const void* indice
 }
 namespace dusk::native {
 void destroyGxTextures(){}
+// Frame-begin hooks of the geometry backend; this test has no capture,
+// no texture bindings and no static compact cache.
+void dropPendingCapture(){}
+void invalidateGxTextureBindings(){}
+namespace gx {StaticCompactCache* staticCompactCache(){return nullptr;}}
 namespace gx {void setDrawSink(DrawSink,void*){}}
 bool platformBeginGpuCommands(){return true;}
 GpuCompletion platformReserveGpuEntries(unsigned n,std::uint64_t){assert(n==2);return GpuCompletion::complete;}

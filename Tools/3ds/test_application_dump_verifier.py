@@ -104,4 +104,100 @@ class DumpVerifierTests(unittest.TestCase):
         self.map=self.map.replace('3f7fe000','00001000'); self.publish()
         with self.assertRaisesRegex(ValueError,'scope'): audit.inspect(self.root)
 
+
+
+try:
+    from compression import zstd as _zstd  # standard library since Python 3.14
+except ImportError:
+    _zstd = None
+
+
+@unittest.skipIf(_zstd is None, 'packed dumps need compression.zstd (Python 3.14 or later)')
+class PackedDumpTests(unittest.TestCase):
+    """DUSKLIGHT_APPLICATION_DUMP_2: one file of blocks, a text index and a trailer."""
+    def build(self, corrupt=None, drop_trailer=False, extras=()):
+        import struct
+        from compression import zstd
+        body = bytearray(b'DUSKDPK2' + bytes(8)); lines = []
+
+        def record(prefix, raw):
+            if not any(raw):
+                lines.append(prefix + ' zero'); return
+            packed = zstd.compress(raw)
+            kind, stored = ('zstd', packed) if len(packed) < len(raw) else ('raw', raw)
+            lines.append(f'{prefix} {kind} {len(body)} {len(stored)} fnv1a32={fnv(raw):08x}')
+            body.extend(stored)
+
+        lines.append('format=DUSKLIGHT_APPLICATION_DUMP_2\ncoherence=chunked-live-non-atomic\nframe=300\nscene=TEST\nbuild=host-fixture\ncompression=zstd')
+        lines.append('layout lcd-top-left GSP-BGR8-rotated address=14000000')
+        top = bytes(range(256)) * (400 * 240 * 3 // 256) + bytes(400 * 240 * 3 % 256)
+        for at in range(0, len(top), 262144):
+            record(f'blob lcd-top-left {at:08x} {min(262144, len(top) - at):08x}', top[at:at + 262144])
+        record(f'blob lcd-bottom {0:08x} {320 * 240 * 2:08x}', bytes([7, 9]) * (320 * 240))
+        for at in range(0, 0x600000, 0x80000):
+            record(f'blob vram {at:08x} {0x80000:08x}', bytes(0x80000))
+        for name, raw in extras:
+            record(f'blob {name} {0:08x} {len(raw):08x}', raw)
+        lines.append('range base size perm state pageflags decision')
+        lines.append('range 00000000 00100000 0 0 00000000 not-readable')
+        lines.append('range 00100000 00002000 5 4 00000000 eligible')
+        record('block 00100000 00001000', bytes([17]) * 4096)
+        record('block 00101000 00001000', bytes(4096))
+        lines.append('range 00102000 006fe000 0 0 00000000 not-readable')
+        lines.append('range 00800000 00002000 3 5 00000000 eligible')
+        lines.append('exclude 00800000 00001000 diagnostic-workspace')
+        record('block 00801000 00001000', bytes(range(256)) * 16)
+        lines.append('range 00802000 3f7fe000 0 0 00000000 not-readable')
+        stored = len(body) - 16
+        lines.append(f'ram_bytes=12288\nzero_bytes=4096\nstored_bytes={stored}\nseconds_sd_write=0.250')
+        index = ('\n'.join(lines) + '\n').encode('ascii')
+        if corrupt: body, index = corrupt(body, index)
+        count = sum(1 for line in index.decode('ascii').splitlines() if line.startswith(('blob ', 'block ')))
+        out = bytes(body) + index
+        if not drop_trailer:
+            out += b'DPK2END\0' + struct.pack('<6I', len(body), 0, len(index), fnv(index), count, 0)
+        path = Path(self.temp.name) / 'app-1-f300.dpk'; path.write_bytes(out); return path
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+
+    def test_valid_and_extract(self):
+        receipt = audit.inspect_packed(self.build(), Path(self.temp.name) / 'out')
+        self.assertEqual((receipt['ram_bytes'], receipt['zero_bytes'], receipt['format']), (12288, 4096, 2))
+        self.assertEqual(receipt['blocks']['zero'], 13)
+        out = Path(self.temp.name) / 'out'
+        self.assertEqual((out / 'ram-00100000-00002000.bin').read_bytes(), bytes([17]) * 4096 + bytes(4096))
+        self.assertEqual((out / 'ram-00800000-00002000.bin').read_bytes(), bytes(4096) + bytes(range(256)) * 16)
+        self.assertEqual((out / 'lcd-top.png').read_bytes()[:8], b'\x89PNG\r\n\x1a\n')
+        self.assertEqual(len((out / 'vram.bin').read_bytes()), 0x600000)
+
+    def test_extra_blobs(self):
+        # Alpha 2: hardware registers, recent frame times and small system pages.
+        extras = [('gpu-hw-registers', bytes(range(256)) * 28), ('frames-csv', b'frame,stage\n1,TEST\n'), ('gpu-jobs', bytes([7]) * 56 * 3),
+                  ('page-10002000', bytes([3]) * 4096), ('page-1ff80000', bytes([5]) * 4096)]
+        out = Path(self.temp.name) / 'extra'
+        audit.inspect_packed(self.build(extras=extras), out)
+        self.assertEqual((out / 'frames.csv').read_bytes(), b'frame,stage\n1,TEST\n')
+        self.assertEqual(len((out / 'gpu-hw-registers.bin').read_bytes()), 0x1c00)
+        self.assertEqual((out / 'gpu-jobs.bin').read_bytes(), bytes([7]) * 56 * 3)
+        self.assertEqual((out / 'page-10002000.bin').read_bytes(), bytes([3]) * 4096)
+        with self.assertRaisesRegex(ValueError, 'inventory'):
+            audit.inspect_packed(self.build(extras=[('surprise', b'x' * 16)]))
+        with self.assertRaisesRegex(ValueError, 'inventory'):
+            audit.inspect_packed(self.build(extras=[('page-zzzzzzzz', b'x' * 16)]))
+
+    def test_unfinished(self):
+        with self.assertRaisesRegex(ValueError, 'Trailer'): audit.inspect_packed(self.build(drop_trailer=True))
+
+    def test_block_checksum(self):
+        def flip(body, index):
+            body[-1] ^= 1; return body, index
+        with self.assertRaises((ValueError, Exception)): audit.inspect_packed(self.build(corrupt=flip))
+
+    def test_uncaptured_region(self):
+        def drop(body, index):
+            return body, index.replace(b'exclude 00800000 00001000 diagnostic-workspace\n', b'')
+        with self.assertRaisesRegex(ValueError, 'coverage|Uncaptured'): audit.inspect_packed(self.build(corrupt=drop))
+
+
 if __name__ == '__main__': unittest.main()

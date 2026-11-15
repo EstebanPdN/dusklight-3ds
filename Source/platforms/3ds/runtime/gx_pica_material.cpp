@@ -531,6 +531,25 @@ bool planRasterLookupMaterial(const MaterialState& state,PicaMaterialPlan& out,M
     candidate.textureCount+=2;
     out=candidate;return true;
 }
+bool appendAlphaBand(PicaMaterialPlan& plan,std::uint8_t upper){
+    const unsigned n=plan.stageCount;
+    if(!n||n>3||upper==255||plan.rasterCarrier!=RasterCarrier::none)return false;
+    const MaterialInput previous{MaterialSource::previous,MaterialOperand::alpha,false};
+    for(unsigned i=n;i<n+3;++i){
+        plan.stages[i]={};
+        plan.stages[i].rgb.inputs[0]={MaterialSource::previous,MaterialOperand::color,false};
+    }
+    // t = 4*(upper+1 - alpha): zero above the band, positive inside it.
+    plan.stages[n].constant={0,0,0,std::uint8_t(upper+1)};
+    plan.stages[n].alpha={MaterialFunction::subtract,{{{MaterialSource::constant,MaterialOperand::alpha,false},previous,{}}},2};
+    // 8*t: one from eight levels below the upper bound downwards.
+    plan.stages[n+1].alpha={MaterialFunction::add,{{previous,previous,{}}},2};
+    // The original alpha, captured after its last stage, times that factor.
+    plan.stages[n+2].alpha={MaterialFunction::modulate,{{previous,{MaterialSource::buffer,MaterialOperand::alpha,false},{}}},0};
+    plan.bufferUpdateAlpha|=std::uint8_t(1u<<(n-1));
+    plan.stageCount=std::uint8_t(n+3);
+    return true;
+}
 bool routeProjectiveTexture(PicaMaterialPlan& plan,std::uint8_t projectiveCoordinates) {
     if(plan.textureCount>3 || !plan.stageCount || plan.stageCount>6)return false;
     unsigned projected=3;

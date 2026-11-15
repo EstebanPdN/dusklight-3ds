@@ -1,5 +1,31 @@
 # Source publication verification
 
+## Console test builds and cleanup — 2026-11-15
+
+This update covers four private console test builds (Alpha 0 to Alpha 3) of
+the GX compatibility route on the owner's New 3DS, and a source cleanup
+(private test build Alpha 4: Alpha 3 plus the cleanup). No
+binary is published. Emulator results come from Azahar 2126.2; console
+results come from the owner's logs, GPU guard records and dumps.
+
+| Check | Result and scope |
+| --- | --- |
+| Console: title and intro | Runs at about 10-16 pictures per second with real-speed logic (30 logic steps per second). Cutscene cameras held and jumped until Alpha 2 ([ADR 0002](decisions/0002-int-sized-enums.md)); the Alpha 2 fix is emulator-verified, console confirmation pending. |
+| Console: START+SELECT test | Starts from the title and travels to a stage (Alpha 2). |
+| Console: entering gameplay | Stopped on the first gameplay picture in every Alpha 0 and Alpha 2 session (transfer engine after the minimap read-back). Alpha 3 removes that job ([ADR 0003](decisions/0003-cpu-readbacks-and-transfer-stops.md)); not yet run on the console. |
+| Console: saves | Creation and writing work on the SD card since Alpha 1 (whole-file replace without rename-over). |
+| Azahar: title to new game | Intro, file select, name entry and the opening cutscene play; L+R+A dump verifies. |
+| Azahar: read-back equivalence | CPU read-backs equal the transfer-engine read-backs byte for byte (240x400 frame, 216x216 minimap). |
+| Azahar: automatic test | START+SELECT from the title intro completes six zones with no failure. |
+| Azahar: GPU guard paths | Both transfer-stop fallback levels play; a simulated transfer stop is recorded and classified. |
+| Cleanup equivalence | Removing three compile-time probes leaves the preprocessed output of all eleven affected game and startup files byte-identical. |
+| Public host suite and CI commands | All ten public host checks and the five conversion/format suites pass locally. |
+| Host research runners | Seven runners that no longer built or ran (audio PCM, GPU queue, indexed geometry, framebuffer viewport, depth probe, both alpha-interval runners) and the vertex-decode runner build and pass again; see [Testing](TESTING.md#existing-research-runners). |
+
+Menus with many 2D panels (file select, name entry) run at about 6-8 pictures
+per second on both the console and Azahar. Physical 30 FPS, full-game
+progression and whole-game console stability remain unverified.
+
 ## PAL data and retained GX correctness — 2026-10-29
 
 This update targets the retained compatibility route with

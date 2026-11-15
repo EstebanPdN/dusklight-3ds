@@ -6,6 +6,11 @@
 
 #include "JSystem/JStudio/JStudio_JStage/object-camera.h"
 
+#if defined(DUSK_TARGET_3DS)
+extern "C" bool duskNativeCameraLog __attribute__((weak));
+extern "C" void OSReport(const char*, ...);
+#endif
+
 JStudio_JStage::TAdaptor_camera::TAdaptor_camera(JStage::TSystem const* param_1,
                                                  JStage::TCamera* param_2)
     : TAdaptor_object_(this, param_1, param_2) {
@@ -70,6 +75,37 @@ void JStudio_JStage::TAdaptor_camera::adaptor_do_update(u32 param_1) {
     setJSG_position_(pControl);
     setJSG_targetPosition_(pControl);
     pJSGObject_->JSGUpdate();
+#if defined(DUSK_TARGET_3DS)
+    // Developer log of the cutscene camera (SD switch camera-log.txt).
+    if (&duskNativeCameraLog && duskNativeCameraLog) {
+        Vec local, target, eye, at;
+        adaptor_getVariableValue_Vec(&local, sauVariableValue_3_POSITION_XYZ);
+        adaptor_getVariableValue_Vec(&target, sauVariableValue_3_TARGET_POSITION_XYZ);
+        get_pJSG_()->JSGGetViewPosition(&eye);
+        get_pJSG_()->JSGGetViewTargetPosition(&at);
+        OSReport("CAMLOG stb local=%.1f %.1f %.1f target=%.1f %.1f %.1f parent=%d fn=%d obj=%p node=%d targetParent=%d obj=%p node=%d eye=%.1f %.1f %.1f at=%.1f %.1f %.1f fovy=%.2f\n",
+                 local.x, local.y, local.z, target.x, target.y, target.z, int(field_0x114),
+                 int(field_0x108), (const void*)field_0x10c, int(field_0x110), int(field_0x120),
+                 (const void*)field_0x118, int(field_0x11c), eye.x, eye.y, eye.z, at.x, at.y, at.z,
+                 get_pJSG_()->JSGGetProjectionFovy());
+        // How the Z position is produced: its counter, source and the
+        // function value sampled at the current time and half a frame later.
+        JStudio::TVariableValue* z = adaptor_referVariableValue(sauVariableValue_3_POSITION_XYZ[2]);
+        const f64 spf = pControl->getSecondPerFrame();
+        const int kind = z->field_0x8 == &JStudio::TVariableValue::update_functionValue_ ? 2 :
+                         z->field_0x8 == &JStudio::TVariableValue::update_time_ ? 1 :
+                         z->field_0x8 == &JStudio::TVariableValue::update_immediate_ ? 0 : -1;
+        if (kind == 2) {
+            JStudio::TFunctionValue* fv = z->field_0xc.fv;
+            const f64 now = z->field_0x4 * spf;
+            const f64 a = fv->getValue(now), b = fv->getValue(now + spf * 0.5), c = fv->getValue(now);
+            OSReport("CAMLOG z counter=%lu spf=%.5f type=%lu t=%.4f value=%.1f half=%.1f again=%.1f\n",
+                     (unsigned long)z->field_0x4, spf, (unsigned long)fv->getType(), now, a, b, c);
+        } else {
+            OSReport("CAMLOG z counter=%lu kind=%d value=%.1f\n", (unsigned long)z->field_0x4, kind, z->getValue());
+        }
+    }
+#endif
 }
 
 void JStudio_JStage::TAdaptor_camera::adaptor_do_data(void const* param_1, u32 param_2,

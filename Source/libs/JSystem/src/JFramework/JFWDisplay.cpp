@@ -387,6 +387,23 @@ static void waitPrecise(Limiter& limiter, Limiter::duration_t targetNs) {
 #endif
 
 static void waitForTick(u32 p1, u16 p2) {
+#if defined(DUSK_TARGET_3DS)
+    // One deadline per displayed frame, counted in LCD retraces. The scenes
+    // request a tick rate (1/30 s in play, 1/60 s in menus); a timed sleep from
+    // "now" drifts against VBlank and stacked with the frame loop's own retrace
+    // waits. A frame that is already late returns at once and is not charged.
+    static dusk::native::FrameRetraceDeadline deadline;
+    u32 interval = (p2 == 0) ? 1 : p2;
+    if (p1 != 0) {
+        const u32 retrace = OS_TIMER_CLOCK / 60;
+        interval = (p1 + retrace / 2) / retrace;
+        if (interval == 0) {
+            interval = 1;
+        }
+    }
+    dusk::native::waitForFrameRetraces(JUTVideo::getManager()->getMessageQueue(), interval, deadline);
+    return;
+#endif
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
     static Limiter limiter;
 
@@ -419,9 +436,6 @@ static void waitForTick(u32 p1, u16 p2) {
         u32 uVar1 = (p2 == 0) ? 1 : p2;
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
         waitPrecise(limiter, static_cast<Uint64>((RETRACE_PERIOD * uVar1).count()));
-#elif defined(DUSK_TARGET_3DS)
-        static dusk::native::FrameRetraceDeadline deadline;
-        dusk::native::waitForFrameRetraces(JUTVideo::getManager()->getMessageQueue(), uVar1, deadline);
 #else
         static u32 nextCount = VIGetRetraceCount();
         OSMessage msg;

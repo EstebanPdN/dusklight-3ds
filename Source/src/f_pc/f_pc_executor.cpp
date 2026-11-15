@@ -3,6 +3,9 @@
  * Framework - Process Executor
  */
 
+#if defined(DUSK_TARGET_3DS)
+#include "../../platforms/3ds/runtime/gx_profile.hpp"
+#endif
 #include "f_pc/f_pc_executor.h"
 #include "f_pc/f_pc_debug_sv.h"
 #include "f_pc/f_pc_manager.h"
@@ -33,6 +36,9 @@ int fpcEx_Execute(base_process_class* i_proc) {
     if (i_proc->state.init_state != 2 || fpcPause_IsEnable(i_proc, 1) == TRUE)
         return 0;
 
+#if defined(DUSK_TARGET_3DS)
+    dusk::native::GxProcessProfileScope processProfile(0, i_proc->profname);
+#endif
     return fpcBs_Execute(i_proc);
 }
 

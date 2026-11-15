@@ -30,7 +30,11 @@ AccessControlInfo:
   IdealProcessor: 0
   AffinityMask: 1
   Priority: 16
-  MaxCpu: 0x9E
+  # Bit 7 selects the multi-thread core-1 mode and the low bits the highest
+  # share APT_SetAppCpuTimeLimit may grant; 0x9E capped it at 30 % on hardware
+  # in other ports (sms-3ds measured 47.7 against 35 ms per frame).
+  MaxCpu: 0xFF
+  ResourceLimitCategory: Application
   HandleTableSize: 0x200
   DisableDebug: false
   EnableForceDebug: false
@@ -76,6 +80,16 @@ AccessControlInfo:
     WaitSynchronizationN: 37
     DuplicateHandle: 39
     GetSystemTick: 40
+    GetHandleInfo: 41
+    GetThreadInfo: 44
+    GetProcessIdOfThread: 54
+    GetProcessIdealProcessor: 6
+    GetThreadIdealProcessor: 15
+    GetCurrentProcessorNumber: 17
+    CreateTimer: 26
+    SetTimer: 27
+    CancelTimer: 28
+    ClearTimer: 29
     GetSystemInfo: 42
     GetProcessInfo: 43
     ConnectToPort: 45
@@ -99,6 +113,8 @@ AccessControlInfo:
     - ir:rst
     - dsp::DSP
     - ptm:u
+    # osSetSpeedupEnable (804 MHz + L2 again after HOME or sleep) goes through ptm:sysm.
+    - ptm:sysm
 
 SystemControlInfo:
   SaveDataSize: 0KB

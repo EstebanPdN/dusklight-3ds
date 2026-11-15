@@ -98,6 +98,9 @@ public:
     dAlink_bottleWaterPcallBack_c() { initialize(0.0f); }
     virtual void execute(JPABaseEmitter*, JPABaseParticle*);
     virtual ~dAlink_bottleWaterPcallBack_c() {}
+#if defined(DUSK_TARGET_3DS)
+    virtual bool drawsParticle() const { return false; }
+#endif
 
     void initialize(f32 minY) {
         mHitFlg = 0;

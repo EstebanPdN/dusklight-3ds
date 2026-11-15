@@ -11,6 +11,21 @@ using namespace dusk::native::gx;
 using aurora::gx::dl::VtxLayout;
 using Bytes=std::vector<u8>;
 static void near(float a,float b){assert(std::fabs(a-b)<0.000001f);}
+// Compact records hold positions relative to RigidVertexPlan::origin. With a
+// zero origin the stored value is the decoded one, bit for bit.
+static bool samePosition(const RigidVertexPlan& rigid,const std::array<float,4>& compact,const std::array<float,4>& expected){
+    for(unsigned c=0;c<3;++c){
+        const float value=compact[c]+rigid.origin[c];
+        if(rigid.origin[c]==0?value!=expected[c]:std::fabs(value-expected[c])>1e-5f*(1+std::fabs(expected[c])+std::fabs(rigid.origin[c])))return false;
+    }
+    return compact[3]==expected[3];
+}
+// Float texture coordinates are stored as 1/1024 fixed point in the compact
+// record; the other units carry the normal and the matrix rows unchanged.
+static bool sameTexcoords(const GpuVertex& compact,const GpuVertex& expected){
+    for(unsigned c=0;c<2;++c)if(std::fabs(compact.texcoord[0][c]-expected.texcoord[0][c])>1.f/1024)return false;
+    return compact.texcoord[1]==expected.texcoord[1]&&compact.texcoord[2]==expected.texcoord[2];
+}
 static VertexDecodePlan plan(GXAttrType descriptor,GXCompType type,GXCompCnt cnt,u8 fraction,unsigned size) {
     VtxLayout lo{};lo.attrs[GX_VA_POS]={0,static_cast<u8>(size),descriptor};lo.stride=size;
     GXVtxAttrFmtList fmt{GX_VA_POS,cnt,type,fraction};VertexDecodePlan p;
@@ -68,6 +83,8 @@ static void rigidBatches(){
         RigidVertexPlan rigid;rigid.color.material={.2f,.4f,.6f,.8f};rigid.color.vertex=sources;
         rigid.lights=5;rigid.color.channels[0].mask=31;rigid.indexedMatrices=matrixSelectors!=0;rigid.matrixOffsets.fill(-1);
         rigid.matrixOffsets[0]=0;rigid.matrixOffsets[1]=39;rigid.matrixOffsets[2]=45;rigid.matrixOffsets[9]=87;
+        // Without a compact palette each normal matrix follows its position rows.
+        for(unsigned m=0;m<10;++m)rigid.normalOffsets[m]=rigid.matrixOffsets[m]<0?-1:std::int8_t(rigid.matrixOffsets[m]+3);
         const auto matrixMap=matrixSelectors?std::span<const std::int8_t>(rigid.matrixOffsets):std::span<const std::int8_t>{};
         rigid.color.lit=alphaLit?3:1;rigid.color.ambient[3]=.37f;
         const std::array<float,2> scale{.7f,.3f};std::vector<GpuVertex> output(513);
@@ -118,7 +135,7 @@ static void rigidBatches(){
                     assert(accepted==reference);
                     if(accepted){
                         const auto expanded=expandCompactRigid(rigid,std::as_bytes(std::span(actual)),0);
-                        assert(expanded.position==expected[0].position);
+                        assert(samePosition(rigid,expanded.position,expected[0].position));
                     }
                 }
                 assert(decodeCompactRigidBatch(plan,packed,arrays,compact,scale,rigid));
@@ -139,7 +156,7 @@ static void rigidBatches(){
                 assert(decodeCompactRigidBatch(plan,one,edgeArrays,edge,scale,rigid));
                 assert(decodeRigidBatch(plan,one,edgeArrays,reference,rigid.color,scale));
                 const auto expanded=expandCompactRigid(rigid,std::as_bytes(std::span(edge)),0);
-                assert(expanded.position==reference[0].position&&expanded.texcoord==reference[0].texcoord);
+                assert(samePosition(rigid,expanded.position,reference[0].position)&&sameTexcoords(expanded,reference[0]));
                 DecodedVertex decoded;TransformedVertex transformed;
                 assert(decodeVertex(plan,one,edgeArrays,decoded));
                 assert(transformVertex(transform,decoded,transformed));
@@ -179,12 +196,15 @@ static void rigidBatches(){
             const std::array<float,2> newScale{.5f,.75f};
             assert(decodeCompactRigidBatch(plan,packed,arrays,compact,newScale,rigid,&compactCache));
             assert(compactCache.hits==priorHits+1&&rigid.uniforms[93][0]==.75f);
-            assert(rigid.uniforms[13][2]==std::ldexp(.5f,-14));
+            // A cache hit still takes the new draw scale. The record scale is
+            // 1/1024 for F32 coordinates, the original fraction otherwise.
+            assert(rigid.decodedTex0Scale==std::ldexp(1.f,-10)||rigid.decodedTex0Scale==std::ldexp(1.f,-14));
+            assert(rigid.uniforms[13][2]==newScale[0]*rigid.decodedTex0Scale);
             rigid.color.material=material;
             assert(decodeCompactRigidBatch(plan,packed,arrays,compact,scale,rigid,&compactCache));
             for(unsigned n=0;n<513;++n){
                 const auto actual=expandCompactRigid(rigid,std::as_bytes(std::span(compact)),n);
-                assert(actual.position==output[n].position&&actual.texcoord==output[n].texcoord);
+                assert(samePosition(rigid,actual.position,output[n].position)&&sameTexcoords(actual,output[n]));
                 for(unsigned c=0;c<4;++c)near(actual.color[c],output[n].color[c]);
             }
             assert(!decodeCompactRigidBatch(plan,std::span(packed).first(packed.size()-1),arrays,compact,scale,rigid));
@@ -208,9 +228,11 @@ static void rigidBatches(){
     }
     assert(positionsChecked==831060);
     std::printf("PASS %u position-only vertices exactly match generic decode/transform\n",positionsChecked);
-    assert(gatherBoundaries==28);
+    // Every normal/texture-coordinate type pair (F32, S16, S8: nine pairs)
+    // has a compact form and reaches these cases.
+    assert(gatherBoundaries==252);
     std::printf("PASS %u gather limit cases across all three decoders: zero/huge stride, full index range, exact and short live spans\n",gatherBoundaries);
-    assert(compactChecked==61560);
+    assert(compactChecked==554040);
     std::printf("PASS %u compact vertices match generic decode/pack (color tolerance 1e-6)\n",compactChecked);
     std::printf("PASS %u directly packed rigid vertices exactly match generic decode/pack; unaligned native F32/S16/S8 with independent fractions, mixed indices, color/alpha sources and bounded refusal\n",checked);
 }

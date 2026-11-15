@@ -64,5 +64,12 @@ bool planRasterLookupMaterial(const MaterialState&,PicaMaterialPlan&,MaterialPla
 // consumed projective binding there and rewrite every TEV source consistently.
 // Multiple consumed projective bindings reject; the input stays intact on error.
 bool routeProjectiveTexture(PicaMaterialPlan&,std::uint8_t projectiveCoordinates);
+// Band alpha test (lower <= alpha <= upper) with one PICA comparison: the
+// hardware tests the lower bound and three appended stages take the alpha to
+// zero above the upper bound, over a ramp of the eight alpha levels below it,
+// so those fragments fail the same test. The colour passes through. Needs
+// three free stages and a final original stage the alpha buffer can capture
+// (stage 0..3); the plan is unchanged on failure.
+bool appendAlphaBand(PicaMaterialPlan&,std::uint8_t upper);
 const char* materialPlanErrorText(MaterialPlanError);
 }

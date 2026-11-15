@@ -15,10 +15,26 @@ void OSInitMutex(OSMutex* m){locks.try_emplace(m);}
 void OSLockMutex(OSMutex* m){locks.at(m).lock();}
 void OSUnlockMutex(OSMutex* m){locks.at(m).unlock();}
 void OSPanic(const char*,int,const char*,...){throw std::runtime_error("Expected native contract rejection");}
+void OSReport(const char*,...){}
 }
 void completed(uintptr_t p){auto* request=reinterpret_cast<ARQRequest*>(p);assert(request->length==32);callbackRan=true;}
 namespace {
 constexpr char containerPath[]="sdmc:/3ds/dusklight/saves/native-card0.bin";
+constexpr char pendingPath[]="sdmc:/3ds/dusklight/saves/native-card0.pending";
+constexpr char formattedPath[]="sdmc:/3ds/dusklight/saves/native-card0.formatted";
+bool exists(const char* path){struct stat st{};return stat(path,&st)==0;}
+std::vector<unsigned char> fileBytes(const char* path){
+    auto* input=std::fopen(path,"rb");assert(input);
+    assert(std::fseek(input,0,SEEK_END)==0);const auto size=std::ftell(input);assert(size>0);
+    assert(std::fseek(input,0,SEEK_SET)==0);
+    std::vector<unsigned char> bytes(static_cast<std::size_t>(size));
+    assert(std::fread(bytes.data(),1,bytes.size(),input)==bytes.size());
+    assert(std::fclose(input)==0);return bytes;
+}
+void writeBytes(const char* path,const std::vector<unsigned char>& bytes){
+    auto* output=std::fopen(path,"wb");assert(output);
+    assert(std::fwrite(bytes.data(),1,bytes.size(),output)==bytes.size());assert(std::fclose(output)==0);
+}
 std::vector<unsigned char> containerBytes(){
     auto* input=std::fopen(containerPath,"rb");assert(input);
     assert(std::fseek(input,0,SEEK_END)==0);const auto size=std::ftell(input);assert(size>0);
@@ -44,7 +60,7 @@ int main(){
     assert(CARDUnmount(0)==CARD_RESULT_READY);assert(CARDMount(0,nullptr,nullptr)==CARD_RESULT_READY);
     assert(CARDOpen(0,"zeldaTp.dat",&file)==CARD_RESULT_READY);assert(CARDGetStatus(0,0,&stat)==CARD_RESULT_READY&&stat.iconAddr==123);
     assert(CARDRead(&file,read.data(),read.size(),16384)==CARD_RESULT_READY&&data==read);
-    assert(CARDFormat(0)==CARD_RESULT_NOPERM);assert(CARDCreate(0,"other",8192,&file)==CARD_RESULT_EXIST);
+    assert(CARDCreate(0,"other",8192,&file)==CARD_RESULT_EXIST);
     assert(CARDWrite(&file,data.data(),data.size(),32768)==CARD_RESULT_FATAL_ERROR);
     assert(CARDRead(&file,read.data(),read.size(),-1)==CARD_RESULT_FATAL_ERROR);
     assert(CARDUnmount(0)==CARD_RESULT_READY);
@@ -103,7 +119,52 @@ int main(){
         assert(CARDUnmount(0)==CARD_RESULT_READY);
         reopenOwned();
     }
-    assert(std::remove(containerPath)==0);
+    // Formatting keeps the old container aside instead of refusing.
+    CARDInit(game,"01");assert(CARDMount(0,nullptr,nullptr)==CARD_RESULT_READY);
+    assert(CARDFormat(0)==CARD_RESULT_READY);
+    assert(!exists(containerPath)&&fileBytes(formattedPath)==originalBytes);
+    assert(CARDCheck(0)==CARD_RESULT_READY);
+    {CARDFileInfo none{};assert(CARDOpen(0,"zeldaTp.dat",&none)==CARD_RESULT_NOFILE);}
+    assert(CARDUnmount(0)==CARD_RESULT_READY);
+    assert(std::remove(formattedPath)==0);
+    }
+    // Alpha 0 leftovers: a created but never written container (blank status,
+    // zero body) and the .pending of its failed first write are removed at the
+    // first look, so the game offers to create a save again.
+    {
+        CARDInit("GZ2E","01");assert(CARDMount(0,nullptr,nullptr)==CARD_RESULT_READY);
+        CARDFileInfo created{};assert(CARDCreate(0,"gczelda2",32768,&created)==CARD_RESULT_READY);
+        assert(CARDUnmount(0)==CARD_RESULT_READY);
+        auto failedWrite=containerBytes();failedWrite[failedWrite.size()-1]=0x77;writeBytes(pendingPath,failedWrite);
+        CARDInit("GZ2E","01");assert(CARDMount(0,nullptr,nullptr)==CARD_RESULT_READY);
+        assert(CARDCheck(0)==CARD_RESULT_READY);
+        CARDFileInfo missing{};assert(CARDOpen(0,"gczelda2",&missing)==CARD_RESULT_NOFILE);
+        assert(!exists(containerPath)&&!exists(pendingPath));
+        assert(CARDUnmount(0)==CARD_RESULT_READY);
+    }
+    // A replacement stopped between removing the old file and the rename:
+    // the complete .pending is taken as the save.
+    {
+        CARDInit("GZ2E","01");assert(CARDMount(0,nullptr,nullptr)==CARD_RESULT_READY);
+        CARDFileInfo saved{};assert(CARDCreate(0,"gczelda2",32768,&saved)==CARD_RESULT_READY);
+        std::array<unsigned char,8192> data{},read{};data.fill(0x3c);
+        assert(CARDWrite(&saved,data.data(),data.size(),0x4000)==CARD_RESULT_READY);
+        CARDStat stat{};assert(CARDGetStatus(0,0,&stat)==CARD_RESULT_READY);stat.commentAddr=0x2400;
+        assert(CARDSetStatus(0,0,&stat)==CARD_RESULT_READY);
+        assert(CARDClose(&saved)==CARD_RESULT_READY);assert(CARDUnmount(0)==CARD_RESULT_READY);
+        const auto bytes=containerBytes();
+        assert(std::rename(containerPath,pendingPath)==0);
+        CARDInit("GZ2E","01");assert(CARDMount(0,nullptr,nullptr)==CARD_RESULT_READY);
+        assert(CARDOpen(0,"gczelda2",&saved)==CARD_RESULT_READY);
+        assert(CARDRead(&saved,read.data(),read.size(),0x4000)==CARD_RESULT_READY&&read==data);
+        assert(exists(containerPath)&&!exists(pendingPath)&&containerBytes()==bytes);
+        // An unfinished change beside a valid save is discarded.
+        writeBytes(pendingPath,bytes);
+        assert(CARDClose(&saved)==CARD_RESULT_READY);assert(CARDUnmount(0)==CARD_RESULT_READY);
+        CARDInit("GZ2E","01");assert(CARDMount(0,nullptr,nullptr)==CARD_RESULT_READY);
+        assert(CARDCheck(0)==CARD_RESULT_READY&&!exists(pendingPath)&&containerBytes()==bytes);
+        assert(CARDUnmount(0)==CARD_RESULT_READY);
+        assert(std::remove(containerPath)==0);
     }
     std::array<u32,3> lengths{};assert(ARInit(lengths.data(),lengths.size())==0x4000&&ARGetSize()==16*1024*1024);
     auto at=ARAlloc(32);assert(at==0x4000);ARQRequest request{};alignas(32) std::array<u8,32> source{},output{};source.fill(0x3c);

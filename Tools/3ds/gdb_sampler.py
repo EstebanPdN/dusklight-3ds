@@ -376,7 +376,7 @@ def sample(stub, seconds, interval, alive):
     return pcs, pairs
 
 
-def symbolize(elf, pcs, pairs, output, top=80):
+def symbolize(elf, pcs, pairs, output, top=220):
     symbols = []
     symbol_error = None
     try:

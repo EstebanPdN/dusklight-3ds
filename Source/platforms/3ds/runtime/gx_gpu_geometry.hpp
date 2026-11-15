@@ -15,10 +15,15 @@ struct CompactRigidVertex {
     std::array<float,3> position{};
     std::array<std::int16_t,3> normal{};
     std::array<std::int16_t,2> texcoord{};
+    // Never read (shader input v5). It gives this record the six-attribute,
+    // 32-byte shape of CompactRigidVertexMT: on the console PICA every draw of
+    // the five-attribute 28-byte layout stopped (2026-11-13), while all
+    // six-attribute formats completed.
+    std::array<std::int16_t,2> unused{};
     std::array<std::int8_t,2> matrix{0,3}; // position, normal uniform rows
     std::array<std::uint8_t,4> color{};
 };
-static_assert(sizeof(CompactRigidVertex)==28);
+static_assert(sizeof(CompactRigidVertex)==32);
 // Native multi-texture compact record (gx_rigid_mt.v.pica).
 struct CompactRigidVertexMT {
     std::array<float,3> position{};
@@ -62,6 +67,8 @@ public:
     bool commit(const GpuGeometryBatch&);
     bool cancel(const GpuGeometryBatch&);
     std::size_t used()const{return cursor;}
+    // End of the reservation being written, or of the committed bytes.
+    std::size_t reservedEnd()const{return pending.ticket?pendingEnd:cursor;}
     std::size_t capacity()const{return storage.size();}
     bool inFrame()const{return active;}
 private:

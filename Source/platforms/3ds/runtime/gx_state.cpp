@@ -36,10 +36,14 @@ std::array<TextureHandle,20> loadedTluts{};
 struct Binding { void* address = nullptr; std::uint64_t generation = 0; Texture texture{}; bool supported = false; };
 #ifdef DUSK_GAME_STARTUP
 std::array<Registration,1024> registrations{};
-std::array<TextureObject,2048> textureObjects{};
+std::array<TextureObject,4096> textureObjects{};
+unsigned textureObjectReclaims{};
+unsigned textureObjectSoftLimit{};
 #else
 std::array<Registration,64> registrations{};
 std::array<TextureObject,128> textureObjects{};
+unsigned textureObjectReclaims{};
+unsigned textureObjectSoftLimit{};
 #endif
 // Display-list image IDs are monotonic for the process lifetime. Retired IDs
 // must never resolve to another image, even when a registration slot is reused.
@@ -48,7 +52,16 @@ TextureHandle nextTextureId = 1;
 std::uint64_t nextObjectGeneration = 1;
 std::array<std::uint16_t,512> imageHints{};
 std::array<std::uint16_t,512> tokenHints{};
-void clearImageHints(){imageHints.fill(0);tokenHints.fill(0);}
+// Lookups that found nothing, valid until the registrations change. The game
+// initialises texture objects every frame for images that are registered only
+// when first loaded; each of those misses walked the whole table.
+struct ImageMiss {const void* image{};unsigned width{},height{},format{};std::uint32_t epoch{};};
+std::array<ImageMiss,256> imageMisses{};
+std::uint32_t registrationEpoch{1};
+void clearImageHints(){imageHints.fill(0);tokenHints.fill(0);++registrationEpoch;}
+// textureObjects[n].address, packed: the lookups that miss their hint and the
+// search for a free record read 16 KiB instead of striding the whole table.
+std::array<void*,std::tuple_size<decltype(textureObjects)>::value> objectAddresses{};
 struct State {
     DrawSink sink = nullptr;
     void* sinkUser = nullptr;
@@ -119,8 +132,8 @@ TextureObject* textureObject(void* address) {
     key^=key>>11;key^=key>>21;
     auto& hint=hints[(key>>2)&(hints.size()-1)];
     if(hint&&textureObjects[hint-1].address==address)return &textureObjects[hint-1];
-    for (auto& entry:textureObjects) if (entry.address==address) {
-        hint=std::uint16_t(&entry-textureObjects.data()+1);return &entry;
+    for (std::size_t n=0;n<objectAddresses.size();++n) if (objectAddresses[n]==address) {
+        hint=std::uint16_t(n+1);return &textureObjects[n];
     }
     return nullptr;
 }
@@ -135,9 +148,12 @@ const Registration* imageRegistration(const void* image,unsigned width,unsigned 
     // Mutations clear these hints to preserve the original first-match order,
     // including an alias which overlaps a subsequently registered identity.
     if(hint&&matches(registrations[hint-1]))return &registrations[hint-1];
+    auto& miss=imageMisses[((((key>>2)^width^(height<<3)^format)*2654435761u)>>24)&(imageMisses.size()-1)];
+    if(miss.epoch==registrationEpoch&&miss.image==image&&miss.width==width&&miss.height==height&&miss.format==format)return nullptr;
     for(const auto& entry:registrations)if(matches(entry)){
         hint=std::uint16_t(&entry-registrations.data()+1);return &entry;
     }
+    miss={image,width,height,format,registrationEpoch};
     return nullptr;
 }
 bool args(const unsigned* actual, unsigned a, unsigned b, unsigned c, unsigned d) {
@@ -653,20 +669,64 @@ void textureCoordinateShort(std::int16_t u, std::int16_t v) {
     if (format.type!=3 || format.fraction!=8) { drop(Error::vertexProtocol,"GXTexCoord2s16/format"); return; }
     auto& value=vertices[state.received]; value.u=u/256.0f; value.v=v/256.0f; advance(textureAttribute);
 }
+#ifdef DUSK_GAME_STARTUP
+// The GX texture object itself is opaque storage this port never reads for
+// drawing (records are keyed by its address). The game build writes the
+// record's generation into it: a record whose storage no longer holds that
+// tag belongs to memory the game reused for something else.
+constexpr std::uint32_t textureObjectMagic=0x47585430; // "GXT0"
+void tagTextureObject(const TextureObject& object){
+    const std::uint32_t tag[3]{textureObjectMagic,std::uint32_t(object.generation),std::uint32_t(object.generation>>32)};
+    std::memcpy(object.address,tag,sizeof(tag));
+}
+bool textureObjectTagged(const TextureObject& object){
+    std::uint32_t tag[3];std::memcpy(tag,object.address,sizeof(tag));
+    return tag[0]==textureObjectMagic&&tag[1]==std::uint32_t(object.generation)&&tag[2]==std::uint32_t(object.generation>>32);
+}
+#else
+void tagTextureObject(const TextureObject&){}
+bool textureObjectTagged(const TextureObject&){return true;}
+#endif
 void initTextureObject(void* address, const void* image, std::uint16_t width, std::uint16_t height,
                         unsigned format, unsigned wrapS, unsigned wrapT, unsigned mipmap, bool palette,unsigned tlut) {
     if (!setter("GXInitTexObj")) return;
     if (!address) { invalid("GXInitTexObj/null"); return; }
     auto* object=textureObject(address);
-    if (!object) for (auto& entry:textureObjects) if (!entry.address) { object=&entry; break; }
+    if (!object) for (std::size_t n=0;n<objectAddresses.size();++n) if (!objectAddresses[n]) { object=&textureObjects[n]; break; }
+    static unsigned sweepHoldoff;
+    bool pressure=!object;
+    if (object && textureObjectSoftLimit) {
+        // Development switch: sweep as if the table had only this many entries.
+        unsigned used=0;for (const auto& entry:textureObjects) used+=entry.address!=nullptr;
+        pressure=used>=textureObjectSoftLimit;
+    }
+    if (pressure && textureObjectStorageLive && !(sweepHoldoff && sweepHoldoff--)) {
+        // The game frees whole heaps without destroying the GX objects inside
+        // them, so their records pile up until the table is full (thirteen
+        // zone changes filled 2048). Drop every record the game cannot reach
+        // again: its storage no longer carries the tag written when it was
+        // initialised (the memory was reused), or is no longer an allocation.
+        unsigned reclaimed=0;
+        for (auto& entry:textureObjects) if (entry.address && (!textureObjectTagged(entry) || !textureObjectStorageLive(entry.address))) {
+            for (auto& bound:state.bindings) if (bound.address==entry.address) bound={};
+            if (textureObjectReclaimed) textureObjectReclaimed(entry.address);
+            entry={};objectAddresses[&entry-textureObjects.data()]=nullptr;++textureObjectReclaims;++reclaimed;
+            if (!object) object=&entry;
+        }
+        // A sweep walks the heap for every record; do not repeat one that
+        // found almost nothing on each of the next initialisations.
+        if (reclaimed<16) sweepHoldoff=64;
+    }
     if (!object) { invalid("GXInitTexObj/capacity"); return; }
     if (!nextObjectGeneration) {
         // Exhaustion must not leave a previous descriptor/binding looking like
         // the successful result of this reinitialization. Never wrap/recycle.
         for(auto& bound:state.bindings)if(bound.address==address)bound={};
-        *object={};invalid("GXInitTexObj/generation-exhausted");return;
+        *object={};objectAddresses[object-textureObjects.data()]=nullptr;invalid("GXInitTexObj/generation-exhausted");return;
     }
-    *object={}; object->address=address; object->generation=nextObjectGeneration++;object->imageIdentity=image;
+    *object={}; object->address=address; objectAddresses[object-textureObjects.data()]=address;
+    object->generation=nextObjectGeneration++;object->imageIdentity=image;
+    tagTextureObject(*object);
     object->metadataValid=width>0&&width<=1024&&height>0&&height<=1024&&
         format<=255&&wrapS<=2&&wrapT<=2&&mipmap<=1;
     // Original dMirror_packet_c explicitly constructs this empty descriptor
@@ -692,6 +752,12 @@ void initTextureObject(void* address, const void* image, std::uint16_t width, st
     }
     // The raw pointer has no size in the GX ABI. No read is attempted until it
     // has an exact match in the explicitly validated registration table.
+}
+void setTextureObjectSoftLimit(unsigned limit) { textureObjectSoftLimit=limit; }
+void textureObjectUsage(unsigned& used,unsigned& capacity,unsigned* reclaimed) {
+    if(reclaimed)*reclaimed=textureObjectReclaims;
+    used=0;capacity=unsigned(textureObjects.size());
+    for(const auto& entry:textureObjects)used+=entry.address!=nullptr;
 }
 bool queryTextureObject(const void* address,Texture& output) {
     output={};
@@ -771,7 +837,6 @@ void destroyTlutObject(void* address){
     if(!setter("GXDestroyTlutObj"))return;
     for(auto& object:tlutObjects)if(object.address==address){object={};return;}
 }
-void unsupportedPalette(const char* call) { unsupportedOperation(call); }
 void unsupportedOperation(const char* call) {
     if (!setter(call)) return;
     error(Error::unsupportedState,call); state.configurationError=true;

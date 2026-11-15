@@ -9,8 +9,9 @@
 
 namespace {
 dusk::native::GpuCompletion simulatedResult = dusk::native::GpuCompletion::notReady;
-unsigned waits, callbacks, invalidations;
+unsigned waits, callbacks, invalidations, orderedCallbacks;
 bool completed;
+bool waitingSyncs = true; // the SD switch gx-sync-wait.txt (Alpha 0 behaviour)
 bool allowInvalidation = true;
 OSThread* simulatedOwner;
 template<class F> void rejected(F f) {
@@ -19,6 +20,7 @@ template<class F> void rejected(F f) {
     assert(caught);
 }
 void callback() { assert(completed); ++callbacks; }
+void orderedCallback() { ++orderedCallbacks; }
 void reentrantCallback() {
     assert(completed);
     ++callbacks;
@@ -47,7 +49,7 @@ GpuCompletion platformCompleteGpu(std::uint64_t timeout) {
 }
 OSThread* platformGpuOwner() { return simulatedOwner; }
 bool platformInvalidateGpuTextures() {
-    assert(completed);
+    assert(completed || !waitingSyncs);
     if (!allowInvalidation) return false;
     ++invalidations;
     return true;
@@ -56,6 +58,7 @@ bool platformInvalidateGpuTextures() {
 void testNativeGpuSync() {
     using namespace dusk::native::gx;
     using dusk::native::GpuCompletion;
+    dusk::native::setGxSyncWaitsForTest(1);
     assert(GXGetCurrentGXThread() == nullptr);
     rejected([] { GXSetCurrentGXThread(); });
     OSThread foreign{};
@@ -123,5 +126,23 @@ void testNativeGpuSync() {
     rejected([] { GXPixModeSync(); });
     rejected([] { GXInvalidateTexAll(); });
     assert(waits == 20 && invalidations == 1);
-    std::puts("PASS: GPU completion, pixel synchronization and texture invalidation reject incomplete commands/missing queue/foreign owner/timeout/exhaustion/backend failure; no draw-done callbacks for pixel/cache operations; callback exchange/reentry guards (host completion fixture)");
+    // Default since Alpha 1: the syncs are ordered on the GPU and never wait;
+    // draw-done callbacks still run, texture invalidation still marks images,
+    // and incomplete commands or a missing command context are still refused.
+    dusk::native::setGxSyncWaitsForTest(0);
+    waitingSyncs = false;
+    simulatedResult = GpuCompletion::timedOut; // any wait would now be refused
+    assert(setCommandStream(&stream));
+    assert(GXSetDrawDoneCallback(orderedCallback) == nullptr);
+    GXDrawDone(); GXSetDrawDone(); GXPixModeSync(); GXInvalidateTexAll();
+    assert(waits == 20 && orderedCallbacks == 2 && invalidations == 2);
+    assert(stream.write({&incomplete, 1}));
+    rejected([] { GXDrawDone(); });
+    rejected([] { GXPixModeSync(); });
+    assert(waits == 20 && orderedCallbacks == 2 && invalidations == 2);
+    assert(stream.reset() && setCommandStream(nullptr));
+    rejected([] { GXInvalidateTexAll(); });
+    assert(GXSetDrawDoneCallback(nullptr) == orderedCallback);
+    dusk::native::setGxSyncWaitsForTest(-1);
+    std::puts("PASS: GPU completion, pixel synchronization and texture invalidation reject incomplete commands/missing queue/foreign owner/timeout/exhaustion/backend failure; no draw-done callbacks for pixel/cache operations; callback exchange/reentry guards; ordered (non-waiting) syncs by default (host completion fixture)");
 }

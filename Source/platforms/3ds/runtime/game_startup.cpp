@@ -1,14 +1,5 @@
 #include <cstdlib>
-#if DUSK_BG_BUDGET_EXPERIMENT_76
-#include "bg_budget_experiment.hpp"
-#endif
 #include "copy_lifecycle_probe.hpp"
-#if DUSK_GROUND_CREATE_PROBE
-#include "ground_create_probe.hpp"
-#endif
-#if DUSK_SCENE_CREATE_PROBE
-#include "scene_create_probe.hpp"
-#endif
 #include "cache_maintenance_profile.hpp"
 #include "game_startup.hpp"
 #if defined(DUSK_PICA_GAME_DRAW)
@@ -25,20 +16,21 @@
 #include "gx_framebuffer.hpp"
 #include "alpha_interval_target.hpp"
 #include "signed_q_diagnostic.hpp"
-#include "gx_draw_capture94.hpp"
-#include "feedback_draw_capture76.hpp"
-#include "strict_material74.hpp"
 #include "../gx_pica.hpp"
 #include "../gx_texture_pica.hpp"
 #include "gpu_sync.hpp"
+#include "gpu_canary.hpp"
 #include "gx_stream.hpp"
 #include "gx_material.hpp"
+#include "gx_transform_commands.hpp"
 #include "gx_vertex_transform.hpp"
 #include "gx_profile.hpp"
 #include "fused_color_config.hpp"
 #include "gx_compact_cache.hpp"
 #include "gx_rigid_vertex.hpp"
 #include "../gx_command_draw.hpp"
+#include "helpers/native_effects.h"
+#include "shadow_casters.hpp"
 #include "gx_i4_bake_cache68.hpp"
 #include "../gx_geometry_pica.hpp"
 #include "../gx_texture_pica.hpp"
@@ -47,6 +39,9 @@
 #include "texture_half_policy.hpp"
 #include "audio_control.hpp"
 #include "developer_script.hpp"
+#include "frame_telemetry.hpp"
+#include "dev_console.hpp"
+#include "helpers/native_frame_wait.h"
 #include "font_pages.hpp"
 #include "gx_copy_images.hpp"
 #include "dusk/game_clock.h"
@@ -57,6 +52,11 @@
 #include "dusk/audio/DuskAudioSystem.h"
 #include "helpers/gx_helper.h"
 #include "JSystem/JKernel/JKRSolidHeap.h"
+#include "JSystem/J3DGraphBase/J3DSys.h"
+#include "JSystem/J3DGraphBase/J3DPacket.h"
+#include "JSystem/J3DGraphBase/J3DMaterial.h"
+#include "JSystem/J3DGraphAnimator/J3DModel.h"
+#include "JSystem/JUtility/JUTNameTab.h"
 #include "JSystem/JKernel/JKRExpHeap.h"
 #include "c/c_dylink.h"
 #include "m_Do/m_Do_machine.h"
@@ -64,6 +64,21 @@
 #include "m_Do/m_Do_controller_pad.h"
 #include "m_Do/m_Do_dvd_thread.h"
 #include "m_Do/m_Do_ext.h"
+#include "f_op/f_op_scene_mng.h"
+#include "f_pc/f_pc_manager.h"
+#include "f_pc/f_pc_create_iter.h"
+#include "f_pc/f_pc_create_req.h"
+#include "f_op/f_op_overlap_mng.h"
+#include "d/d_s_room.h"
+#include "d/d_bg_s_gnd_chk.h"
+#include "f_op/f_op_actor_iter.h"
+#include "f_op/f_op_camera_mng.h"
+#include "d/d_demo.h"
+#include "f_op/f_op_actor_mng.h"
+#include "d/d_stage.h"
+#include "d/d_item.h"
+#include "d/d_item_data.h"
+#include "d/d_save.h"
 #include "m_Do/m_Do_audio.h"
 #include "m_Do/m_Do_main.h"
 #include "f_ap/f_ap_game.h"
@@ -73,6 +88,7 @@
 #include <citro3d.h>
 #include <malloc.h>
 #include <cstdio>
+#include <cstring>
 #include <cerrno>
 #include <bit>
 extern s32 LOAD_COPYDATE(void*);
@@ -80,22 +96,30 @@ extern "C" { extern u8 __start__[],__end__[]; }
 namespace dusk { bool IsShuttingDown=false; }
 extern std::uint32_t duskNativeDynamicReasons[4];
 namespace dusk::native { void optionalCopyStatistics(std::uint64_t&,std::uint64_t&,std::uint64_t&); }
+extern "C" std::uint32_t duskNativeHeapEpoch;
 namespace dusk::native {
 namespace {
 bool liveGameArray(std::uint64_t address,u32 size){
     GxProfileScope profile(GxProfilePart::arrayValidate,gxSparseVertexProfiling);
     if(!address||!size||address>UINTPTR_MAX||size>UINTPTR_MAX-address)return false;
+    // The same model arrays are bound for every shape. A proof stays valid
+    // until some heap frees, shrinks or destroys an allocation.
+    struct Proof {std::uint32_t address{},size{},epoch{};};
+    static std::array<Proof,64> proofs{};
+    auto& proof=proofs[(std::uint32_t(address)>>4)*2654435761u>>26];
+    // Read once, before the heap walk: a free on another thread during the
+    // walk then leaves this proof already stale.
+    const auto epoch=__atomic_load_n(&duskNativeHeapEpoch,__ATOMIC_RELAXED);
+    if(proof.epoch==epoch&&proof.address==std::uint32_t(address)&&proof.size==size)return true;
+    const auto remember=[&](bool live){if(live)proof={std::uint32_t(address),size,epoch};return live;};
     auto* pointer=reinterpret_cast<void*>(static_cast<std::uintptr_t>(address));
     auto* heap=JKRHeap::findFromRoot(pointer);
     s32 remaining=-1;
     if(heap&&heap->getHeapType()=='EXPH')remaining=static_cast<JKRExpHeap*>(heap)->getRemainingAllocationSize(pointer);
     else if(heap&&heap->getHeapType()=='SLID')remaining=static_cast<JKRSolidHeap*>(heap)->getRemainingUsedSize(pointer);
-    return remaining>=0&&size<=static_cast<u32>(remaining);
+    return remember(remaining>=0&&size<=static_cast<u32>(remaining));
 }
-BootStage bootStage;bool hasBootStage{};
-gx::capture94::Capture drawCapture94;
-gx::feedback76::Observer feedbackDrawCapture76;
-void feedbackDrawLog76(const char* text){OSReport("%s",text);}
+BootStage bootStage;bool hasBootStage{},bootStageFromTest{};
 bool readRasterCarrierDiagnostic(){
     auto* file=std::fopen("sdmc:/3ds/dusklight/raster-carrier.txt","rb");
     if(!file){
@@ -134,19 +158,6 @@ bool readAutomaticSuConfig77(){
     bool valid=!std::ferror(file);if(std::fclose(file))valid=false;
     if(!valid||!parseSignedQDiagnostic({text,bytes},enabled)){
         OSReport("Native automatic SU77 config invalid/unreadable; experiment disabled\n");return false;
-    }
-    return enabled;
-}
-bool readVitalConfig80(){
-    errno=0;auto* file=std::fopen("sdmc:/3ds/dusklight/vitals80.txt","rb");
-    if(!file){
-        if(errno!=ENOENT)OSReport("Native vital80 config unreadable; diagnostic disabled\n");
-        return false;
-    }
-    char text[12];const auto bytes=std::fread(text,1,sizeof(text),file);bool enabled=false;
-    bool valid=!std::ferror(file);if(std::fclose(file))valid=false;
-    if(!valid||!parseSignedQDiagnostic({text,bytes},enabled)){
-        OSReport("Native vital80 config invalid/unreadable; diagnostic disabled\n");return false;
     }
     return enabled;
 }
@@ -204,10 +215,13 @@ bool readExactI4BakeConfig(){
     return enabled;
 }
 bool readCameraCpuClipConfig(){
+    // On unless the SD file says enabled=0: water that refracts the frame copy
+    // crosses the camera plane whenever the player stands in it, and without
+    // the clip those patches of the surface are left out.
     auto* file=std::fopen("sdmc:/3ds/dusklight/camera-cpu-clip.txt","rb");
     if(!file){
-        if(errno!=ENOENT)OSReport("Native camera CPU clipping config unreadable; experiment disabled\n");
-        return false;
+        if(errno!=ENOENT){OSReport("Native camera CPU clipping config unreadable; disabled\n");return false;}
+        return true;
     }
     char text[12];const auto bytes=std::fread(text,1,sizeof(text),file);bool enabled=false;
     bool valid=!std::ferror(file);if(std::fclose(file))valid=false;
@@ -267,7 +281,15 @@ std::size_t readTextureHalfPolicy(std::array<NativeTextureFingerprint,64>& polic
 }
 void readBootStage(){
     auto* file=std::fopen("sdmc:/3ds/dusklight/boot-stage.txt","rb");
-    if(!file)return; // An ordinary boot retains the original opening scene.
+    if(!file){
+        // An ordinary boot retains the original opening scene. A resumed or
+        // unattended test starts directly in its next zone.
+        if(devConsoleBootStage(bootStage)){
+            hasBootStage=bootStageFromTest=true;
+            OSReport("Native test stage requested: %s room=%d point=%d\n",bootStage.name,bootStage.room,bootStage.point);
+        }
+        return;
+    }
     char text[96];const auto count=std::fread(text,1,sizeof(text),file);
     const bool valid=count<sizeof(text)&&!std::ferror(file)&&parseBootStage({text,count},bootStage);
     std::fclose(file);
@@ -287,7 +309,239 @@ void onGameApt(APT_HookType type,void*){
 }
 }
 const BootStage* requestedBootStage(){return hasBootStage?&bootStage:nullptr;}
+namespace {
+// Test session state: the save in memory was replaced by an empty one with the
+// test equipment, so travelling may change it freely. Never set for a save the
+// player loaded, unless the automatic test starts (it must not be saved after).
+bool developerSession;
+CommandDrawContext* devDrawContext;
+void developerLoadout(int form){
+    // Sword, shield, lantern and boomerang: the scripted B, R, X and Y inputs
+    // then exercise the original attack, guard, light and projectile code.
+    execItemGet(dItemNo_SWORD_e);execItemGet(dItemNo_HYLIA_SHIELD_e);
+    execItemGet(dItemNo_KANTERA_e);execItemGet(dItemNo_BOOMERANG_e);
+    dComIfGs_setSelectItemIndex(SELECT_ITEM_X,SLOT_1);dComIfGs_setSelectItemIndex(SELECT_ITEM_Y,SLOT_0);
+    dComIfGs_setTransformStatus(form?TF_STATUS_WOLF:TF_STATUS_HUMAN);
+    // The form only follows that status once transforming is unlocked (event
+    // 0x0D04); before it the game makes Link a wolf wherever a twilight he
+    // has entered is not cleared, so after the first twilight zone every
+    // later "human" zone showed the wolf. Human zones are the normal world
+    // (the three twilights cleared), wolf zones the twilight one.
+    dComIfGs_onEventBit(0x0D04);
+    for(int level=0;level<3;++level){if(form)dComIfGs_offDarkClearLV(level);else dComIfGs_onDarkClearLV(level);}
+    // No dComIfGp_itemDataInit here: it clears the live message heaps of a
+    // running PLAY_SCENE. The next stage's meters read the save themselves.
+}
+bool developerWarp(const char* stage,int room,int point,int layer,int form,bool test){
+    auto* play=fpcM_SearchByName(fpcNm_PLAY_SCENE_e);
+    scene_class* other{};
+    if(!play){
+        for(const s16 name:{s16(fpcNm_NAME_SCENE_e),s16(fpcNm_OPENING_SCENE_e),s16(fpcNm_MENU_SCENE_e)})
+            if(auto* found=fpcM_SearchByName(name)){other=reinterpret_cast<scene_class*>(found);break;}
+        if(!other)return false; // logo and warnings: startup resources may still be loading
+    }else if(dComIfGp_isEnableNextStage())return false;
+    const bool noSave=!play||!std::strncmp(dComIfGp_getStartStageName(),"F_SP102",8);
+    if(noSave||(test&&!developerSession)){dComIfGs_init();developerSession=true;}
+    if(developerSession)developerLoadout(form);
+    if(other){
+        if(!fopScnM_ChangeReq(other,fpcNm_PLAY_SCENE_e,0,5))return false;
+        // As the file menu does before PLAY. itemInit clears the whole item
+        // block and keeps only the 2D heap; the title (opening scene) is a
+        // play scene that still owns the message heap, the sub heaps and its
+        // message object and releases them when it is deleted. Alpha 1 lost
+        // them here: START+SELECT in the title ended in a null heap destroy.
+        auto& state=g_dComIfG_gameInfo.play;
+        auto* message=state.getMsgExpHeap();auto* sub0=state.getSubExpHeap2D(0);auto* sub1=state.getSubExpHeap2D(1);
+        auto* messageObject=state.getMsgObjectClass();
+        dComIfGp_itemDataInit();
+        state.setMsgExpHeap(message);state.setSubExpHeap2D(0,sub0);state.setSubExpHeap2D(1,sub1);
+        state.setMsgObjectClass(messageObject);
+        dComIfGp_setNextStage(stage,point,room,layer);
+        g_dComIfG_gameInfo.play.mNextStage.getStartStage()->set(stage,room,point,layer);
+    }else dComIfGp_setNextStage(stage,point,room,layer);
+    OSReport("Native developer travel: %s room=%d point=%d layer=%d form=%d session=%d\n",stage,room,point,layer,form,int(developerSession));
+    return true;
+}
+void developerStuckReport(){
+    OSReport("Native stuck stage: %.8s room=%d drive=%ld overlap-peek=%d overlap-done=%d overlap-request=%d next-stage=%d player=%p\n",
+        dComIfGp_getStartStageName(),dComIfGp_roomControl_getStayNo(),static_cast<long>(DVDGetDriveStatus()),fopOvlpM_IsPeek(),fopOvlpM_IsDone(),
+        fopOvlpM_IsDoingReq(),int(dComIfGp_isEnableNextStage()),dComIfGp_getPlayer(0));
+    for(const auto& [name,heap]:{std::pair<const char*,JKRHeap*>{"game",mDoExt_getGameHeap()},{"zelda",mDoExt_getZeldaHeap()},
+            {"archive",mDoExt_getArchiveHeap()},{"j2d",mDoExt_getJ2dHeap()},{"command",mDoExt_getCommandHeap()}})
+        if(heap)OSReport("Native stuck stage: %s heap size=%lu free=%lu largest=%lu\n",name,static_cast<unsigned long>(heap->getHeapSize()),
+            static_cast<unsigned long>(heap->getTotalFreeSize()),static_cast<unsigned long>(heap->getFreeSize()));
+    if(auto* player=dComIfGp_getPlayer(0)){
+        // The player waits in creation until collision exists under its start point.
+        dBgS_GndChk check;cXyz position=player->current.pos;position.y+=100.0f;check.SetPos(&position);
+        const f32 ground=dComIfG_Bgsp().GroundCross(&check);
+        OSReport("Native stuck stage: player at %.1f %.1f %.1f room=%d ground-below=%.1f event-data=%d\n",player->current.pos.x,player->current.pos.y,
+            player->current.pos.z,int(fopAcM_GetRoomNo(player)),ground,int(dComIfGp_getEventManager().dataLoaded()));
+    }
+    static int backgrounds;backgrounds=0;
+    fopAcIt_Judge(+[](void* actor,void*)->void*{
+        auto* a=static_cast<fopAc_ac_c*>(actor);
+        if(fopAcM_GetProfName(a)==fpcNm_BG_e){++backgrounds;OSReport("Native stuck stage: background actor room=%d heap=%p\n",int(fopAcM_GetParam(a)),a->heap);}
+        return nullptr;
+    },nullptr);
+    OSReport("Native stuck stage: %d background actors exist\n",backgrounds);
+    static int listed;listed=0;
+    fpcCtIt_Method(+[](void* tag,void*)->int{
+        const auto* request=static_cast<const create_request*>(tag);
+        if(listed++<24)OSReport("Native stuck stage: creating profile=%d id=%lu doing=%d cancel=%d\n",
+            request->process?int(fpcM_GetProfName(request->process)):-1,static_cast<unsigned long>(request->id),int(request->is_doing),int(request->is_cancel));
+        if(request->process&&fpcM_GetProfName(request->process)==fpcNm_ROOM_SCENE_e){
+            auto* room=reinterpret_cast<room_of_scene_class*>(request->process);
+            const int number=int(fopScnM_GetParam(room));
+            auto* block=dStage_roomControl_c::getMemoryBlock(number);
+            OSReport("Native stuck stage: room scene room=%d phase=%d bank-step=%d block=%p used=%lu size=%lu flag8=%d flag20=%d\n",number,room->phase.id,
+                int(room->field_0x1d4),block,static_cast<unsigned long>(block?block->getTotalUsedSize():0),
+                static_cast<unsigned long>(block?block->getHeapSize():0),int(dComIfGp_roomControl_checkStatusFlag(number,8)),
+                int(dComIfGp_roomControl_checkStatusFlag(number,0x20)));
+        }
+        return 1;
+    },nullptr);
+    OSReport("Native stuck stage: %d processes still being created\n",listed);
+}
+void developerReport(std::FILE* file);
+// The game state written into a dump's info.txt: what would otherwise have to
+// be dug out of the RAM image by hand (camera, cutscene, player, heaps, actors).
+void dumpStateReport(std::FILE* file){
+    std::fprintf(file,"stage=%.8s room=%d point=%d layer=%d next_stage_pending=%d\n",dComIfGp_getStartStageName(),
+        int(dComIfGp_roomControl_getStayNo()),int(dComIfGp_getStartStagePoint()),int(dComIfGp_getStartStageLayer()),int(dComIfGp_isEnableNextStage()));
+    const char* scene="none";
+    for(const auto& [name,id]:{std::pair<const char*,s16>{"play",fpcNm_PLAY_SCENE_e},{"opening (title)",fpcNm_OPENING_SCENE_e},
+            {"name (file select)",fpcNm_NAME_SCENE_e},{"menu",fpcNm_MENU_SCENE_e},{"logo",fpcNm_LOGO_SCENE_e}})
+        if(fpcM_SearchByName(id)){scene=name;break;}
+    std::fprintf(file,"scene=%s\ntime_of_day=%.2f day=%u\n",scene,dComIfGs_getTime(),unsigned(dComIfGs_getDate()));
+    if(auto* camera=dComIfGp_getCamera(0)){
+        auto* view=reinterpret_cast<camera_class*>(camera);
+        const cXyz eye=*fopCamM_GetEye_p(view),center=*fopCamM_GetCenter_p(view);
+        std::fprintf(file,"camera_eye=%.1f %.1f %.1f\ncamera_center=%.1f %.1f %.1f\ncamera_fovy=%.2f bank=%d\n",
+            eye.x,eye.y,eye.z,center.x,center.y,center.z,fopCamM_GetFovy(view),int(fopCamM_GetBank(view)));
+    }else std::fprintf(file,"camera=none\n");
+    std::fprintf(file,"cutscene_camera=%d cutscene_frame=%lu cutscene_mode=%ld event_running=%d\n",int(dDemo_c::getCamera()!=nullptr),
+        static_cast<unsigned long>(dDemo_c::getFrame()),static_cast<long>(dDemo_c::getMode()),int(dComIfGp_event_runCheck()));
+    if(auto* player=dComIfGp_getPlayer(0)){
+        std::fprintf(file,"player_position=%.1f %.1f %.1f angle_y=%d speed=%.2f room=%d life=%u\n",player->current.pos.x,player->current.pos.y,
+            player->current.pos.z,int(player->shape_angle.y),player->speedF,int(fopAcM_GetRoomNo(player)),unsigned(dComIfGs_getLife()));
+        if(auto* link=dComIfGp_getLinkPlayer())std::fprintf(file,"link_demo_type=%d demo_mode=%lu wolf=%d\n",link->mDemo.getDemoType(),
+            static_cast<unsigned long>(link->getDemoMode()),int(dComIfGs_getTransformStatus()));
+    }else std::fprintf(file,"player=none\n");
+    for(const auto& [name,heap]:{std::pair<const char*,JKRHeap*>{"game",mDoExt_getGameHeap()},{"zelda",mDoExt_getZeldaHeap()},
+            {"archive",mDoExt_getArchiveHeap()},{"j2d",mDoExt_getJ2dHeap()},{"command",mDoExt_getCommandHeap()}})
+        if(heap)std::fprintf(file,"heap_%s=size %lu free %lu largest %lu\n",name,static_cast<unsigned long>(heap->getHeapSize()),
+            static_cast<unsigned long>(heap->getTotalFreeSize()),static_cast<unsigned long>(heap->getFreeSize()));
+    std::fprintf(file,"linear_free=%lu vram_free=%lu\n",static_cast<unsigned long>(linearSpaceFree()),static_cast<unsigned long>(vramSpaceFree()));
+    developerReport(file);
+    // Every actor: profile number (d_procname.h), room and position.
+    static std::FILE* out;static unsigned listed;out=file;listed=0;
+    std::fprintf(file,"\n[actors] profile room x y z\n");
+    fopAcIt_Judge(+[](void* actor,void*)->void*{
+        auto* a=static_cast<fopAc_ac_c*>(actor);
+        if(listed++<240)std::fprintf(out,"%d %d %.0f %.0f %.0f\n",int(fopAcM_GetProfName(a)),int(fopAcM_GetRoomNo(a)),
+            a->current.pos.x,a->current.pos.y,a->current.pos.z);
+        return nullptr;
+    },nullptr);
+    std::fprintf(file,"actors=%u\n",listed);
+}
+void developerReport(std::FILE* file){
+    if(const auto* c=devDrawContext)
+        std::fprintf(file,"draws_submitted_total=%llu\ndraws_rejected_total=%llu\ndraws_simplified_total=%llu\ndraws_skipped_total=%llu\n"
+            "quantized_draws=%llu\nvertex_fog_draws=%llu\ntriangle_fog_draws=%llu\nvertex_indirect_draws=%llu\nculled_draws=%llu\n"
+            "camera_culled=%llu\nalpha_union_draws=%llu\nconstant_early_depth_draws=%llu\n",
+            static_cast<unsigned long long>(c->submitted),static_cast<unsigned long long>(c->rejected),
+            static_cast<unsigned long long>(c->simplifiedDraws),static_cast<unsigned long long>(c->skippedDraws),
+            static_cast<unsigned long long>(c->quantizedDraws),static_cast<unsigned long long>(c->vertexFogDraws),
+            static_cast<unsigned long long>(c->triangleFogDraws),static_cast<unsigned long long>(c->vertexIndirectDraws),
+            static_cast<unsigned long long>(c->culled),static_cast<unsigned long long>(c->cameraCulled),
+            static_cast<unsigned long long>(c->alphaUnionDraws),static_cast<unsigned long long>(c->constantEarlyDepthDraws));
+    // Rejections since the previous zone report, by reason. The first draw of
+    // each reason is described in the log again in the next zone.
+    if(auto* c=devDrawContext)for(unsigned n=0;n<c->rejectReasonCount;++n){
+        auto& reason=c->rejectReasons[n];
+        if(reason.draws!=reason.mark)std::fprintf(file,"rejected_reason=%llu draws since the last report (%llu total, %llu vertices): %s\n",
+            static_cast<unsigned long long>(reason.draws-reason.mark),static_cast<unsigned long long>(reason.draws),
+            static_cast<unsigned long long>(reason.vertices),reason.why);
+        reason.mark=reason.draws;reason.reported=false;
+    }
+    auto* gameHeap=mDoExt_getGameHeap();auto* zeldaHeap=mDoExt_getZeldaHeap();auto* archiveHeap=mDoExt_getArchiveHeap();
+    std::fprintf(file,"texture_linear_evictions=%llu\n",static_cast<unsigned long long>(gxTextureLinearEvictions()));
+    std::fprintf(file,"game_heap_free=%lu\nzelda_heap_free=%lu\narchive_heap_free=%lu\ngpu_texture_bytes=%lu\nowned_bti_bytes=%lu\n"
+        "font_page_bytes=%lu\ncopy_image_bytes=%lu\noffscreen_bytes=%lu\ntransient_geometry_bytes=%lu\n",
+        static_cast<unsigned long>(gameHeap?gameHeap->getTotalFreeSize():0),static_cast<unsigned long>(zeldaHeap?zeldaHeap->getTotalFreeSize():0),
+        static_cast<unsigned long>(archiveHeap?archiveHeap->getTotalFreeSize():0),static_cast<unsigned long>(gxTextureBytes()),
+        static_cast<unsigned long>(textureResourceBytes()),static_cast<unsigned long>(fontPageBytes()),
+        static_cast<unsigned long>(copyImageBytes()),static_cast<unsigned long>(offscreenFramebufferBytes()),
+        static_cast<unsigned long>(gxGeometryBytes()));
+    if(auto* sc=gx::staticCompactCache())std::fprintf(file,"static_geometry_hits=%llu\nstatic_geometry_misses=%llu\nstatic_geometry_stores=%llu\n"
+        "static_geometry_resets=%llu\nstatic_geometry_bytes=%u\nstatic_geometry_capacity=%u\n",
+        static_cast<unsigned long long>(sc->hits),static_cast<unsigned long long>(sc->misses),static_cast<unsigned long long>(sc->stores),
+        static_cast<unsigned long long>(sc->resets),unsigned(sc->bytesUsed()),unsigned(sc->capacity()));
+    {std::uint64_t nh,nm,nr,nk;nativeShapeStatistics(nh,nm,nr,nk);
+     std::fprintf(file,"direct_shape_hits=%llu\ndirect_shape_misses=%llu\ndirect_shape_records=%llu\ndirect_shape_key_misses=%llu\n",
+        static_cast<unsigned long long>(nh),static_cast<unsigned long long>(nm),static_cast<unsigned long long>(nr),static_cast<unsigned long long>(nk));}
+    const auto audio=nativeAudioStatus();
+    std::fprintf(file,"audio_output=%s\naudio_blocks=%lu\naudio_underruns=%lu\n",audio.output==AudioOutputState::ndsp?"ndsp":"muted",
+        static_cast<unsigned long>(audio.blocks),static_cast<unsigned long>(audio.underruns));
+}
+}
+// d_s_logo, after the direct stage entry has initialized an empty save.
+void applyBootStageLoadout(){
+    if(!bootStageFromTest)return;
+    developerSession=true;developerLoadout(0);
+}
+}
+// Real-speed scheduling, read by fpcM_Management (f_pc_manager.cpp): which
+// tick of the picture paints, which one enters the draw lists, and how many
+// original ticks each of those phases stands for.
+extern "C" {
+bool duskNativeTickPaint=true,duskNativeTickDraw=true;
+float duskNativePaintTicks=1,duskNativeDrawTicks=1;
+// Developer log of the cutscene camera, one line per logic tick (SD switch camera-log.txt).
+bool duskNativeCameraLog=false;
+}
+namespace {
+// The original logic runs 30 ticks per second of real time, whatever the
+// picture rate. A picture that took longer than one tick is followed by the
+// ticks it owes (at most maxTicks per picture, so pictures never fall below
+// about a quarter of the logic rate); a stall of more than staleTicks
+// (loading, a dump, the HOME menu) is not caught up. Alpha 0 ran one tick per
+// picture: at the console's ~14 pictures per second the whole game, its
+// cutscene cameras included, ran at 47 % of its speed.
+struct LogicPace {
+    static constexpr unsigned maxTicks=4,staleTicks=8;
+    std::uint64_t period{},clock{};bool anchored{};
+    unsigned due(std::uint64_t now){
+        if(!period)period=dusk::native::nativeTickFrequency/30;
+        if(!anchored||now<clock){clock=now-period;anchored=true;}
+        std::uint64_t owed=(now-clock)/period;
+        if(owed>staleTicks){clock=now-period;owed=1;}
+        const unsigned ticks=owed<1?1:owed>maxTicks?maxTicks:unsigned(owed);
+        // Running ahead of real time earns no credit for later pictures.
+        clock+=ticks*period;if(clock>now)clock=now;
+        return ticks;
+    }
+    void reset(){anchored=false;}
+};
+LogicPace logicPace;
+}
+// The process manager calls this when the painter has issued the frame's draws.
+// Submitting them now lets the PICA render during actor update and draw entry;
+// the frame is still closed (LCD transfer) by the loop after fapGm_Execute.
+extern "C" void duskNativePainterDone(){
+    using namespace dusk::native;
+    auto* stream=gx::commandStream();
+    if(stream&&stream->idle())(void)platformSubmitGpu();
+}
+namespace dusk::native {
 int runOriginalGame(){
+    // Before the log file is first opened: a resumed test keeps the previous log.
+    {DevGameHooks hooks;
+     hooks.warp=developerWarp;
+     hooks.report=developerReport;hooks.stuck=developerStuckReport;hooks.fullDump=requestApplicationDump;
+     hooks.fullDumpBusy=+[]{return applicationDumpRequested()||applicationDumpActive();};
+     setApplicationDumpReport(dumpStateReport);
+     initializeDevConsole(hooks);}
     logText("Original native startup: GX stream\n");
     bool rgb565Reference=false;
     if(auto* file=std::fopen("sdmc:/3ds/dusklight/rgb565-rgba8-reference.txt","rb")){
@@ -295,7 +549,9 @@ int runOriginalGame(){
     }
     std::array<NativeTextureFingerprint,64> halfPolicy{};const auto halfCount=readTextureHalfPolicy(halfPolicy);
     const bool fusedColorCopy=readFusedColorCopyConfigFromSd();
-    if(!configureGxTextureCache(10*1024*1024,128,rgb565Reference,{halfPolicy.data(),halfCount},fusedColorCopy))fatal(gxTextureFailure());
+    // 12 MiB: the title shots need about 10 MiB of images at once (they
+    // cycled through a 10 MiB cache); the linear heap grew by 4 MiB for it.
+    if(!configureGxTextureCache(12*1024*1024,128,rgb565Reference,{halfPolicy.data(),halfCount},fusedColorCopy))fatal(gxTextureFailure());
     OSReport("Native GX RGB565 storage: %s\n",rgb565Reference?"RGBA8 diagnostic reference":"packed GPU_RGB565");
     OSReport("Native texture half policy: %lu source fingerprints; authored mip1, original CPU assets retained\n",static_cast<unsigned long>(halfCount));
     static gx::CommandMemory memory;static gx::CommandProcessor processor(memory);
@@ -317,12 +573,7 @@ int runOriginalGame(){
     // their archive data directly. Record the actual high-water requirement.
     static std::array<u8,64*1024> scratch{};static gx::CommandStream stream(processor,scratch);
     static CommandDrawContext drawContext;
-    drawCapture94.initialize();
-    const auto& captureSelection=drawCapture94.selection;
-    OSReport("Native complete draw capture94: %s selection=%s class=%u target=%.8s,%d,%d,%d; first selected failure only\n",
-        drawCapture94.armed()?"armed":"disabled",gx::capture94::selectionStatusName(captureSelection.status),
-        unsigned(captureSelection.failureClass),captureSelection.target.name,captureSelection.target.room,
-        captureSelection.target.point,captureSelection.target.layer);
+    devDrawContext=&drawContext;
     drawContext.allowExactI4Bake=readExactI4BakeConfig();
     OSReport("Native exact I4 quarter bake: %s; strict nonzero nearest/clamp, physical PICA unverified\n",
         drawContext.allowExactI4Bake?"explicit SD opt-in":"disabled");
@@ -382,12 +633,17 @@ int runOriginalGame(){
     drawContext.allowVertexIndirect=true;
     drawContext.allowConstantEarlyDepth=true;
     drawContext.allowDegradedDraws=true;
-    const auto strictMaterial74=strictmaterial74::readConfig();
-    drawContext.allowVisualFallback=strictMaterial74==strictmaterial74::Config::enabled?
-        strictmaterial74::allowFallback:nullptr;
-    OSReport("Native strict material74: %s config=%s; TEV fallback refused only when enabled; perspective depth fallback unchanged\n",
-        strictMaterial74==strictmaterial74::Config::enabled?"enabled":"disabled",
-        strictmaterial74::configName(strictMaterial74));
+    drawContext.allowProjectiveDivisorFallback=true;
+    drawContext.allowAlphaCompareFallback=true;
+    drawContext.allowIndirectDivisorFallback=true;
+    drawContext.preferFogRamp=true;
+    // Strict rejection (the game ends on the first unsupported draw) only on request.
+    {auto* strict=std::fopen("sdmc:/3ds/DuskLight/strict-draws.txt","rb");
+     drawContext.skipUnsupportedDraws=!strict;if(strict)std::fclose(strict);}
+    gx::commandSkipUnavailableTextures=drawContext.skipUnsupportedDraws;
+    OSReport("Native original GX policy: unsupported draws are %s\n",drawContext.skipUnsupportedDraws?
+        "left out and counted (rejected); strict-draws.txt on the SD restores the fatal rejection":"fatal (strict-draws.txt)");
+    OSReport("Native original GX policy: visible nonpositive projected divisor clamped; lower-bound dual alpha keeps one test; Tier D counted\n");
     OSReport("Native original GX policy: classified perspective TEV/clipping approximations counted; resource/protocol/submission failures remain fatal; UI strict\n");
     OSReport("Native original GX policy: vertex depth/range fog plus final RGB TEV; Tier D counted\n");
     OSReport("Native original GX policy: nominal TEV fractions use nearest UNORM8; Tier D counted\n");
@@ -396,18 +652,19 @@ int runOriginalGame(){
         if(std::string_view(why).starts_with("GX visual fallback: ")){
             OSReport("Native degraded draw: %s\n",why);return;
         }
-        if(drawCapture94.armed()){
-            const auto receipt=drawCapture94.observe(draw,why,dComIfGp_getStartStageName(),dComIfGp_getStartStageRoomNo(),requestedBootStage());
-            if(drawCapture94.attempted){
-                char text[256];gx::capture94::formatReceipt(receipt,text,sizeof(text));
-                // Post-close returned receipt is mandatory for capture admission.
-                OSReport("Native capture94 returned: %s",text);
-            }
-        }
         reportCameraAlignedProof(drawContext);
         auto* player=dComIfGp_getPlayer(0);
         OSReport("Native rejected draw world: stage=%.8s room=%d player=%p\n",dComIfGp_getStartStageName(),dComIfGp_getStartStageRoomNo(),player);
         OSReport("Native draw rejected: %s primitive=%u vertices=%u\n",why,unsigned(draw.primitive),unsigned(draw.vertexCount));
+        // Inside a J3D display list the current model is live: name it.
+        if(gx::staticGeometryHint.list)if(auto* model=j3dSys.getModel())if(const auto* data=model->getModelData()){
+            auto* joints=data->getJointName();auto* materials=data->getMaterialName();
+            auto* packet=j3dSys.getMatPacket();auto* material=packet?packet->getMaterial():nullptr;
+            const unsigned index=material?material->getIndex():0xffff;
+            OSReport("Native rejected draw model: joints=%u envelopes=%u shapes=%u joint0=%s material=%u/%s\n",unsigned(data->getJointNum()),
+                unsigned(data->getWEvlpMtxNum()),unsigned(data->getShapeNum()),joints?joints->getName(0):"?",index,
+                materials&&index<data->getMaterialNum()?materials->getName(u16(index)):"?");
+        }
         OSReport("Native rejected XF clip valid=%u value=%lu\n",unsigned(draw.registers.xfValid[0x1005]),static_cast<unsigned long>(draw.registers.xf[0x1005]));
         for(unsigned reg=0x1009;reg<=0x1011;++reg)
             OSReport("Native rejected XF %04x valid=%u value=%08lx\n",reg,unsigned(draw.registers.xfValid[reg]),static_cast<unsigned long>(draw.registers.xf[reg]));
@@ -441,16 +698,7 @@ int runOriginalGame(){
         for(unsigned reg=0;reg<256;++reg)if(draw.registers.bpValid[reg])
             OSReport("Native raster BP %02x valid=%u value=%06lx\n",reg,unsigned(draw.registers.bpValid[reg]),static_cast<unsigned long>(draw.registers.bp[reg]));
     };
-    feedbackDrawCapture76.config=gx::feedback76::readConfig();
-    OSReport("FRAME76 startup enabled=%u frame=%u limit=%u phase=pre-submit\n",
-        unsigned(feedbackDrawCapture76.enabled()),feedbackDrawCapture76.config.frame,feedbackDrawCapture76.config.limit);
-    const gx::CommandDrawSink feedbackSink76=+[](const gx::CommandDraw& draw,void* user){
-        return feedbackDrawCapture76.invoke(draw,user,drawGxCommand,
-            mDoGph_gInf_c::getFrameBufferTex(),feedbackDrawLog76);
-    };
-    processor.setSink(gx::feedback76::chooseSink(feedbackDrawCapture76.enabled(),drawGxCommand,feedbackSink76),&drawContext);
-    const bool vital80=readVitalConfig80();
-    OSReport("VITAL80 startup enabled=%u; read-only end-frame fields\n",unsigned(vital80));
+    processor.setSink(drawGxCommand,&drawContext);
     const bool automaticSu77=readAutomaticSuConfig77();
     if(!stream.configureAutomaticSu(automaticSu77))fatal("Original GX automatic SU77 configuration failed");
     OSReport("Native automatic SU77: %s; typed SDK updates, raw display-list writes retained\n",
@@ -480,38 +728,106 @@ int runOriginalGame(){
     if(!PADInit())fatal("Original PAD services are unavailable");
     mDoCPd_c::create();
     mDoDvdThd_callback_c::create((mDoDvdThd_callback_func)LOAD_COPYDATE,nullptr);
-#if DUSK_SCENE_CREATE_PROBE
-    initializeSceneProbeFromSd();
-#endif
-#if DUSK_GROUND_CREATE_PROBE
-    initializeGroundProbeFromSd();
-#endif
-#if DUSK_BG_BUDGET_EXPERIMENT_76
-    dusk::bg76::initializeFromSd();
-#endif
     fapGm_Create();fopAcM_initManager();cDyl_InitAsync();
     g_mDoAud_audioHeap=JKRCreateSolidHeap(0x14D800*2,JKRGetCurrentHeap(),false);
     if(!g_mDoAud_audioHeap)fatal("Original audio heap allocation failed");
     dusk::game_clock::initialize();
     std::uint64_t frame=0;
     std::uint64_t ordinaryFrames=0,ordinaryExecutionTicks=0,ordinaryLoopTicks=0;
+    // Ordinary play keeps detailed profiling, the periodic report and SD writes
+    // out of the frame loop; developer runs retain them (see developer_script).
+    const bool detailedDiagnostics=developerDiagnosticsRequested();
+    auto sdSwitch=[](const char* path){if(auto* file=std::fopen(path,"rb")){std::fclose(file);return true;}return false;};
+    // Console A/B switches. Azahar models neither CPU caches nor GPU time.
+    // The whole-heap frame-end flush is Citro3D's default and the only one
+    // proven on a console; flush-ranges-only.txt keeps the cheaper A/B path.
+    const bool flushAllLinear=!sdSwitch("sdmc:/3ds/DuskLight/flush-ranges-only.txt");
+    const bool gpuChunksOff=sdSwitch("sdmc:/3ds/DuskLight/gpu-chunks-off.txt");
+    const bool stackedWaits=sdSwitch("sdmc:/3ds/DuskLight/stacked-waits.txt");
+    platformSetGpuChunkDraws(gpuChunksOff?0:24);
+    const bool kernelFlush=sdSwitch("sdmc:/3ds/DuskLight/svc-flush.txt");
+    setGxGeometryKernelFlush(kernelFlush);
+    OSReport("Native geometry publication: %s\n",kernelFlush?"kernel cache flush (SD switch)":"GSP cache flush request");
+    const bool gameFlush=sdSwitch("sdmc:/3ds/DuskLight/game-cache-flush.txt");
+    setGameCacheFlush(gameFlush);
+    OSReport("Native game cache flushes: %s\n",gameFlush?"forwarded to the kernel (SD switch)":"not forwarded");
+    const bool nativeChainOff=sdSwitch("sdmc:/3ds/DuskLight/native-chain-off.txt");
+    setNativeShapeChain(!nativeChainOff);
+    OSReport("Native shape replay continuation: %s\n",nativeChainOff?"off (SD switch)":"on");
+    OSReport("Native frame pacing: %s; GPU submission: %s; frame-end flush: %s\n",
+        stackedWaits?"legacy stacked retrace waits (SD switch)":"single display deadline",
+        gpuChunksOff?"whole frame at frame end (SD switch)":"incremental, every 24 draws and after the painter",
+        flushAllLinear?"complete linear heap":"command list and written ranges (SD switch)");
+    // Game speed: 30 logic ticks per second of real time (see LogicPace).
+    // real-speed-off.txt restores one tick per picture (Alpha 0, slow motion);
+    // draw-every-tick.txt also enters the draw lists on the extra ticks.
+    const bool realSpeed=!sdSwitch("sdmc:/3ds/DuskLight/real-speed-off.txt");
+    const bool drawEveryTick=sdSwitch("sdmc:/3ds/DuskLight/draw-every-tick.txt");
+    duskNativeCameraLog=sdSwitch("sdmc:/3ds/DuskLight/camera-log.txt");
+    OSReport("Native game speed: %s%s\n",realSpeed?"30 logic ticks per second of real time, up to 4 per picture":
+        "one logic tick per picture (SD switch real-speed-off.txt)",drawEveryTick?"; draw lists on every tick (SD switch)":"");
+    OSReport("Native GX syncs: %s\n",nativeGxSyncWaits()?"wait for the whole GPU (SD switch gx-sync-wait.txt)":
+        "ordered on the GPU; only readbacks, eviction and texture re-decode wait");
+    unsigned previousTicks=1;
+    initializeFrameTelemetry();
+    initializeGpuCanary();
+    // Rigid routes. The multi-texture shader has completed on a console in
+    // every run and draws everything by default, its projected unit included
+    // (new on 2026-11-14: the guard records a stop of that unit).
+    drawContext.allowMultiProjected=!gpuCanaryMultiProjectedRefused();
+    if(auto* off=std::fopen("sdmc:/3ds/DuskLight/mt-projected-off.txt","rb")){std::fclose(off);drawContext.allowMultiProjected=false;}
+    // The single-texture rigid shader stopped the console PICA in every build
+    // that used it (2026-11-13). Its outputs were completed on 2026-11-14,
+    // unproven on a console: it is used only when rigid-single-on.txt asks for
+    // it, or as the second choice once the projected unit above was refused
+    // (the CPU route is the third). A stop of it is learned and refuses it.
+    gx::multiTextureWidePalette=!sdSwitch("sdmc:/3ds/DuskLight/mt-wide-palette-off.txt");
+    drawContext.allowProjectionMode=!sdSwitch("sdmc:/3ds/DuskLight/projection-mode-off.txt");
+    OSReport("Native projected textures on the CPU route: %s\n",drawContext.allowProjectionMode?
+        "PICA projection mode (per-pixel divide)":"per-vertex divide (SD switch)");
+    const bool singleAsked=sdSwitch("sdmc:/3ds/DuskLight/rigid-single-on.txt");
+    drawContext.allowSingleRigidShader=(singleAsked||!drawContext.allowMultiProjected)&&!gpuCanaryRigidSingleRefused()&&
+        !sdSwitch("sdmc:/3ds/DuskLight/rigid-single-off.txt");
+    OSReport("Native rigid shaders: multi-texture palette %s; projected unit %s; single-texture shader %s\n",
+        gx::multiTextureWidePalette?"up to the rows of unused units":"below row 81 (SD switch)",drawContext.allowMultiProjected?"on":"off",
+        drawContext.allowSingleRigidShader?(singleAsked?"on (SD switch rigid-single-on.txt)":"on (second choice after the projected unit was refused)"):
+        "off (the multi-texture shader or the CPU route draws its share)");
+    std::uint64_t telemetryPaint=0,telemetryUpdate=0,telemetryDraw=0,telemetryDrawn=0;
+    u32 telemetryAudio=nativeAudioStatus().mixTicks;
+    std::uint64_t consolePaintTicks=0,consoleUpdateTicks=0,consoleGpuWaitTicks=0;
+    std::uint32_t consoleDraws=0,consoleGameFree=0,consoleLinearFree=0;
     try{
         while(aptMainLoop()){
             const auto loopStart=gxProfileTick();
-            gxSparseVertexProfiling=frame%30==29;
+            // Developer runs and the test's profile phase take the sparse detailed profile.
+            const bool detailFrames=detailedDiagnostics||devConsoleProfiling();
+            gxSparseVertexProfiling=detailFrames&&frame%30==29;
             hidScanInput();
-            updateApplicationDumpInput(hidKeysHeld());
-            // START remains a game button; only this explicit chord exits.
-            if(!applicationDumpInputSuppressed()&&(hidKeysHeld()&(KEY_START|KEY_SELECT))==(KEY_START|KEY_SELECT))break;
+            // Scripted developer input reaches the dump chord and the test chord
+            // too (emulator tests): held keys only, so a scripted game button
+            // never operates the console pages.
+            u32 heldKeys=hidKeysHeld();{std::int16_t sx{},sy{};applyScriptedInput(heldKeys,sx,sy);}
+            updateApplicationDumpInput(heldKeys);
+            // START and SELECT stay with the game and the console: START+SELECT
+            // toggles the automatic test; the EXIT tab leaves the game.
+            if(!applicationDumpInputSuppressed())updateDevConsoleInput(heldKeys,hidKeysDown());
+            if(devConsoleExitRequested())break;
             if(developerExitRequested(frame)){OSReport("Native developer exit after frame %llu\n",static_cast<unsigned long long>(frame));break;}
             // Reported frame numbers start at 1 after the first completed frame.
             setDeveloperFrame(frame+1);
-            if(feedbackDrawCapture76.enabled())feedbackDrawCapture76.setFrame(frame+1,feedbackDrawLog76);
+            if(gpuCanaryAutoAdvance()&&dComIfGp_getStartStageName()[0])gpuCanaryWorldEntered();
             if(copyprobe::enabled)copyprobe::setFrame(frame+1);
-            VIWaitForRetrace();
-            if(resetTiming){dusk::game_clock::reset();resetTiming=false;}
+            // The game's display wait (JFWDisplay::beginRender) is the single
+            // pacing point of a frame. Wait here only if the previous iteration
+            // never reached it, so an unpaced state cannot spin.
+            if(stackedWaits||!consumeFramePaced())VIWaitForRetrace();
+            if(resetTiming){dusk::game_clock::reset();logicPace.reset();resetTiming=false;}
+            // Logic ticks this picture carries; the first paints the previous
+            // picture's lists, the last enters this picture's lists.
+            const unsigned ticks=realSpeed?logicPace.due(loopStart):1;
+            duskNativePaintTicks=float(previousTicks);duskNativeDrawTicks=drawEveryTick?1.0f:float(ticks);
             const auto timing=dusk::game_clock::advance();
-            if(!platformBeginGpuFrame(C3D_FRAME_SYNCDRAW))fatal("Original game GPU frame admission failed");
+            if(!platformBeginGpuFrame(stackedWaits?C3D_FRAME_SYNCDRAW:0))fatal("Original game GPU frame admission failed");
             finishDeveloperRetainedDepth(true); // Before any new pre/depth capture.
             if(!collectTextureResources())fatal(textureResourceFailure());
             if(!beginGxGeometryFrame())fatal(gxGeometryFailure());
@@ -524,37 +840,29 @@ int runOriginalGame(){
 #endif
             if(developerDepthAuditRequested(frame+1))captureDeveloperDepthBoundary(false);
             mDoGph_gInf_c::updateRenderSize();
-            dusk::game_clock::begin_sim_tick();mDoCPd_c::read();
-            if(mDoCPd_c::getTrig(PAD_1))OSReport("Original native PAD trigger=%04lx frame=%llu\n",
-                static_cast<unsigned long>(mDoCPd_c::getTrig(PAD_1)),static_cast<unsigned long long>(frame));
             const auto workerBefore=nativeAudioStatus();
             const auto profileBefore=gxProfileTotals;const auto executionStart=gxProfileTick();
-            gxSparseVertexProfiling=frame%30==29;resetGxNamedProfiles();
+            gxSparseVertexProfiling=detailFrames&&frame%30==29;resetGxNamedProfiles();
+            native_effects::emitterReport=gxSparseVertexProfiling;native_effects::emitterRowCount=0;
             cacheMaintenanceProfile={};cacheMaintenanceProfile.active=gxSparseVertexProfiling;
             // One diagnostic frame only; exclude this traced frame from timing
             // comparisons. All ordinary frames keep concise aggregate profiles.
             gxVertexLayoutTracing=frame==359;
             drawContext.cpuVertexReasons={};
-#if DUSK_SCENE_CREATE_PROBE
-            sceneProbeBegin(static_cast<std::uint32_t>(frame+1));
-#endif
-#if DUSK_GROUND_CREATE_PROBE
-            groundProbeBegin(static_cast<std::uint32_t>(frame+1));
-#endif
-#if DUSK_BG_BUDGET_EXPERIMENT_76
-            dusk::bg76::setFrame(static_cast<std::uint32_t>(frame+1));
-#endif
-            fapGm_Execute();
-#if DUSK_GROUND_CREATE_PROBE
-            groundProbeEnd();
-#endif
-#if DUSK_SCENE_CREATE_PROBE
-            sceneProbeEnd();
-#endif
-#if DUSK_BG_BUDGET_EXPERIMENT_76
-            dusk::bg76::flush();
-#endif
-            const auto audioStart=gxProfileTick();mDoAud_Execute();const auto audioTicks=gxProfileTick()-audioStart;dusk::game_clock::commit_sim_tick();
+            std::uint64_t audioTicks=0;
+            for(unsigned tick=0;tick<ticks;++tick){
+                duskNativeTickPaint=tick==0;duskNativeTickDraw=drawEveryTick||tick+1==ticks;
+                // The pad is read once per tick: its edges reach only the first.
+                dusk::game_clock::begin_sim_tick();mDoCPd_c::read();
+                if(mDoCPd_c::getTrig(PAD_1))OSReport("Original native PAD trigger=%04lx frame=%llu\n",
+                    static_cast<unsigned long>(mDoCPd_c::getTrig(PAD_1)),static_cast<unsigned long long>(frame));
+                fapGm_Execute();
+                const auto audioStart=gxProfileTick();mDoAud_Execute();audioTicks+=gxProfileTick()-audioStart;
+                dusk::game_clock::commit_sim_tick();
+            }
+            duskNativeTickPaint=duskNativeTickDraw=true;
+            // The next paint shows this picture: it follows the previous paint by these ticks.
+            previousTicks=ticks;
             const auto executionTicks=gxProfileTick()-executionStart;
             if(!stream.finish())fatal("Original game left an incomplete GX command");
             if(!endGxGeometryFrame())fatal(gxGeometryFailure());
@@ -573,21 +881,53 @@ int runOriginalGame(){
             if(!dusk::pica::game::endFrame())fatal(dusk::pica::game::failure());
             if(!platformEndGpuFrame(GX_CMDLIST_FLUSH))fatal("Native GPU frame completion unavailable");
 #else
-            if(!platformEndGpuFrame(0))fatal("Native GPU frame completion unavailable");
+            // Every CPU-written GPU input (geometry arena, resident caches,
+            // textures) is flushed where it is written; the whole-heap flush
+            // stays the default until a console run confirms the cheaper path.
+            if(!platformEndGpuFrame(flushAllLinear?0:GX_CMDLIST_FLUSH))fatal("Native GPU frame completion unavailable");
 #endif
             observeDeveloperRetainedDepth(RetainedDepthStage::afterFrameEnd);
             ++frame;
+            {
+                // One RAM sample per frame; SD output only at a stage change or exit.
+                FrameTelemetryInput sample;
+                sample.frame=frame;sample.loopTicks=gxProfileTick()-loopStart;sample.executionTicks=executionTicks;
+                const auto paint=gxProfileTotals.ticks[unsigned(GxProfilePart::gamePaint)];
+                const auto update=gxProfileTotals.ticks[unsigned(GxProfilePart::gameUpdate)];
+                const auto draw=gxProfileTotals.ticks[unsigned(GxProfilePart::gameDraw)];
+                sample.paintTicks=paint-telemetryPaint;sample.updateTicks=update-telemetryUpdate;sample.drawTicks=draw-telemetryDraw;
+                telemetryPaint=paint;telemetryUpdate=update;telemetryDraw=draw;
+                sample.paceTicks=takeFramePaceTicks();
+                const u32 audioNow=nativeAudioStatus().mixTicks;sample.audioMixTicks=u32(audioNow-telemetryAudio);telemetryAudio=audioNow;
+                sample.gpu=platformTakeGpuTelemetry();sample.gpuTailMilliseconds=C3D_GetDrawingTime();
+                sample.draws=std::uint32_t(drawContext.submitted-telemetryDrawn);telemetryDrawn=drawContext.submitted;
+                sample.stage=dComIfGp_getStartStageName();sample.room=dComIfGp_roomControl_getStayNo();
+                sample.ticks=ticks;
+                recordFrameTelemetry(sample);
+                consolePaintTicks=sample.paintTicks;consoleUpdateTicks=sample.updateTicks;consoleDraws=sample.draws;
+                consoleGpuWaitTicks=sample.gpu.beginWaitTicks+sample.gpu.endWaitTicks+sample.gpu.completeWaitTicks+sample.gpu.presentWaitTicks;
+            }
             // Main owner, completed GPU frame, before bottom progress UI.
             // No game/filesystem lock held and no worker suspension.
             if(applicationDumpRequested()){
+                {char note[256];float fps{};int speed{};devConsoleRates(fps,speed);auto* player=dComIfGp_getPlayer(0);
+                 std::snprintf(note,sizeof(note),"fps=%.1f\ngame_speed_percent=%d\nlogic_ticks_last_picture=%u\nplayer_position=%.0f %.0f %.0f\n",
+                    fps,speed,ticks,player?player->current.pos.x:0.0f,player?player->current.pos.y:0.0f,player?player->current.pos.z:0.0f);
+                 setApplicationDumpNote(note);}
                 setClockPaused(true);dusk::audio::SetPaused(true);
                 const bool captured=serviceApplicationDump(frame,dComIfGp_getStartStageName(),dComIfGp_roomControl_getStayNo());
                 setClockPaused(gameSuspended||gameSleeping);
                 dusk::audio::SetPaused(gameSuspended||gameSleeping);
+                devConsoleRedraw();
                 if(captured){dusk::game_clock::reset();resetTiming=true;continue;}
             }
             if(developerDumpRequested(frame))dumpDeveloperMemory(frame);
-            if(frame==1||frame%30==0){
+            if(!detailedDiagnostics&&frame%60==0)ordinaryFrames=ordinaryExecutionTicks=ordinaryLoopTicks=0;
+            // Console evidence: without this a freeze left no log at all (the
+            // log stayed in RAM until a clean exit). Durable, main thread only.
+            if(!detailedDiagnostics&&frame%30==0)flushNativeLog();
+            gpuCanaryFrameEnd(frame,dComIfGp_getStartStageName());
+            if(detailedDiagnostics&&(frame==1||frame%30==0)){
                 const double perfLoopMs=ordinaryFrames?ordinaryLoopTicks*1000.0/(nativeTickFrequency*ordinaryFrames):0.0;
                 const double perfExecutionMs=ordinaryFrames?ordinaryExecutionTicks*1000.0/(nativeTickFrequency*ordinaryFrames):0.0;
                 auto* gameHeap=mDoExt_getGameHeap();
@@ -595,14 +935,7 @@ int runOriginalGame(){
                 const char* audioText=audio.output==AudioOutputState::ndsp?"NDSP active":
                     audio.output==AudioOutputState::componentUnavailable?"MUTED: DSP component missing":"not initialized";
                 observeDeveloperRetainedDepth(RetainedDepthStage::beforeConsole);
-                std::printf("\x1b[2J\x1b[1;1HDUSKLIGHT original runtime\nNew3DS native | 400x240 2D\nFrame %llu | dt %.4f\nStage: %.8s\n\nGX drawn / rejected\n%llu / %llu (degraded %llu)\nGPU textures: %lu KiB\nOwned BTI: %lu KiB\nGeometry: %lu / 524288 B\nJKR game free: %lu KiB\nLinear free: %lu KiB\n\nLoop %.1f ms = %.1f FPS\nExecution %.1f ms\n\nSTART+SELECT: exit\n",
-                    static_cast<unsigned long long>(frame),timing.dt,dComIfGp_getStartStageName(),
-                    static_cast<unsigned long long>(drawContext.submitted),static_cast<unsigned long long>(drawContext.rejected),
-                    static_cast<unsigned long long>(drawContext.simplifiedDraws+drawContext.skippedDraws),
-                    static_cast<unsigned long>(gxTextureBytes()/1024),static_cast<unsigned long>(textureResourceBytes()/1024),
-                    static_cast<unsigned long>(gxGeometryBytes()),static_cast<unsigned long>(gameHeap?gameHeap->getTotalFreeSize()/1024:0),
-                    static_cast<unsigned long>(linearSpaceFree()/1024),
-                    perfLoopMs,perfLoopMs>0?1000.0/perfLoopMs:0.0,perfExecutionMs);
+                (void)gameHeap;(void)audioText;(void)timing;
                 flushNativeLog();
                 if(auto* perfLog=std::fopen("sdmc:/3ds/DuskLight/perf.log","ab")){
                     // Real hardware timing, one line per 30 frames, for remote diagnosis.
@@ -612,13 +945,10 @@ int runOriginalGame(){
                         static_cast<unsigned long>(linearSpaceFree()/1024));
                     std::fclose(perfLog);
                 }
-                std::printf("\x1b[21;1HAudio: %.32s\nBlocks %lu | underruns %lu\nResult %08lx\n",audioText,
-                    static_cast<unsigned long>(audio.blocks),static_cast<unsigned long>(audio.underruns),static_cast<unsigned long>(audio.result));
                 observeDeveloperRetainedDepth(RetainedDepthStage::afterConsoleWrites);
-                GSPGPU_FlushDataCache(gfxGetFramebuffer(GFX_BOTTOM,GFX_LEFT,nullptr,nullptr),320*240*2);
                 observeDeveloperRetainedDepth(RetainedDepthStage::afterConsoleFlush);
             }
-            if(frame==1||frame%30==0){
+            if(detailFrames&&(frame==1||frame%30==0)){
                 if(ordinaryFrames)OSReport("Native ordinary frame window: count=%llu execution_mean=%.3f loop_mean=%.3f ms detailed=%s\n",
                     static_cast<unsigned long long>(ordinaryFrames),ordinaryExecutionTicks*1000.0/(nativeTickFrequency*ordinaryFrames),
                     ordinaryLoopTicks*1000.0/(nativeTickFrequency*ordinaryFrames),gxProfileEveryFrame?"all":"sparse");
@@ -689,6 +1019,53 @@ int runOriginalGame(){
                     static_cast<unsigned long long>(us),static_cast<unsigned long long>(uw));}
                 {std::uint64_t nh,nm,nr,nk;nativeShapeStatistics(nh,nm,nr,nk);OSReport("Native direct shapes hits=%llu misses=%llu records=%llu keyMisses=%llu\n",
                     static_cast<unsigned long long>(nh),static_cast<unsigned long long>(nm),static_cast<unsigned long long>(nr),static_cast<unsigned long long>(nk));}
+                {std::uint64_t refreshed,refused;std::array<std::uint64_t,7> parts;nativeShapeDiagnostics(refreshed,refused,parts);
+                 OSReport("Native direct shape constants refreshed=%llu refused=%llu; profiled key misses by part bp=%llu texture=%llu cp=%llu xf=%llu matrix=%llu target=%llu unrecorded=%llu\n",
+                    static_cast<unsigned long long>(refreshed),static_cast<unsigned long long>(refused),
+                    static_cast<unsigned long long>(parts[0]),static_cast<unsigned long long>(parts[1]),static_cast<unsigned long long>(parts[2]),
+                    static_cast<unsigned long long>(parts[3]),static_cast<unsigned long long>(parts[4]),static_cast<unsigned long long>(parts[5]),
+                    static_cast<unsigned long long>(parts[6]));}
+                for(unsigned kind=0;kind<2;++kind){
+                    // Ten most expensive process profiles of this frame (ids: d_procname.h).
+                    char line[256];int at=std::snprintf(line,sizeof(line),"Native process %s top:",kind?"draw":"execute");
+                    std::uint64_t total=0;for(const auto ticks:gxProcessTicks[kind])total+=ticks;
+                    for(unsigned rank=0;rank<10&&at<int(sizeof(line))-24;++rank){
+                        unsigned best=0;for(unsigned n=1;n<gxProcessProfileCapacity;++n)if(gxProcessTicks[kind][n]>gxProcessTicks[kind][best])best=n;
+                        if(!gxProcessTicks[kind][best])break;
+                        at+=std::snprintf(line+at,sizeof(line)-at," %u=%.2f/%u",best,gxProcessTicks[kind][best]*1000.0/nativeTickFrequency,unsigned(gxProcessCalls[kind][best]));
+                        gxProcessTicks[kind][best]=0;
+                    }
+                    OSReport("%s total=%.2f ms\n",line,total*1000.0/nativeTickFrequency);
+                    gxProcessTicks[kind]={};gxProcessCalls[kind]={};
+                }
+                {std::uint64_t d2,z2,b2;native2dStatistics(d2,z2,b2);
+                 OSReport("Native profiled 2D draws=%llu zero-vertex-alpha=%llu alpha-blend=%llu\n",d2,z2,b2);}
+                {auto& e=native_effects::counters;
+                 OSReport("Native effects since last report: blob-shadows=%u draws=%u model-shadows=%u triangles=%u demoted=%u particle-emitters=%u batches=%u batched=%u off-screen=%u no-warp=%u single=%u (kind=%u projected=%u callback=%u formula=%u) bloom=%u\n",
+                    e.simpleShadows,e.simpleShadowDraws,e.realShadows,e.realShadowTriangles,e.realShadowDemoted,e.particleEmitters,e.particleBatches,e.particleBatched,e.particleCulled,e.particleDirect,e.particleSingle,
+                    e.particleUnbatched[0],e.particleUnbatched[1],e.particleUnbatched[2],e.particleUnbatched[3],e.bloomPasses);
+                 OSReport("Native particle batches since last report: extra-draws env=%u texture=%u refraction=%u\n",e.particleBreaks[0],e.particleBreaks[1],e.particleRefraction);
+                 // The profiled frame's particle resources, most expensive first (flags: see native_effects.h).
+                 {auto* rows=native_effects::emitterRows;const unsigned count=native_effects::emitterRowCount;
+                  std::sort(rows,rows+count,[](const auto& a,const auto& b){return a.ticks>b.ticks;});
+                  for(unsigned i=0;i<count&&i<24;++i)OSReport("Native particle resource id=%04x flags=%05x emitters=%u particles=%u draws=%u single=%u ms=%.3f\n",
+                      rows[i].id,rows[i].flags,rows[i].emitters,rows[i].particles,rows[i].batches,rows[i].singles,rows[i].ticks*1000.0/nativeTickFrequency);}
+                 e={};
+                 unsigned remembered,dropped,passes;gxShadowCasterStatistics(remembered,dropped,passes);
+                 OSReport("Native shadow casters since last report: passes=%u remembered-draws=%u dropped=%u\n",passes,remembered,dropped);}
+                {unsigned tu,tc,tr;gx::textureObjectUsage(tu,tc,&tr);
+                 OSReport("Native GX texture objects used=%u/%u reclaimed=%u\n",tu,tc,tr);}
+                {std::uint64_t ch,cc,ci,cm;gx::compiledListStatistics(ch,cc,ci,cm);
+                 OSReport("Native compiled lists: replayed=%llu compiled=%llu interpreted=%llu mismatches=%llu\n",ch,cc,ci,cm);}
+                {std::array<std::uint64_t,8> g{};const auto n=rigidTriangleFogStatistics(&g);
+                 OSReport("Native GPU triangle-fog draws=%llu cpu-gates=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",n,g[0],g[1],g[2],g[3],g[4],g[5],g[6],g[7]);}
+                {std::uint64_t ih,im,is,ifb;immediateDrawStatistics(ih,im,is,ifb);
+                 OSReport("Native immediate draw records: hits=%llu misses=%llu stores=%llu fallbacks=%llu\n",ih,im,is,ifb);}
+                {std::array<std::uint64_t,13> o;nativeShapeRecordOutcomes(o);
+                 OSReport("Native static batch outcomes recorded=%llu batch-limit=%llu not-compact=%llu not-resident=%llu projected=%llu carrier-fallback=%llu indirect=%llu special-route=%llu clip-disabled=%llu fog-substituted=%llu expanded=%llu pool=%llu cpu-vertex=%llu\n",
+                    o[0],o[1],o[2],o[3],o[4],o[5],o[6],o[7],o[8],o[9],o[10],o[11],o[12]);}
+                {std::uint64_t chained,keyHits;nativeShapeChainStatistics(chained,keyHits);
+                 OSReport("Native direct shape continuations=%llu key-cache-hits=%llu\n",static_cast<unsigned long long>(chained),static_cast<unsigned long long>(keyHits));}
                 {std::uint64_t ph,pm,ps,pf;preparedDrawStatistics(ph,pm,ps,pf);
                  OSReport("Native prepared draws hits=%llu misses=%llu stores=%llu fallbacks=%llu\n",static_cast<unsigned long long>(ph),
                     static_cast<unsigned long long>(pm),static_cast<unsigned long long>(ps),static_cast<unsigned long long>(pf));}
@@ -723,14 +1100,30 @@ int runOriginalGame(){
                     player->current.pos.x,player->current.pos.y,player->current.pos.z,mDoCPd_c::getStickValue(PAD_1),mDoCPd_c::getStickAngle3D(PAD_1));
                 if(auto* link=dComIfGp_getLinkPlayer())OSReport("Original Link control demo-type=%d demo-mode=%lu speed=%.3f\n",
                     link->mDemo.getDemoType(),static_cast<unsigned long>(link->getDemoMode()),link->speedF);
-                if(vital80)OSReport("VITAL80 f=%u life=%u oxy=%d/%d/%d delta=%d/%d show=%u\n",
-                    unsigned(frame),unsigned(dComIfGs_getLife()),dComIfGp_getOxygen(),dComIfGp_getNowOxygen(),dComIfGp_getMaxOxygen(),
-                    dComIfGp_getOxygenCount(),dComIfGp_getMaxOxygenCount(),unsigned(dComIfGp_getOxygenShowFlag()));
             }
             observeDeveloperRetainedDepth(RetainedDepthStage::afterReporting);
+            {
+                // Bottom-screen console and automatic test, between frames.
+                DevGameStatus status;
+                status.frame=frame;status.stage=dComIfGp_getStartStageName();status.room=dComIfGp_roomControl_getStayNo();
+                status.point=dComIfGp_getStartStagePoint();status.layer=dComIfGp_getStartStageLayer();
+                auto* player=dComIfGp_getPlayer(0);
+                status.playerReady=player!=nullptr;status.stageChanging=dComIfGp_isEnableNextStage();
+                status.playScene=status.playerReady&&fpcM_SearchByName(fpcNm_PLAY_SCENE_e)!=nullptr;
+                if(player){status.position[0]=player->current.pos.x;status.position[1]=player->current.pos.y;status.position[2]=player->current.pos.z;}
+                const double scale=1000.0/nativeTickFrequency;
+                status.loopMs=float((gxProfileTick()-loopStart)*scale);status.execMs=float(executionTicks*scale);
+                status.paintMs=float(consolePaintTicks*scale);status.updateMs=float(consoleUpdateTicks*scale);status.gpuWaitMs=float(consoleGpuWaitTicks*scale);
+                status.ticks=ticks;
+                status.draws=consoleDraws;status.rejected=drawContext.rejected;status.degraded=drawContext.simplifiedDraws;
+                status.textureBytes=std::uint32_t(gxTextureBytes());status.geometryBytes=std::uint32_t(gxGeometryBytes());
+                if(frame%30==0){auto* heap=mDoExt_getGameHeap();consoleGameFree=heap?std::uint32_t(heap->getTotalFreeSize()):0;consoleLinearFree=linearSpaceFree();}
+                status.gameHeapFree=consoleGameFree;status.linearFree=consoleLinearFree;
+                if(serviceDevConsole(status)){dusk::game_clock::reset();resetTiming=true;}
+            }
             // Measure complete ordinary loops separately from detailed profiler,
             // console/log refresh, vertex tracing, screenshot and SD dump frames.
-            if(frame!=1&&frame%30!=0&&!gxVertexLayoutTracing&&!developerCaptureRequested(frame)&&!developerDumpRequested(frame)&&!developerDepthAuditRequested(frame)&&!developerRetainedDepthDiagnosticFrame(frame)){
+            if(!detailedDiagnostics||(frame!=1&&frame%30!=0&&!gxVertexLayoutTracing&&!developerCaptureRequested(frame)&&!developerDumpRequested(frame)&&!developerDepthAuditRequested(frame)&&!developerRetainedDepthDiagnosticFrame(frame))){
                 ++ordinaryFrames;ordinaryExecutionTicks+=executionTicks;ordinaryLoopTicks+=gxProfileTick()-loopStart;
             }
         }
@@ -746,12 +1139,6 @@ int runOriginalGame(){
         if(!platformEndGpuFrame(GX_CMDLIST_FLUSH))fatal("Native reset GPU completion unavailable");
     }
 #endif
-#if DUSK_SCENE_CREATE_PROBE
-    sceneProbeClose();
-#endif
-#if DUSK_GROUND_CREATE_PROBE
-    groundProbeClose();
-#endif
     if(drawContext.diagnosticRasterCarrier)
         OSReport("Native raster carrier totals: attempts=%llu submitted=%llu rejected=%llu first=%s vertex=%lu\n",
             static_cast<unsigned long long>(drawContext.rasterCarrierAttempts),
@@ -764,11 +1151,15 @@ int runOriginalGame(){
             static_cast<unsigned long long>(drawContext.signedQNegativeDraws),
             static_cast<unsigned long long>(drawContext.signedQMixedDraws),
             static_cast<unsigned long long>(drawContext.signedQReports));
-    feedbackDrawCapture76.finish(feedbackDrawLog76);
     reportPositiveQGpu(drawContext);
     reportCameraAlignedProof(drawContext);
+    gpuCanarySessionEnd();
     OSReport("Native shutdown phase=GPU completion\n");
     if(platformCompleteGpu(500000000)!=GpuCompletion::complete)fatal("Original game shutdown GPU timeout");
+    shutdownDevConsole();
+    // Console telemetry: per-stage summary plus the most recent frames.
+    OSReport("Native frame telemetry: %s\n",writeFrameTelemetry(true)?"written to sdmc:/3ds/DuskLight":"not written");
+    flushNativeLog(); // ordinary play keeps the log in RAM until here
     finishDeveloperRetainedDepth(false); // Explicitly incomplete if exit/reset skipped next FrameBegin.
     OSReport("Native shutdown phase=audio stop\n");
     dusk::audio::Shutdown();

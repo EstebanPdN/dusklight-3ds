@@ -316,6 +316,9 @@ int daObjFlag3_c::createHeap() {
                             image->maxLOD * 0.125f, image->LODBias * 0.01f, image->biasClamp,
                             image->doEdgeLOD, (GXAnisotropy)image->maxAnisotropy);
         }
+#if defined(DUSK_TARGET_3DS)
+        mDoLib_retainNativeTexture(image, mFlagCloth.getImageTexObj());
+#endif
     }
     J3DModelData* modelData_pole = (J3DModelData*)dComIfG_getObjectRes(daSetBgObj_c::getArcName(this), "model0.bmd");
     JUT_ASSERT(865, modelData_pole != NULL);

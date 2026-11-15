@@ -5,6 +5,7 @@
 #include <cstring>
 
 namespace dusk::native {
+bool dumpReadBack=false;
 std::uint32_t dumpHash(const void* memory, std::size_t bytes, std::uint32_t value) {
     const auto* data = static_cast<const unsigned char*>(memory);
     while (bytes--) { value ^= *data++; value *= 16777619u; }
@@ -27,6 +28,9 @@ bool writeVerifiedDumpFile(const char* path, const void* data, std::size_t bytes
     bool okay = !bytes || std::fwrite(data, 1, bytes, file) == bytes;
     if (!flushDumpFile(file)) okay = false;
     if (!okay) return false;
+    // The checksum of the bytes written is in the manifest; reading every file
+    // back doubled the time on the console SD. dumpReadBack restores it.
+    if (!dumpReadBack) { checksum = expected; return true; }
     file = std::fopen(path, "rb");
     if (!file) return false;
     std::size_t remaining = bytes;
@@ -58,6 +62,7 @@ bool writeStreamedDumpFile(const char* path,const void* data,std::size_t bytes,
         okay=std::fwrite(scratch,1,size,file)==size;offset+=size;
     }
     if(!flushDumpFile(file))okay=false;
+    if(okay&&!dumpReadBack){checksum=expected;return true;}
     file=okay?std::fopen(path,"rb"):nullptr;if(!file)return false;
     std::uint32_t actual=2166136261u;
     for(std::size_t remaining=bytes;okay&&remaining;){

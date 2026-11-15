@@ -29,13 +29,17 @@ void bp(CommandStream& stream,u8 reg,u32 mask,u32 value,const char* call){
     if(!stream.writeBp(reg,(previous&~mask)|(value&mask)))fail(call);
 }
 }
-void requireImmediateMode(const char* call){if(commandStream())fail(call);}
 void finishCommandBoundary(const char* call){if(auto* stream=commandStream();stream&&!stream->finish())fail(call);}
 void commandTextureBinding(unsigned unit){
     auto* stream=commandStream();if(!stream)return;
     Texture texture;u32 token;
-    if(!textureBinding(unit,texture)||!textureCommandToken(texture.image.data(),token))fail("GXLoadTexObj/resource");
     const unsigned offset=(unit/4)*32+unit%4;
+    if(!textureBinding(unit,texture)||!textureCommandToken(texture.image.data(),token)){
+        if(!commandSkipUnavailableTextures)fail("GXLoadTexObj/resource");
+        // No image identity for this unit: its draws fail texture resolution.
+        if(!stream->writeBp(0xfe,0xffffff)||!stream->writeBp(0x94+offset,0))fail("GXLoadTexObj/resource");
+        return;
+    }
     constexpr u32 filters[]{0,4,1,5,2,6};
     if(texture.minFilter>5)fail("GXLoadTexObj/filter");
     const u32 mode=texture.wrapS|(texture.wrapT<<2)|(texture.magFilter<<4)|(filters[texture.minFilter]<<5)|

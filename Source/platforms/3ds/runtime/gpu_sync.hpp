@@ -19,6 +19,20 @@ bool platformPrepareGpuDraw();
 // drains/reclaims completed queue entries only; CPU command/geometry storage is
 // retained. Main render owner only; no submission may intervene before use.
 GpuCompletion platformReserveGpuEntries(unsigned count,std::uint64_t timeoutNanoseconds);
+// Hand the PICA commands assembled so far to the GPU without waiting, so it
+// renders this part of the frame while the CPU builds the rest. Command order
+// is unchanged (one queue). Geometry written so far is published first.
+// Returns false only for a real queue/flush failure.
+bool platformSubmitGpu();
+// Submit automatically every N prepared draws (0 disables). Render owner only.
+void platformSetGpuChunkDraws(unsigned draws);
+// Per-frame accounting of the time the render owner spent blocked on the GPU
+// queue or on presentation. Taking it clears the accumulators.
+struct GpuFrameTelemetry {
+    std::uint64_t beginWaitTicks{},endWaitTicks{},completeWaitTicks{},presentWaitTicks{};
+    std::uint32_t completes{},chunks{},reclaims{};
+};
+GpuFrameTelemetry platformTakeGpuTelemetry();
 // Nonblocking observation of the real queue and pending CPU command buffer.
 GpuCompletion platformQueryGpu();
 // Sticky failure state: fatal containment must bypass APT/UI/GPU teardown.
@@ -30,4 +44,9 @@ OSThread* platformGpuOwner();
 // Render-owner cache invalidation after a successful queue completion. Marks
 // actual converted images for reconversion on their next validated binding.
 bool platformInvalidateGpuTextures();
+// True when the original GX syncs (DrawDone, PixModeSync, InvalidateTexAll,
+// display copy) wait for the whole GPU (SD switch gx-sync-wait.txt).
+bool nativeGxSyncWaits();
+// Host tests: 1 waits, 0 never waits, -1 reads the SD switch (default).
+void setGxSyncWaitsForTest(int value);
 }

@@ -387,6 +387,9 @@ int daObjFlag2_c::createHeap() {
                             image->maxLOD * 0.125f, image->LODBias * 0.01f, image->biasClamp,
                             image->doEdgeLOD, (GXAnisotropy)image->maxAnisotropy);
         }
+#if defined(DUSK_TARGET_3DS)
+        mDoLib_retainNativeTexture(image, mFlagCloth.getImageTexObj());
+#endif
         if (image->width == image->height) {
             mFlagCloth.setTexCoord_p(l_texCoord_64x64);
         } else if (image->width == (image->height << 1)) {

@@ -500,6 +500,14 @@ def main(argv=None):
     parser.add_argument('--gpu-capture-check', action='store_true', help='Compare GPU capture with the CPU reference for 3 copies')
     parser.add_argument('--texture-scenery', action='store_true', help='Enable room-scenery texture halving (SD opt-in)')
     parser.add_argument('--profile-all-frames', action='store_true', help='A/B switch: retain detailed GX timers on all guest frames')
+    parser.add_argument('--compiled-lists', choices=['0','1','v'], help="Compiled display lists: 0 off, 1 on, v verify every replay against the interpreter")
+    parser.add_argument('--immediate-records', choices=['0','1'], help='A/B switch for immediate draw records (HUD, particles)')
+    parser.add_argument('--triangle-fog-mesh', choices=['0','1'], help='A/B switch: triangle fog as two whole-mesh passes (1) or per triangle (0)')
+    parser.add_argument('--shadows', choices=['0','1','2'], help='Native shadows: 0 off, 1 blobs only, 2 blobs and model shadows (default)')
+    parser.add_argument('--bloom', choices=['0','1'], help='Native bloom: 0 off, 1 on (default)')
+    parser.add_argument('--shadow-dump', type=int, help='Dump the shadow image at this caster pass (development)')
+    parser.add_argument('--particles', choices=['0','1','2'], help='World particles: 0 off, 1 one draw per particle, 2 one draw per emitter (default)')
+    parser.add_argument('--texture-object-limit', type=int, help='Sweep stale GX texture object records once this many are in use')
     parser.add_argument('--name', required=True)
     parser.add_argument('--seconds', type=int, default=120)
     parser.add_argument('--long-gameplay', action='store_true',
@@ -510,6 +518,12 @@ def main(argv=None):
     parser.add_argument('--initial-card', type=Path,
                         help='Explicit DSVCARD1 snapshot from project Diagnostics/Saves/Build; requires --private-disc or --data-bundle')
     parser.add_argument('--boot-stage', help='Explicit native development entry: STAGE,ROOM,POINT,LAYER')
+    parser.add_argument('--sd-file', action='append', default=[], metavar='NAME=TEXT',
+                        help='Extra private SD switch file under 3ds/DuskLight (\\n in TEXT becomes a newline)')
+    parser.add_argument('--sd-copy', action='append', default=[], metavar='NAME=PATH',
+                        help='Copy a host file (binary) to 3ds/DuskLight/NAME, e.g. the GPU guard files of a console run')
+    parser.add_argument('--exit-on-shutdown', action='store_true', help='End the run when the game shuts down by itself (a test started by hand that exits at its end)')
+    parser.add_argument('--tour', help='Unattended automatic test, e.g. "mode=0 scale=30 limit=6" (mode 0 main, 1 stages, 2 rooms)')
     parser.add_argument('--gui-empty', action='store_true', help='Open isolated GUI, then load the expected image through its native file dialog')
     parser.add_argument('--log-filter', default='*:Info Debug.Emulated:Debug', help='Isolated emulator log filter, e.g. *:Info Debug.Emulated:Debug')
     parser.add_argument('--instant-debug-log',action='store_true',help='Flush each emulator log event; functional diagnosis only')
@@ -689,6 +703,17 @@ def main(argv=None):
                 frames = [int(value) for value in getattr(args, option).split(',')]
                 (sd / SCRIPT_FILES[option]).write_text(''.join(f'{frame}\n' for frame in frames))
         if args.exit_frame:(sd / 'exit-frame.txt').write_text(f'{args.exit_frame}\n')
+        for item in args.sd_file:
+            name, _, text = item.partition('=')
+            if not name or '/' in name or '..' in name:
+                raise ValueError('Invalid --sd-file name')
+            (sd / name).write_text(text.replace('\\n', '\n'))
+        for item in args.sd_copy:
+            name, _, source = item.partition('=')
+            if not name or '/' in name or '..' in name or not Path(source).is_file():
+                raise ValueError('Invalid --sd-copy item')
+            shutil.copyfile(source, sd / name)
+        if args.tour:(sd / 'tour-auto.txt').write_text('\n'.join(args.tour.split()) + '\n')
         if args.calibrate:(sd / 'calibrate.txt').write_text('1\n')
         if args.rgb565_rgba8_reference:(sd / 'rgb565-rgba8-reference.txt').write_text('1\n')
         if args.alpha_interval_experiment:(sd / 'alpha-interval.txt').write_bytes(b'enabled=1\n')
@@ -700,6 +725,14 @@ def main(argv=None):
         if args.texture_scenery:(sd / 'texture-scenery.txt').write_text('1\n')
         if args.fused_color_copy:(sd / 'fused-color-copy.txt').write_bytes(b'enabled=1\n')
         if args.profile_all_frames:(sd / 'profile-all-frames.txt').write_text('1\n')
+        if args.compiled_lists:(sd / 'compiled-lists.txt').write_text(args.compiled_lists + '\n')
+        if args.immediate_records:(sd / 'immediate-records.txt').write_text(args.immediate_records + '\n')
+        if args.triangle_fog_mesh:(sd / 'triangle-fog-mesh.txt').write_text(args.triangle_fog_mesh + '\n')
+        if args.shadows:(sd / 'shadows.txt').write_text(args.shadows + '\n')
+        if args.bloom:(sd / 'bloom.txt').write_text(args.bloom + '\n')
+        if args.shadow_dump:(sd / 'shadow-dump.txt').write_text(f'{args.shadow_dump}\n')
+        if args.particles:(sd / 'particles.txt').write_text(args.particles + '\n')
+        if args.texture_object_limit:(sd / 'texture-object-limit.txt').write_text(f'{args.texture_object_limit}\n')
     profile = out / 'sandbox.sb'
     # Azahar creates an input/RPC UDP socket at startup. Permit binding only;
     # incoming/outgoing traffic remains denied, as do writes to the original ISO.
@@ -834,6 +867,9 @@ def main(argv=None):
                         raise gdb_sampler.GDBError('PC sampling failed: ' + stub.last_error)
                     if not pcs:
                         raise gdb_sampler.GDBError('PC sampling produced no observed PC samples')
+                if (args.tour or args.exit_on_shutdown) and b'Native shutdown complete' in log:
+                    guest_exit = True
+                    break
                 if args.exit_frame and b'Native developer exit after frame' in log:
                     guest_exit = True
                     time.sleep(min(2, max(0, deadline - time.monotonic())))
@@ -899,6 +935,12 @@ def main(argv=None):
                         converted.append(target.name)
                     finalize_step('capture_convert:' + capture.name, convert)
             finalize_step('capture_listing', convert_captures)
+
+            def copy_tour():
+                tour_dir = user / 'sdmc/3ds/DuskLight/tour'
+                if tour_dir.is_dir():
+                    shutil.copytree(tour_dir, out / 'tour', dirs_exist_ok=True)
+            finalize_step('tour_copy', copy_tour)
             dump_dir = user / 'sdmc/3ds/dusklight/dumps'
 
             def list_dumps():

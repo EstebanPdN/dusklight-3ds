@@ -24,6 +24,7 @@ bool s_timingModeInitialized = false;
 bool s_previousSeparatePresentation = false;
 bool s_previousInterpolating = false;
 bool s_previousTimeStopped = false;
+float s_presentationFrames = 1.0f;
 
 constexpr game_clock::duration kSimPeriodDuration =
     std::chrono::duration_cast<game_clock::duration>(std::chrono::duration<float>(kSimPeriod));
@@ -32,7 +33,7 @@ constexpr int kMaxSimTicksPerFrame = static_cast<int>(aurora::time::kMaximumTime
 
 float ui_dt() {
     if (s_simTickActive) {
-        return kSimPeriod;
+        return kSimPeriod * s_presentationFrames;
     }
 
     const float maximumDt = kUiMaximumDt * aurora::time::scale();
@@ -68,6 +69,10 @@ void set_sim_rate(float hz) {
 
 float get_sim_rate() {
     return aurora::time::scale() / kSimPeriod;
+}
+
+void set_presentation_frames(float frames) {
+    s_presentationFrames = frames > 0.0f ? frames : 1.0f;
 }
 
 const FrameTiming& advance() {

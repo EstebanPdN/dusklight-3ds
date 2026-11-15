@@ -2,8 +2,12 @@
 #include "dump_io.hpp"
 #include "gx_state.hpp"
 #include "gx_profile.hpp"
+#include "gx_commands.hpp"
+#include "../gx_command_draw.hpp"
+#include "../gx_pica.hpp"
 #include "gx_framebuffer.hpp"
 #include "resource_archive.hpp"
+#include "helpers/native_effects.h"
 #include <3ds.h>
 #include <dolphin/os.h>
 #include <array>
@@ -22,6 +26,7 @@ std::array<std::uint64_t,16> dumps{};unsigned dumpCount{};
 std::array<std::uint64_t,16> depthAudits{};unsigned depthAuditCount{};
 std::array<std::uint64_t,16> retainedFrames{};unsigned retainedFrameCount{};
 std::uint64_t exitFrame{},currentFrame{};bool hasExit{};
+bool diagnosticsRequested{};
 const void* dumpData{};std::size_t dumpBytes{};
 std::string_view token(std::string_view& text){
     const auto begin=text.find_first_not_of(" \t\r");
@@ -90,6 +95,45 @@ void loadDeveloperScripts(){
     if(auto* profile=std::fopen("sdmc:/3ds/dusklight/profile-all-frames.txt","rb")){
         std::fclose(profile);gxProfileEveryFrame=true;
     }
+    // Development switches for the native fast paths: '0' turns the path off
+    // (A/B measurement), 'v' keeps compiled lists on and checks every replay
+    // against the interpreter.
+    if(auto* lists=std::fopen("sdmc:/3ds/dusklight/compiled-lists.txt","rb")){
+        const int c=std::fgetc(lists);std::fclose(lists);
+        gx::setCompiledLists(c!='0',c=='v');
+        OSReport("Native compiled lists: %s\n",c=='0'?"off":c=='v'?"verified against the interpreter":"on");
+    }
+    if(auto* fog=std::fopen("sdmc:/3ds/dusklight/triangle-fog-mesh.txt","rb")){
+        const int c=std::fgetc(fog);std::fclose(fog);
+        setTriangleFogMeshPass(c!='0');
+        OSReport("Native triangle fog: %s\n",c=='0'?"one pair of draws per triangle":"two whole-mesh passes");
+    }
+    if(auto* rigidFog=std::fopen("sdmc:/3ds/dusklight/rigid-triangle-fog.txt","rb")){
+        const int c=std::fgetc(rigidFog);std::fclose(rigidFog);
+        setRigidTriangleFog(c=='1');
+        OSReport("Native GPU triangle fog: %s\n",c=='1'?"on (unexercised route)":"off");
+    }
+    if(auto* limit=std::fopen("sdmc:/3ds/dusklight/texture-object-limit.txt","rb")){
+        unsigned value=0;const int got=std::fscanf(limit,"%u",&value);std::fclose(limit);
+        if(got==1&&value){gx::setTextureObjectSoftLimit(value);OSReport("Native GX texture object sweep threshold: %u (development switch)\n",value);}
+    }
+    if(auto* immediate=std::fopen("sdmc:/3ds/dusklight/immediate-records.txt","rb")){
+        const int c=std::fgetc(immediate);std::fclose(immediate);
+        setImmediateDrawRecords(c!='0');
+        OSReport("Native immediate draw records: %s\n",c=='0'?"off":"on");
+    }
+    if(auto* file=std::fopen("sdmc:/3ds/dusklight/shadows.txt","rb")){
+        const int c=std::fgetc(file);std::fclose(file);
+        if(c>='0'&&c<='2'){native_effects::shadows=c-'0';OSReport("Native shadows: %d (0 off, 1 blobs only, 2 blobs and model shadows)\n",c-'0');}
+    }
+    if(auto* file=std::fopen("sdmc:/3ds/dusklight/bloom.txt","rb")){
+        const int c=std::fgetc(file);std::fclose(file);
+        if(c>='0'&&c<='1'){native_effects::bloom=c-'0';OSReport("Native bloom: %s\n",c=='1'?"on":"off");}
+    }
+    if(auto* file=std::fopen("sdmc:/3ds/dusklight/particles.txt","rb")){
+        const int c=std::fgetc(file);std::fclose(file);
+        if(c>='0'&&c<='2'){native_effects::particles=c-'0';OSReport("Native world particles: %d (0 off, 1 one draw per particle, 2 one draw per emitter)\n",c-'0');}
+    }
     if(auto* cls=std::fopen("sdmc:/3ds/dusklight/profile-class.txt","rb")){
         const int c=std::fgetc(cls);std::fclose(cls);
         if(c>='0'&&c<='3'){gxProfileClassFilter=c-'0';OSReport("Native profile class filter: %d (2 = orthographic only)\n",gxProfileClassFilter);}
@@ -117,7 +161,12 @@ void loadDeveloperScripts(){
     if(inputCount||captureCount||dumpCount||hasExit)
         OSReport("Native developer scripts: inputs=%u captures=%u dumps=%u exit=%llu\n",inputCount,captureCount,dumpCount,
             static_cast<unsigned long long>(hasExit?exitFrame:0));
+    diagnosticsRequested=inputCount||captureCount||dumpCount||depthAuditCount||retainedFrameCount||hasExit||
+        gxProfileEveryFrame||gxProfileClassFilter>=0;
+    if(auto* file=std::fopen("sdmc:/3ds/dusklight/diagnostics.txt","rb")){std::fclose(file);diagnosticsRequested=true;}
+    OSReport("Native diagnostics: %s\n",diagnosticsRequested?"detailed (developer run)":"off (ordinary play; telemetry kept in RAM)");
 }
+bool developerDiagnosticsRequested(){return diagnosticsRequested;}
 void runDeveloperCalibration(){
     auto* file=std::fopen("sdmc:/3ds/dusklight/calibrate.txt","rb");if(!file)return;
     std::fclose(file);
