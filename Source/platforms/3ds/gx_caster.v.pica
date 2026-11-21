@@ -1,0 +1,40 @@
+; Native PICA engine: model-shadow casters (drawGxShadowCasters in gx_pica.cpp).
+; Draws the compact 32-byte records of gx_rigid.v.pica and gx_rigid_mt.v.pica
+; as white silhouettes in a tile of the shadow image. Reads only:
+;   v0 position.xyz (float), v4.x position matrix uniform row (byte);
+;   u[row..row+2] the position matrix the caster draw placed (uploaded by the
+;   pass), u[6..9] camera space -> clip space of the caster's tile.
+; Nothing else of the scene's uniform state is read: the pass runs between
+; scene draws, and the rigid shaders also read normal rows, flags and texture
+; rows that the pass does not upload (the console stopped in the first pass
+; drawn with the multi-texture shader, Alpha 4).
+; The outputs are those of the scene shaders, texture coordinates at zero: the
+; texture units keep their bindings (Citro3D 1.7.1 cannot unbind units 1 and
+; 2), and the combiner takes only its constant colour.
+; Each output component is written exactly once (console PICA rule).
+.fvec u[94]
+.constf k(0.0,1.0,0.5,9.0)
+.out outpos position
+.out outcolor color
+.out outtex texcoord0.st
+.out - texcoord0w outtex.p
+.out outtex1 texcoord1
+.out outtex2 texcoord2
+.proc main
+    mov r14, v0
+    mov r14.w, k.y
+    mova a0.x, v4.x
+    dp4 r0.x, u[a0.x+0], r14
+    dp4 r0.y, u[a0.x+1], r14
+    dp4 r0.z, u[a0.x+2], r14
+    mov r0.w, k.y
+    dp4 outpos.x, u[6], r0
+    dp4 outpos.y, u[7], r0
+    dp4 outpos.z, u[8], r0
+    dp4 outpos.w, u[9], r0
+    mov outcolor, k.yyyy
+    mov outtex, k.xxyx
+    mov outtex1, k.xxxx
+    mov outtex2, k.xxxx
+    end
+.end

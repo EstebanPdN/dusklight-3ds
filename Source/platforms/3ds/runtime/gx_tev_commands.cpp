@@ -9,10 +9,20 @@ namespace dusk::native::gx {
 namespace {
 [[noreturn]] void fail(const char* call){OSPanic(__FILE__,__LINE__,"Native GX TEV command failure: %s",call);}
 CommandStream& stream(const char* call){auto* s=commandStream();if(!s||!s->finish())fail(call);return *s;}
+// The stream of a typed setter, finished; null when the older immediate
+// diagnostic path owns GX. One thread-local lookup per setter.
+CommandStream* typed(const char* call){auto* s=commandStream();if(s&&!s->finish())fail(call);return s;}
+// BP mask then register as one processor call (CommandProcessor::
+// writeBpMasked: same bank, epochs, command count and material recording as
+// the two writes) once the stream forwards it; the two writes otherwise.
+template<class Stream> bool maskedWrite(Stream& s,u8 reg,u32 mask,u32 value){
+    if constexpr(requires{s.writeBpMasked(reg,mask,value);})return s.writeBpMasked(reg,mask,value);
+    else return s.writeBp(0xfe,mask)&&s.writeBp(reg,value);
+}
 void masked(CommandStream& s,u8 reg,u32 mask,u32 value,const char* call){
     // Reset a pending GD mask explicitly, then update exactly our fields. The
     // command processor retains every sibling field and consumes this mask.
-    if(!s.writeBp(0xfe,mask)||!s.writeBp(reg,value))fail(call);
+    if(!maskedWrite(s,reg,mask,value))fail(call);
 }
 void whole(CommandStream& s,u8 reg,u32 value,const char* call){masked(s,reg,0xffffff,value,call);}
 void stageValid(unsigned stage,const char* call){if(stage>15)fail(call);}
@@ -24,28 +34,28 @@ void indirectMask(CommandStream& s){
 }
 }
 bool commandTevCount(unsigned count,bool indirect){
-    if(!commandStream()) return false;
-    auto& s=stream("GXSetNumTev/IndStages");
+    auto* typedStream=typed("GXSetNumTev/IndStages");if(!typedStream)return false;
+    auto& s=*typedStream;
     if(indirect){if(count>4)fail("GXSetNumIndStages/count");masked(s,0,7u<<16,count<<16,"GXSetNumIndStages");indirectMask(s);}
     else{if(count<1||count>16)fail("GXSetNumTevStages/count");masked(s,0,15u<<10,(count-1)<<10,"GXSetNumTevStages");}
     if(!s.automaticSuCount(count,indirect))fail("GXSetNumStages/automatic SU");
     return true;
 }
 bool commandTevDirect(unsigned stage){
-    if(!commandStream()) return false;
-    auto& s=stream("GXSetTevDirect");stageValid(stage,"GXSetTevDirect");
+    auto* typedStream=typed("GXSetTevDirect");if(!typedStream)return false;
+    auto& s=*typedStream;stageValid(stage,"GXSetTevDirect");
     whole(s,0x10+stage,0,"GXSetTevDirect");return true;
 }
 bool commandTevInputs(unsigned stage,bool alpha,unsigned a,unsigned b,unsigned c,unsigned d){
-    if(!commandStream()) return false;
-    auto& s=stream("GXSetTevInputs");stageValid(stage,"GXSetTevInputs");
+    auto* typedStream=typed("GXSetTevInputs");if(!typedStream)return false;
+    auto& s=*typedStream;stageValid(stage,"GXSetTevInputs");
     const unsigned max=alpha?7:15;if(a>max||b>max||c>max||d>max)fail("GXSetTevInputs/value");
     const u32 value=alpha?(a<<13)|(b<<10)|(c<<7)|(d<<4):(a<<12)|(b<<8)|(c<<4)|d;
     masked(s,0xc0+2*stage+unsigned(alpha),alpha?0xfff0:0xffff,value,"GXSetTevInputs");return true;
 }
 bool commandTevOperator(unsigned stage,bool alpha,unsigned op,unsigned bias,unsigned scale,unsigned clamp,unsigned output){
-    if(!commandStream()) return false;
-    auto& s=stream("GXSetTevOperator");stageValid(stage,"GXSetTevOperator");
+    auto* typedStream=typed("GXSetTevOperator");if(!typedStream)return false;
+    auto& s=*typedStream;stageValid(stage,"GXSetTevOperator");
     if((op>1&&(op<8||op>15))||bias>2||scale>3||clamp>1||output>3)fail("GXSetTevOperator/value");
     const u32 value=((op<=1?bias:3)<<16)|((op&1)<<18)|(clamp<<19)|((op<=1?scale:(op>>1)&3)<<20)|(output<<22);
     masked(s,0xc0+2*stage+unsigned(alpha),0xff0000,value,"GXSetTevOperator");return true;
@@ -66,8 +76,8 @@ bool commandTevOperation(unsigned stage,unsigned op){
     commandTevOperator(stage,false,0,0,0,1,0);commandTevOperator(stage,true,0,0,0,1,0);return true;
 }
 bool commandTevOrder(unsigned stage,unsigned coord,unsigned map,unsigned channel){
-    if(!commandStream()) return false;
-    auto& s=stream("GXSetTevOrder");stageValid(stage,"GXSetTevOrder");
+    auto* typedStream=typed("GXSetTevOrder");if(!typedStream)return false;
+    auto& s=*typedStream;stageValid(stage,"GXSetTevOrder");
     const unsigned unit=map&~unsigned(GX_TEX_DISABLE);
     if((coord>7&&coord!=GX_TEXCOORD_NULL)||(unit>7&&map!=GX_TEXMAP_NULL)||
        (channel>GX_COLOR_ZERO&&channel!=GX_ALPHA_BUMP&&channel!=GX_ALPHA_BUMPN&&channel!=GX_COLOR_NULL))fail("GXSetTevOrder/value");
@@ -79,17 +89,23 @@ bool commandTevOrder(unsigned stage,unsigned coord,unsigned map,unsigned channel
     return true;
 }
 bool commandTevRegister(unsigned id,int r,int g,int b,int a,bool konst){
-    if(!commandStream()) return false;
-    auto& s=stream("GXSetTevColor/KColor/S10");
+    auto* current=commandStream();
+    if(!current) return false;
     const int low=konst?0:-1024,high=konst?255:1023;
     if(id>3||r<low||r>high||g<low||g>high||b<low||b>high||a<low||a>high)fail("GXSetTevRegister/value");
     const u32 bank=u32(konst)<<23;
-    whole(s,0xe0+id*2,(u32(r)&2047)|((u32(a)&2047)<<12)|bank,"GXSetTevRegister/RA");
-    whole(s,0xe1+id*2,(u32(b)&2047)|((u32(g)&2047)<<12)|bank,"GXSetTevRegister/BG");return true;
+    const u32 ra=(u32(r)&2047)|((u32(a)&2047)<<12)|bank,bg=(u32(b)&2047)|((u32(g)&2047)<<12)|bank;
+    // The same pair while a merge-scope draw is held: nothing changes, and
+    // the next GXBegin may still extend the held draw (minimap lines).
+    if(current->keepsHeldDraw(0xe0+id*2,0xffffff,ra)&&current->keepsHeldDraw(0xe1+id*2,0xffffff,bg))return true;
+    if(!current->finish())fail("GXSetTevColor/KColor/S10");
+    auto& s=*current;
+    whole(s,0xe0+id*2,ra,"GXSetTevRegister/RA");
+    whole(s,0xe1+id*2,bg,"GXSetTevRegister/BG");return true;
 }
 bool commandTevKonstSelection(unsigned stage,unsigned selection,bool alpha){
-    if(!commandStream()) return false;
-    auto& s=stream("GXSetTevKColor/AlphaSel");stageValid(stage,"GXSetTevKonstSelection");
+    auto* typedStream=typed("GXSetTevKColor/AlphaSel");if(!typedStream)return false;
+    auto& s=*typedStream;stageValid(stage,"GXSetTevKonstSelection");
     if(selection>31||(selection>7&&selection<(alpha?16u:12u)))fail("GXSetTevKonstSelection/value");
     const unsigned shift=4+(stage&1)*10+unsigned(alpha)*5;
     masked(s,0xf6+stage/2,31u<<shift,selection<<shift,"GXSetTevKonstSelection");return true;

@@ -1,8 +1,10 @@
 #include "gx_stream.hpp"
+#include "gx_worker_sync.hpp"
 #include "gpu_sync.hpp"
 #include <dolphin/gx.h>
 #include <dolphin/os.h>
 extern "C" void GXAbortFrame(){
+    dusk::native::syncGxWorker();
     auto* stream=dusk::native::gx::commandStream();
     if(!stream||dusk::native::platformCompleteGpu(500000000)!=dusk::native::GpuCompletion::complete||!stream->reset())
         OSPanic(__FILE__,__LINE__,"Native GX frame abort/drain failed");

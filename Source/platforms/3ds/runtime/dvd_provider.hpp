@@ -1,6 +1,7 @@
 #pragma once
 #include "disc.hpp"
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <dolphin/dvd.h>
@@ -36,7 +37,7 @@ class DvdProvider {
     std::array<DirectorySlot, 64> directories{};
     DiscDirectory currentDirectory;
     std::array<char, 1024> currentPath{};
-    DvdStatus result = DvdStatus::notBound;
+    std::atomic<DvdStatus> result{DvdStatus::notBound};
     bool absolutePath(const char* path, std::array<char, 1024>& output, bool directory);
     bool directoryMatches(const DirectorySlot& slot, const DVDDir* info) const;
     bool found(DiscFileStatus status);
@@ -50,7 +51,7 @@ public:
     // Process-owned service mode serializes original DVD/JAS/ARAM worker calls.
     // Must be selected once by the startup owner before spawning game workers.
     bool shareWithGameWorkers();
-    DvdStatus lastStatus() const { return result; }
+    DvdStatus lastStatus() const { return result.load(std::memory_order_relaxed); }
     bool open(const char* path, DVDFileInfo* info);
     bool openEntry(std::int32_t entry,DVDFileInfo* info);
     bool close(DVDFileInfo* info);

@@ -1,0 +1,60 @@
+# Verdicts of the shared-state audit (audit_shared_state.py --judged): symbol regex, tab, why the variable is safe.
+# A variable that appears in the audit without a line here is new: read both call chains before adding one.
+# A regex may also name the object, as 'symbol [file.cpp.obj]$', when the name alone repeats in other files.
+# --- atomics and locks
+::renderOwner$|::lent$|::lentGame$|::lentWanted$	std::atomic; platformGpuOwner() is the sync hook itself
+::logHead$|::logRing$|::flushChunk$|::logLock$	the log ring: every access under logLock (main.cpp logText)
+duskNativeHeapEpoch$	read with an atomic load (liveGameArray); written by the heaps
+gxNamedProfileCount$	std::atomic counter of profile scopes
+model_lod::detail::draw[A-Za-z]+$	std::atomic counters of the level-of-detail draws (model_lod.hpp): relaxed fetch_add by the thread that draws, exchange by the game thread's report
+gxworker::\(anonymous namespace\)::theQueue$	the queue: its shared members are atomics, the rest belongs to one side each (gx_worker.hpp)
+^dusk::native::gxWorkerSyncHook$	set once when the queue starts, before the first shape
+^dusk::native::gpuShadowProfileMode$	game_startup reads the SD option before startGxWorker; shadow control and the render owner only read it thereafter
+# --- the OS thread layer (made for several threads: audio, loaders)
+\(anonymous namespace\)::state\(\)::value$|guard variable for \(anonymous namespace\)::state\(\)::value$|\(anonymous namespace\)::stopping$	os_thread.cpp scheduler state behind threadLock, as for every other game thread
+::watchedLock$|::watchedMainNanoseconds$|::watchedMainWaits$|::watchedWorkerNanoseconds$|::watchedWorkerWaits$	mutex wait statistics of os_thread.cpp
+^JKRHeap::sRootHeap$	liveGameArray walks the heap tree as the game's own free() does from any thread; the block walk is under the heap's mutex. On the game thread a heap joins or leaves the tree (JKRHeap constructor, destructor, destroy) only after gxOverlapSyncHook(1) (gx_worker_ctru.cpp gxOverlapSync), which has every queued shape drawn while the worker draws on after the painter (Alpha 15 overlap); during the painter nothing creates heaps; the loader thread does so as in the original game (the same unlocked walk)
+# --- written at start only, or on the way out
+::transferStops$	GPU guard level: learned at start, raised only when the program ends on a stop
+::nativeContext$	pointer to the draw context, set at start
+gx::\(anonymous namespace\)::activeStaticCache$|gx::staticListEnded$	pointers set at start (attachResidentStaticGeometry, initializeCommandProbe)
+::sceneryPolicy$	SD switch read on the game thread when the first scenery image is named (readSceneryPolicy); draws only read it
+::sceneryImages$|::sceneryCount$	written by the background actor's create and delete, which run in fpcCt_Handler and fpcDt_Handler: f_pc_manager.cpp calls gxOverlapSyncHook(3/2) before them whenever one is pending, so nothing queued is left (Alpha 15 overlap); read by draws only with the SD opt-in
+# --- statistics and report bookkeeping: a lost update at worst
+::nativeMisses$	counter for reports
+gx::\(anonymous namespace\)::stateHashStats$	counters for reports
+gxNamedProfiles$|gxProfileTotals$|gxProfileEveryFrame$|gxSparseVertexProfiling$	profile accumulators and their switches (set between pictures); no pointers, a lost tick at worst
+gxProcessTicks$|gxProcessCalls$|gxProcessProfiling$	process timers of the measured dump and their switch: the switch is set and the arrays are cleared and read at a picture boundary, after the frame-end sync (empty queue); the game thread writes kinds 0-2 and the GPU-owning thread kind 3 (different elements); no pointers, a lost tick at worst
+gxPaintOwner$	label of the measured dump (profile name of the model being painted): written by the game thread; the GPU-owning thread reads it only outside drawQueuedShape, which the worker never draws outside of; never read by a draw, a wrong label at worst
+features::chosen$|features::reference$|features::manualReference$|features::without$	switches of the Alpha 21 improvements (perf_features.hpp): written by the game thread only, at boot (features.txt, before the worker starts) and between two pictures: by a measurement after the frame-end sync closed the picture (measured_dump.hpp) and by the bottom-screen button in the input poll before the next painter opens (dev_console.cpp); the thread that draws reads them only while it replays a picture's shapes, which the game thread queues after the write (the queue's push and the sync order the two): one value for a whole picture; each reader decides one draw with it and keys what it keeps by what it built from (rule in perf_features.hpp)
+gx::\(anonymous namespace\)::reportedStaticEpoch$|gx::\(anonymous namespace\)::staticClearLines$	which static-pool clear was already reported: a second log line at worst
+::prepIndex$|::findIndex$|::applyIndex$	index of a profile scope, registered on first use: two threads meeting it together register it twice (one slot unused)
+# --- the texture registry (gx_state.cpp, the note at handleIndex)
+gx::\(anonymous namespace\)::(registrations|handleIndex|identityIndex|registrationEpoch|nextTextureId)$	lookups change nothing; registerTexture publishes the handle last and adds single index places; the other changes sync first
+gx::\(anonymous namespace\)::imageHints$	hints of the game thread's lookups, each checked against the registration it names; a registration on the worker clears them (16-bit stores)
+gx::\(anonymous namespace\)::(paletteAliases|loadedTluts|textureObjects|objectAddresses|objectIndex)$	game thread tables. The drawing side reaches them only through unregisterTexture and aliasTextureImage (sync first; on the worker only on a path that ends the program) and through textureBinding, refused for queued shapes (resolveCommandTexture)
+gx::\(anonymous namespace\)::state$	legacy immediate state: with a command stream it is never active; registerTexture reads state.active only
+# --- the material recorder
+gx::\(anonymous namespace\)::materialRecording$|gx::\(anonymous namespace\)::recorder$	the J2D material memo records only the processor whose bank it targets (the game thread's): every use on another processor is gated by recordingOn(p), which never holds for the worker's list processor, so the worker's reads change nothing. Alpha 15: CommandProcessor::adopt refused on the flag alone and the worker dropped queued draws while the game thread recorded (2D and water blinking); it now refuses only for the recorded processor (test_gx_worker adoptWhileRecording)
+# --- draw-time state read by the game
+gx::textureFrameCounter$	advanced by beginGxGeometryFrame, with nothing queued
+gx::watchedCaptureToken$|gx::watchedCaptureSlot$|gx::watchedCaptureSlotUse$	JPAResource.cpp native_frame_copy_made(): syncGxWorker() before the read; a later read without a sync only while no copy was queued since that sync (queuedCopyTextures(), counted on the game thread), so no queued copy can write them meanwhile; GXCopyTex writes after its sync
+::casterArmed$	read when a shape is issued (the slot travels with the shape); armGxShadowCasters and drawGxShadowCasters write after their sync
+::frameSerial$	advanced by beginScreenTapeFrame, with nothing queued
+# --- queued jobs (gx_worker_sync.hpp)
+::casterPassProven$	std::atomic: whether the last shadow caster pass drew (a pass is queued only after one did)
+dusk::native::\(anonymous namespace\)::images$	copy images: GXCopyTex's copyCanWait reads identity, handle and layout on the game thread; they change only in the registration calls and in a copy that did not wait, all with nothing queued (a queued copy refreshes pixels and counters only)
+dusk::native::\(anonymous namespace\)::ready$	set when the PICA module starts
+# --- native packets (runtime/native_packets.hpp)
+gx::CommandStream::nativeSettle$	a function pointer written once (packets::install, from setNativeListProcessor before the worker thread starts) and only read afterwards; the worker has no command stream (gx::commandStream() is per thread and null there), so the stream code that reads it never runs on the drawing side
+gxworker::Queue::captureHook$	a function pointer written once (packets::install, from setNativeListProcessor before the worker thread starts) and only read afterwards; Queue::sync calls it only when the calling thread is not consuming the queue, so on the drawing side it is loaded and never called
+\(anonymous namespace\)::(active|inFrame) \[gx_framebuffer\.cpp\.obj\]$	gx_framebuffer.cpp's current surface and frame flag: written only on the game thread, by bind() (from the framebuffer calls that settle() = syncGxWorker() first: shared_state_roots.tsv), beginFramebufferFrame/endFramebufferFrame (same barrier) and releaseFramebufferRecords (shutdown, after the worker is joined); the worker only reads them (texture-copy reports, after the queue's acquire). The game-side read is activeFramebuffer() from m_Do_graphic.cpp publishNativeSceneCamera (DUSK_PICA_GAME_DRAW only): a read by the only writer's thread
+# --- Alpha 14 jobs (gx_worker_sync.hpp: bloom, conditional sections, palette check)
+::publishedValid$|::publishedPicture$	std::atomic (hud_tape_ctru.cpp, Alpha 15): written by the drawing side when the HUD tape becomes valid or is dropped (publishedPicture before publishedValid's release store), read by the game thread to choose a queued replay or recording (acquire load); the tape itself is never read there
+::jobRefusals$|::jobReplays$	std::atomic (screen_tape_ctru.cpp, Alpha 15): counts of queued retained-screen replays the drawing side ran or refused; the game thread reads jobRefusals (acquire) to drop every recording after a refusal
+::mainSurface \[gx_framebuffer\.cpp\.obj\]$	the main surface (handle, extent): written only on the game thread, by initializeFramebuffers at start and by configureMainFramebufferSynced after settle(); configureMainFramebuffer's fast path (Alpha 15) only reads it there, comparing the size the game commits again at every draw phase's end; the drawing side only reads it (bloom job, main target)
+::recording \[screen_tape_ctru\.cpp\.obj\]$	the retained-screen recording in progress: written only by the synced begin and end on the game thread (beginSynced/endSynced, after syncGxWorker); duskScreenTapeBegin's queued path (Alpha 15) only reads `active`, and only while no recording is open (a recording suspends the queued runs, so the synced path is taken); the worker reads `active` and writes `volatileTexture` only while one is open (duskScreenTapeVolatileTexture)
+::bloomProven$	std::atomic: whether the last bloom pass drew (a pass is queued only after one did), as casterPassProven
+::nativeSectionSkipping$	the open conditional section's answer, drawing-side state that moves with the queue like the bank copy: written by the thread that consumes records (the worker, or the game thread inside a sync); deferNativeRun and nativeSection touch it on the game thread only right after gxworker::sync(), whose park handshake (acquire) makes the worker's write visible and leaves nothing queued
+::paletteFastPath$	SD switch (gx-palette-fast-off.txt) set once at start before the worker thread is created; only read afterwards
+::skinDrawState$	merged skin lists, drawing side (gx_command_draw.cpp): written only by whichever thread has the GPU (drawGxCommand on the list processor, drawQueuedShape, nativeReplay), one at a time like the record tables; refused/batches are set and read inside one drawQueuedShape call; the game thread only reads the counters for its report line every 300 pictures (duskNativeSkinDrawReport): a count one draw late at worst

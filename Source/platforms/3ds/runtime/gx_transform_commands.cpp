@@ -140,6 +140,9 @@ bool commandZLocation(unsigned beforeTexture){
 bool commandLineWidth(u8 width,unsigned offsets){
     auto* stream=commandStream();if(!stream)return false;
     if(offsets>7)fail("GXSetLineWidth");
+    // The same size while a merge-scope draw is held: nothing changes, and
+    // the next GXBegin may still extend the held line list (minimap lines).
+    if(stream->keepsHeldDraw(0x22,0x700ff,width|(offsets<<16)))return true;
     bp(*stream,0x22,0x700ff,width|(offsets<<16),"GXSetLineWidth");return true;
 }
 }

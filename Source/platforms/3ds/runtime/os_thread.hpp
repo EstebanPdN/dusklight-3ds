@@ -6,10 +6,20 @@ namespace dusk::native {
 // Cooperative requests are observed at native OS waits/locks/yields. A foreign
 // suspend waits for acknowledgement; cancellation joins before freeing storage.
 // Same suspended-start lifetime/ownership as OSCreateThread; explicit native core.
-// -2 inherits the title, 0 is main app core, 2 is the additional New3DS app core.
+// -2 inherits the title, 0 is main app core, 2 is the additional New3DS app core;
+// 1 (after APT_SetAppCpuTimeLimit) and 3 are tried by the audio mixer only.
 bool createThreadOnCore(OSThread*,void* (*)(void*),void*,void*,std::uint32_t,int,std::uint16_t,int core);
 void threadCheckpoint();
+// Every OSMutex/queue lock acquisition. Managed workers block on the lock (on
+// 3DS as counted waiters of the libctru LightLock, woken by its unlock) in
+// slices, observing suspension/cancellation between slices.
 void threadLock(std::int32_t* lock);
+// Wait accounting for one chosen lock (the JAS audio exclusion): time from a
+// failed first attempt to the acquisition, for the main thread and for managed
+// workers. Totals since boot; readers take differences.
+void watchLockWaits(const std::int32_t* lock);
+struct LockWaitTotals { std::uint64_t mainNanoseconds, workerNanoseconds; std::uint32_t mainWaits, workerWaits; };
+LockWaitTotals watchedLockWaits();
 void threadConditionWait(std::int32_t* condition, std::int32_t* lock);
 void releaseTerminatedThread(OSThread* thread);
 struct ThreadStats { unsigned workers; std::uint32_t stackBytes; unsigned waitingQueues; };

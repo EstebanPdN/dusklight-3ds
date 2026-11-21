@@ -93,8 +93,16 @@ bool advanceTextureIdentityCountersForTest(TextureHandle nextImageId,std::uint64
 #endif
 // Only image registration consumes the monotonic 23-bit command ID space.
 // Exhaustion fails without publishing a registration; IDs are never recycled.
+// Threads (the second-core worker, gx_worker.hpp): the lookups below may run
+// on the game thread and on the thread that draws queued shapes at the same
+// time. registerTexture may run on either while the other reads; the other
+// changes (unregister, alias, block release) draw what is queued first and
+// belong to the game thread.
 bool registerTexture(std::span<const std::uint8_t> bti, TextureHandle& handle,bool immutablePixels=false);
 bool unregisterTexture(TextureHandle handle);
+// Game thread, with nothing queued for the worker (once a picture): takes
+// the places unregistered images left out of the lookup indexes.
+void compactTextureRegistry();
 // EFB copies use an opaque original Aurora destination identity. The copy
 // owner retains the real validated BTI; the identity is never dereferenced.
 bool aliasTextureImage(TextureHandle handle,const void* identity);
@@ -141,6 +149,10 @@ void setTextureObjectSoftLimit(unsigned limit);
 inline bool (*textureObjectStorageLive)(const void* address)=nullptr;
 inline void (*textureObjectReclaimed)(const void* address)=nullptr;
 bool queryTextureObject(const void* object,Texture& output);
+// Why queryTextureObject fails for this object, for reports: "inside a
+// primitive" (the init ran between GXBegin and GXEnd and was dropped), "no
+// object", "invalid metadata", or nullptr when the query succeeds.
+const char* textureObjectProblem(const void* object);
 // Native display lists encode a bounded registration identity, never an ARM
 // address. Tokens are not reused; owner unregister invalidates every old list.
 bool textureCommandToken(const void* image,std::uint32_t& token);

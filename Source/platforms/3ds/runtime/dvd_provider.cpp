@@ -1,5 +1,6 @@
 #include "dvd_provider.hpp"
 #include "bootstrap.hpp"
+#include "tour_load_cost.hpp"
 #include <dolphin/dvd.h>
 #include <dolphin/os.h>
 #include <algorithm>
@@ -13,7 +14,35 @@ thread_local dusk::native::DvdProvider* activeProvider = nullptr;
 std::atomic<dusk::native::DvdProvider*> sharedProvider{};
 struct ServiceMutex {OSMutex value;ServiceMutex(){OSInitMutex(&value);}};
 OSMutex* serviceMutex(){static ServiceMutex value;return &value.value;}
-struct DvdCall {bool shared;DvdCall():shared(sharedProvider.load(std::memory_order_acquire)!=nullptr){if(shared)OSLockMutex(serviceMutex());}~DvdCall(){if(shared)OSUnlockMutex(serviceMutex());}};
+// The registry lock covers handles, names and directory cursors in the cached
+// FST. The I/O lock serializes file position, commands, callbacks and close.
+// A command may take the registry lock briefly. Registry operations never
+// acquire the I/O lock or perform a payload read.
+struct RegistryAccess {
+    OSMutex* mutex{};
+    RegistryAccess(){
+        if(sharedProvider.load(std::memory_order_acquire)){
+            static ServiceMutex registry;
+            mutex=&registry.value;
+            OSLockMutex(mutex);
+        }
+    }
+    ~RegistryAccess(){if(mutex)OSUnlockMutex(mutex);}
+};
+struct DvdCall {
+    bool shared = sharedProvider.load(std::memory_order_acquire) != nullptr;
+    DvdCall([[maybe_unused]] const char* operation=__builtin_FUNCTION()){
+        if(!shared)return;
+#if defined(__3DS__)
+        const auto start=dusk::native::tourGameLoadStart();
+#endif
+        OSLockMutex(serviceMutex());
+#if defined(__3DS__)
+        dusk::native::finishTourDvdLock(start,operation);
+#endif
+    }
+    ~DvdCall(){if(shared)OSUnlockMutex(serviceMutex());}
+};
 dusk::native::DvdProvider* currentProvider(){auto* shared=sharedProvider.load(std::memory_order_acquire);return shared?shared:activeProvider;}
 std::atomic<s32> driveStatus{DVD_STATE_NO_DISK};
 void publishDrive(dusk::native::DiscStatus status){
@@ -55,6 +84,7 @@ bool DvdProvider::absolutePath(const char* path, std::array<char, 1024>& output,
     }
     std::size_t prefix = 0;
     if (path[0] != '/') {
+        RegistryAccess access;
         if (!disc.directoryValid(currentDirectory)) { result = DvdStatus::ioError; return false; }
         prefix = std::strlen(currentPath.data());
         std::memcpy(output.data(), currentPath.data(), prefix);
@@ -69,10 +99,13 @@ DvdProvider::~DvdProvider() {
     if (!bound()) fatal("DVD provider destroyed outside its loading worker\n");
     // Do not dereference caller-owned records during teardown; every outstanding
     // record becomes invalid because the scope-local registry disappears.
+    auto* shared=this;
+    sharedProvider.compare_exchange_strong(shared,nullptr,std::memory_order_acq_rel);
     disc.observeState(nullptr);driveStatus.store(DVD_STATE_NO_DISK,std::memory_order_release);
     activeProvider = nullptr; owner = nullptr; providerClaim.clear(std::memory_order_release);
 }
 bool DvdProvider::open(const char* path, DVDFileInfo* info) {
+    RegistryAccess access;
     if (!bound()) return false;
     result = DvdStatus::invalidArgument;
     if (!path || !info) return false;
@@ -95,6 +128,7 @@ bool DvdProvider::open(const char* path, DVDFileInfo* info) {
     return true;
 }
 bool DvdProvider::close(DVDFileInfo* info) {
+    RegistryAccess access;
     if (!bound()) return false;
     result = DvdStatus::invalidArgument;
     if (!info) return false;
@@ -105,6 +139,7 @@ bool DvdProvider::close(DVDFileInfo* info) {
     return false;
 }
 bool DvdProvider::openEntry(std::int32_t entry,DVDFileInfo* info) {
+    RegistryAccess access;
     if(!bound())return false;
     result=DvdStatus::invalidArgument;
     if(entry<0 || !info)return false;
@@ -127,41 +162,54 @@ bool DvdProvider::openEntry(std::int32_t entry,DVDFileInfo* info) {
     result=DvdStatus::ready;return true;
 }
 std::int32_t DvdProvider::fileStatus(const DVDFileInfo* info) const {
-    if(bound() && info)for(const auto& slot:slots)if(slot.info==info && disc.readFile(slot.file,0,nullptr,0))return info->cb.state;
-    return DVD_STATE_FATAL_ERROR;
+    return info ? commandStatus(&info->cb) : DVD_STATE_FATAL_ERROR;
 }
 std::int32_t DvdProvider::commandStatus(const DVDCommandBlock* block) const {
-    if(bound() && block)for(const auto& slot:slots)if(slot.info && &slot.info->cb==block)return fileStatus(slot.info);
+    RegistryAccess access;
+    if (!bound() || !block) return DVD_STATE_FATAL_ERROR;
+    for (const auto& slot : slots) {
+        if (slot.info && &slot.info->cb == block && disc.readFile(slot.file, 0, nullptr, 0))
+            return block->state;
+    }
     return DVD_STATE_FATAL_ERROR;
 }
 std::int32_t DvdProvider::read(DVDFileInfo* info, void* output, std::int32_t length, std::int32_t offset) {
     if (!bound()) return DVD_RESULT_FATAL_ERROR;
     result = DvdStatus::invalidArgument;
     if (!info || length < 0 || offset < 0 || (length && !output)) return DVD_RESULT_FATAL_ERROR;
-    for (auto& slot : slots) if (slot.info == info) {
-        if (std::uint32_t(offset) > slot.file.size()) return DVD_RESULT_FATAL_ERROR;
-        const auto count = std::min(std::uint32_t(length), slot.file.size() - std::uint32_t(offset));
+    DiscFile file;
+    std::uint32_t count;
+    {
+        RegistryAccess access;
+        const auto slot = std::find_if(slots.begin(), slots.end(),
+            [info](const Slot& value) { return value.info == info; });
+        if (slot == slots.end()) return DVD_RESULT_FATAL_ERROR;
+        file = slot->file;
+        if (std::uint32_t(offset) > file.size()) return DVD_RESULT_FATAL_ERROR;
+        count = std::min(std::uint32_t(length), file.size() - std::uint32_t(offset));
         info->cb.state = DVD_STATE_BUSY;
         info->cb.command=DVD_COMMAND_READ;
         info->cb.offset = offset; info->cb.length = length; info->cb.addr = output;
         info->cb.currTransferSize = info->cb.transferredSize = 0;
-        if (!disc.readFile(slot.file, offset, output, count)) {
-            info->cb.state = DVD_STATE_FATAL_ERROR; result = DvdStatus::ioError;
-            return DVD_RESULT_FATAL_ERROR;
-        }
-        // A synchronous read reports only logical bytes, as original archive
-        // overlay callers require for their aligned request lengths. No callback.
-        info->cb.currTransferSize = info->cb.transferredSize = count;
-        info->cb.state = DVD_STATE_END; result = DvdStatus::ready;
-        return static_cast<std::int32_t>(count);
     }
-    return DVD_RESULT_FATAL_ERROR;
+    const bool success = disc.readFile(file, offset, output, count);
+    RegistryAccess completed;
+    if (!success) {
+        info->cb.state = DVD_STATE_FATAL_ERROR; result = DvdStatus::ioError;
+        return DVD_RESULT_FATAL_ERROR;
+    }
+    // A synchronous read reports only logical bytes, as original archive
+    // overlay callers require for their aligned request lengths. No callback.
+    info->cb.currTransferSize = info->cb.transferredSize = count;
+    info->cb.state = DVD_STATE_END; result = DvdStatus::ready;
+    return static_cast<std::int32_t>(count);
 }
 bool DvdProvider::entryPath(std::int32_t entry, char* output, std::uint32_t capacity) {
     if (!bound()) return false;
     result = DvdStatus::invalidArgument;
     if (entry < 0 || !output || !capacity) return false;
     output[0] = '\0';
+    RegistryAccess access;
     for (const auto& slot : slots) if (slot.path[0] && slot.file.entryIndex() == std::uint32_t(entry)) {
         if (!disc.readFile(slot.file, 0, nullptr, 0)) { result = DvdStatus::ioError; return false; }
         const auto bytes = std::strlen(slot.path.data()) + 1;
@@ -173,6 +221,12 @@ bool DvdProvider::entryPath(std::int32_t entry, char* output, std::uint32_t capa
 }
 std::int32_t DvdProvider::pathEntry(const char* path) {
     if(!bound())return -1;
+    if(path && path[0]=='/'){
+        // Absolute names depend only on the validated, immutable FST. The
+        // process-owned disc stays mounted until every game worker has exited.
+        std::uint32_t index;
+        return found(disc.findEntry(path,index)) ? static_cast<std::int32_t>(index) : -1;
+    }
     std::array<char, 1024> resolved{};
     if (!absolutePath(path, resolved, false)) return -1;
     std::uint32_t index = 0;
@@ -185,6 +239,7 @@ bool DvdProvider::changeDirectory(const char* path) {
     if (!absolutePath(path, resolved, true)) return false;
     DiscDirectory directory;
     if (!found(disc.findDirectory(resolved.data(), directory))) return false;
+    RegistryAccess access;
     currentDirectory = directory; currentPath = resolved; return true;
 }
 bool DvdProvider::currentDirectoryPath(char* output, std::uint32_t capacity) {
@@ -265,49 +320,56 @@ bool DvdProvider::diskID(DVDDiskID* output) {
     result=DvdStatus::ready;return true;
 }
 }
-extern "C" s32 DVDGetDriveStatus(){ DvdCall call;return driveStatus.load(std::memory_order_acquire);}
-extern "C" BOOL DVDCheckDisk(){ DvdCall call;return DVDGetDriveStatus()==DVD_STATE_END;}
+// The drive state is one atomic published by the disc observer: reading it
+// needs no service lock. The audio mixer reads it in every subframe, inside
+// the JAS lock (JASAramStream::dvdErrorCheck); behind the service lock it
+// waited for every disc read of the loader thread (up to hundreds of ms) and
+// for the game thread's directory walks (Alpha 12 console, F_SP00 minigame:
+// the mixer busy as long as the game's update, 9.5 ms of each 16.7 ms block).
+extern "C" s32 DVDGetDriveStatus(){ return driveStatus.load(std::memory_order_acquire);}
+extern "C" BOOL DVDCheckDisk(){ return DVDGetDriveStatus()==DVD_STATE_END;}
 extern "C" BOOL DVDLowReadDiskID(DVDDiskID* output,DVDLowCallback callback) { DvdCall call;
     if(!currentProvider() || !currentProvider()->diskID(output))return false;
     if(callback)callback(0); // Same successful completion code as pinned Aurora.
     return true;
 }
-extern "C" s32 DVDConvertPathToEntrynum(const char* path) { DvdCall call;
-    return currentProvider()?currentProvider()->pathEntry(path):-1;
+extern "C" s32 DVDConvertPathToEntrynum(const char* path) {
+    auto* provider=currentProvider();
+    return provider?provider->pathEntry(path):-1;
 }
-extern "C" BOOL DVDOpen(const char* path, DVDFileInfo* info) { DvdCall call;
+extern "C" BOOL DVDOpen(const char* path, DVDFileInfo* info) {
     return currentProvider() && currentProvider()->open(path, info);
 }
-extern "C" BOOL DVDChangeDir(const char* path) { DvdCall call;
+extern "C" BOOL DVDChangeDir(const char* path) { RegistryAccess access;
     return currentProvider() && currentProvider()->changeDirectory(path);
 }
-extern "C" BOOL DVDGetCurrentDir(char* output, u32 capacity) { DvdCall call;
+extern "C" BOOL DVDGetCurrentDir(char* output, u32 capacity) { RegistryAccess access;
     return currentProvider() && currentProvider()->currentDirectoryPath(output, capacity);
 }
-extern "C" BOOL DVDFastOpenDir(s32 entry, DVDDir* info) { DvdCall call;
+extern "C" BOOL DVDFastOpenDir(s32 entry, DVDDir* info) { RegistryAccess access;
     return currentProvider() && entry >= 0 && std::uint64_t(entry) <= INT32_MAX &&
            currentProvider()->openDirectoryEntry(static_cast<std::int32_t>(entry), info);
 }
-extern "C" int DVDOpenDir(const char* path, DVDDir* info) { DvdCall call;
+extern "C" int DVDOpenDir(const char* path, DVDDir* info) { RegistryAccess access;
     return currentProvider() && currentProvider()->openDirectory(path, info);
 }
-extern "C" int DVDReadDir(DVDDir* info, DVDDirEntry* output) { DvdCall call;
+extern "C" int DVDReadDir(DVDDir* info, DVDDirEntry* output) { RegistryAccess access;
     return currentProvider() && currentProvider()->readDirectory(info, output);
 }
-extern "C" int DVDCloseDir(DVDDir* info) { DvdCall call;
+extern "C" int DVDCloseDir(DVDDir* info) { RegistryAccess access;
     return currentProvider() && currentProvider()->closeDirectory(info);
 }
-extern "C" void DVDRewindDir(DVDDir* info) { DvdCall call;
+extern "C" void DVDRewindDir(DVDDir* info) { RegistryAccess access;
     if (currentProvider()) currentProvider()->rewindDirectory(info);
 }
-extern "C" BOOL DVDFastOpen(s32 entry,DVDFileInfo* info) { DvdCall call;
+extern "C" BOOL DVDFastOpen(s32 entry,DVDFileInfo* info) {
     if(!currentProvider() || entry<0 || std::uint64_t(entry)>INT32_MAX)return false;
     return currentProvider()->openEntry(static_cast<std::int32_t>(entry),info);
 }
-extern "C" s32 DVDGetFileInfoStatus(const DVDFileInfo* info) { DvdCall call;
+extern "C" s32 DVDGetFileInfoStatus(const DVDFileInfo* info) {
     return currentProvider()?currentProvider()->fileStatus(info):DVD_STATE_FATAL_ERROR;
 }
-extern "C" s32 DVDGetCommandBlockStatus(const DVDCommandBlock* block) { DvdCall call;
+extern "C" s32 DVDGetCommandBlockStatus(const DVDCommandBlock* block) {
     return currentProvider()?currentProvider()->commandStatus(block):DVD_STATE_FATAL_ERROR;
 }
 extern "C" s32 DVDCancel(volatile DVDCommandBlock* block){ DvdCall call;
@@ -334,7 +396,7 @@ extern "C" BOOL DVDReadAsyncPrio(DVDFileInfo* info,void* output,s32 length,s32 o
     if(callback)callback(count,info);
     return true;
 }
-extern "C" BOOL DVDConvertEntrynumToPath(s32 entry, char* output, u32 capacity) { DvdCall call;
+extern "C" BOOL DVDConvertEntrynumToPath(s32 entry, char* output, u32 capacity) {
     if (!currentProvider() || entry < 0 || std::uint64_t(entry) > INT32_MAX) return false;
     return currentProvider()->entryPath(static_cast<std::int32_t>(entry), output, capacity);
 }

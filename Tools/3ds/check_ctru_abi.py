@@ -5,13 +5,21 @@ offset depends on the enum size.
 libctru and Citro3D are prebuilt with short enums; this tree is built with
 -fno-short-enums (see Source/platforms/3ds/runtime/ctru_abi.hpp). The members
 of C3D_FrameBuf, C3D_RenderTarget and ERRF_ExceptionInfo from the first enum
-on must be read through the accessors of that header only.
+on must be read through the accessors of that header only; DVLE_s through
+runtime/ctru_shader_abi.hpp, where a program of a shader binary other than the
+first is found with abi::dvle().
 """
 import re
 import sys
 from pathlib import Path
 
-MEMBERS = ('colorFmt', 'depthFmt', 'block32', 'colorMask', 'depthMask', 'ownsColor', 'ownsDepth', 'transferFlags')
+MEMBERS = ('colorFmt', 'depthFmt', 'block32', 'colorMask', 'depthMask', 'ownsColor', 'ownsDepth', 'transferFlags',
+           # DVLE_s (every member is at or after its first enum; 'type' is too common a name to list)
+           'mergeOutmaps', 'gshMode', 'gshFixedVtxStart', 'gshVariableVtxNum', 'gshFixedVtxNum', 'dvlp', 'mainOffset',
+           'endmainOffset', 'constTableSize', 'constTableData', 'outTableSize', 'outTableData', 'uniformTableSize',
+           'uniformTableData', 'symbolTableData', 'outmapMask', 'outmapData', 'outmapMode', 'outmapClock')
+# DVLB_s::DVLE indexed past the first program steps by this tree's DVLE_s size.
+DVLE_INDEX = re.compile(r'\bDVLE\s*\[\s*(?!0\s*\])')
 ACCESS = re.compile(r'(?:\.|->)\s*(' + '|'.join(MEMBERS) + r')\b')
 # SDK static inlines compiled into this tree that read or write those members
 # with this tree's (wrong) offsets: C3D_RenderTargetDetachOutput read
@@ -28,7 +36,7 @@ def scan(root):
         if path.suffix not in ('.cpp', '.hpp', '.c', '.h') or not path.is_file():
             continue
         relative = path.relative_to(root)
-        if relative.parts[0] in ('tests', 'build') or path.name == 'ctru_abi.hpp':
+        if relative.parts[0] in ('tests', 'build') or path.name in ('ctru_abi.hpp', 'ctru_shader_abi.hpp'):
             continue
         text = path.read_text(errors='replace')
         uses_exception = bool(EXCEPTION.search(text))
@@ -37,6 +45,8 @@ def scan(root):
             match = ACCESS.search(code)
             if match:
                 problems.append(f'{relative}:{number}: direct access to SDK member "{match.group(1)}"')
+            if DVLE_INDEX.search(code):
+                problems.append(f'{relative}:{number}: DVLE_s array indexed with this tree\'s struct size (use abi::dvle)')
             inline = INLINES.search(code)
             if inline:
                 problems.append(f'{relative}:{number}: SDK inline "{inline.group(1)}" uses this tree\'s enum offsets')
