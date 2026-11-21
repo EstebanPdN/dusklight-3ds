@@ -1,24 +1,28 @@
 #include "frame_telemetry.hpp"
 #include "clock.hpp"
+#include "tour_cadence.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <charconv>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <new>
 
 namespace dusk::native {
 namespace {
-// 10 us units keep a sample at 48 bytes; 655 ms saturates (counted).
-struct Sample {
-    std::uint32_t frame;
-    std::uint16_t loop,execution,paint,update,draw,pace,gpuBegin,gpuEnd,gpuComplete,present,gpuTail,audio;
-    std::uint16_t draws,zone;
-    std::uint8_t chunks,completes,reclaims;std::int8_t room;
-    std::uint8_t phase,flags,ticks;
-    char stage[8];
-};
+// 10 us units keep a sample at 60 bytes; 655 ms saturates (counted).
+using Sample=FrameTelemetryRow;
 constexpr unsigned sampleCapacity=4096;
 Sample* samples{};
+struct ZoneFrameCsv {
+    char path[160];
+    std::size_t count{};
+    std::unique_ptr<Sample[]> rows;
+};
+std::atomic<ZoneFrameCsv*> pendingZoneCsv{};
 unsigned sampleHead{},sampleCount{};
 std::uint16_t tagZone{};std::uint8_t tagPhase{},pendingFlags{};
 std::uint32_t droppedSummaries{},saturatedSamples{};
@@ -28,7 +32,7 @@ struct RoomSummary {
     char stage[8];
     std::int8_t room;
     std::uint32_t frames,flagged;
-    std::uint64_t loop,execution,paint,update,draw,pace,gpuWait,gpuTail,audio,draws,ticks;
+    std::uint64_t loop,execution,paint,update,draw,pace,gpuWait,gpuTail,audio,draws,ticks,gpuBusy,gpuIdle;
     std::uint32_t slowestLoop; // 10 us units
     std::array<std::uint32_t,bucketLimits.size()+1> histogram;
 };
@@ -66,7 +70,8 @@ void flagNextFrameTelemetry(std::uint8_t flags){pendingFlags|=flags;}
 std::uint32_t frameTelemetryDropped(){return droppedSummaries;}
 std::uint32_t frameTelemetrySaturated(){return saturatedSamples;}
 void recordFrameTelemetry(const FrameTelemetryInput& in){
-    if(!samples)return;
+    recordTourCadence(in,tagZone ? tagPhase : 255,pendingFlags);
+    if(!samples){pendingFlags=0;return;}
     Sample s{};saturating=false;
     s.frame=std::uint32_t(in.frame);
     s.loop=units(in.loopTicks);s.execution=units(in.executionTicks);s.paint=units(in.paintTicks);
@@ -76,6 +81,9 @@ void recordFrameTelemetry(const FrameTelemetryInput& in){
     const float tail=in.gpuTailMilliseconds<0?0:in.gpuTailMilliseconds*100;
     s.gpuTail=tail>65535?std::uint16_t(65535):std::uint16_t(tail);
     s.audio=units(in.audioMixTicks);
+    s.gpuLists=units(in.gpu.gpuListTicks);s.gpuCopies=units(in.gpu.gpuCopyTicks+in.gpu.gpuFillTicks);
+    s.gpuIdle=units(in.gpu.gpuIdleTicks);s.gpuLongest=units(in.gpu.gpuLongestListTicks);
+    s.gpuJobs=in.gpu.gpuJobs>255?std::uint8_t(255):std::uint8_t(in.gpu.gpuJobs);
     s.draws=in.draws>65535?std::uint16_t(65535):std::uint16_t(in.draws);
     s.chunks=in.gpu.chunks>255?255:std::uint8_t(in.gpu.chunks);
     s.completes=in.gpu.completes>255?255:std::uint8_t(in.gpu.completes);
@@ -88,30 +96,33 @@ void recordFrameTelemetry(const FrameTelemetryInput& in){
     if(sampleCount<sampleCapacity)++sampleCount;
     auto* total=summaryFor(in.stage,in.room);
     if(!total){++droppedSummaries;return;}
-    if(s.flags){++total->flagged;return;}
+    if(s.flags&telemetryDiagnosticFrame){++total->flagged;return;}
     ++total->frames;
     total->loop+=s.loop;total->execution+=s.execution;total->paint+=s.paint;total->update+=s.update;
     total->draw+=s.draw;total->pace+=s.pace;
     total->gpuWait+=std::uint32_t(s.gpuBegin)+s.gpuEnd+s.gpuComplete+s.present;
     total->gpuTail+=s.gpuTail;total->audio+=s.audio;total->draws+=s.draws;total->ticks+=s.ticks;
+    total->gpuBusy+=std::uint32_t(s.gpuLists)+s.gpuCopies;total->gpuIdle+=s.gpuIdle;
     if(s.loop>total->slowestLoop)total->slowestLoop=s.loop;
     unsigned bucket=0;
     while(bucket<bucketLimits.size()&&s.loop>bucketLimits[bucket]*100u)++bucket;
     ++total->histogram[bucket];
 }
-bool frameTelemetryStats(std::uint16_t zone,int phase,TelemetryStats& out){
+bool frameTelemetryStats(std::uint16_t zone,int phase,TelemetryStats& out,std::uint32_t excluded,std::uint8_t excludedFlags){
     out={};
     if(!samples)return false;
     static std::uint16_t loops[sampleCapacity],executions[sampleCapacity];
-    std::uint64_t loop=0,execution=0,paint=0,update=0,draw=0,pace=0,wait=0,tail=0,audio=0,draws=0;
+    std::uint64_t loop=0,execution=0,paint=0,update=0,draw=0,pace=0,wait=0,tail=0,audio=0,draws=0,gpuBusy=0,gpuIdle=0;
     unsigned count=0;
     eachSample([&](const Sample& s){
-        if(s.zone!=zone||(phase>=0&&s.phase!=phase)||(phase<=-2&&s.phase==-2-phase))return;
-        if(s.flags){++out.flagged;return;}
+        if(s.zone!=zone||(phase>=0&&s.phase!=phase)||(phase<=-2&&s.phase==-2-phase)||
+           (phase==-1&&s.phase<32&&(excluded>>s.phase&1)))return;
+        if(s.flags&excludedFlags){++out.flagged;return;}
         if(s.loop==65535)++out.saturated;
         loops[count]=s.loop;executions[count]=s.execution;++count;
         loop+=s.loop;execution+=s.execution;paint+=s.paint;update+=s.update;draw+=s.draw;pace+=s.pace;
         wait+=std::uint32_t(s.gpuBegin)+s.gpuEnd+s.gpuComplete+s.present;tail+=s.gpuTail;audio+=s.audio;draws+=s.draws;
+        gpuBusy+=std::uint32_t(s.gpuLists)+s.gpuCopies;gpuIdle+=s.gpuIdle;
         if(s.loop>3400)++out.over34;
         if(s.loop>4000)++out.over40;
         if(s.loop>5000)++out.over50;
@@ -125,45 +136,114 @@ bool frameTelemetryStats(std::uint16_t zone,int phase,TelemetryStats& out){
     out.execMean=execution*scale;out.execP95=at(executions,95);out.execMax=executions[count-1]*0.01f;
     out.paint=paint*scale;out.update=update*scale;out.draw=draw*scale;out.pace=pace*scale;
     out.gpuWait=wait*scale;out.gpuTail=tail*scale;out.audio=audio*scale;out.draws=float(draws)/count;
+    out.gpuBusy=gpuBusy*scale;out.gpuIdle=gpuIdle*scale;
     return true;
 }
 namespace {
-void sampleHeader(std::FILE* file){
-    std::fprintf(file,"frame,stage,room,zone,phase,flags,loop_ms,exec_ms,paint_ms,update_ms,draw_ms,pace_ms,gpu_begin_ms,gpu_end_ms,gpu_complete_ms,present_ms,gpu_tail_ms,audio_mix_ms,draws,chunks,completes,reclaims,ticks\n");
+constexpr char recentHeader[]="frame,stage,room,zone,phase,flags,loop_ms,exec_ms,paint_ms,update_ms,draw_ms,pace_ms,gpu_begin_ms,gpu_end_ms,gpu_complete_ms,present_ms,gpu_tail_ms,audio_mix_ms,draws,chunks,completes,reclaims,ticks,gpu_busy_ms,gpu_lists_ms,gpu_copies_ms,gpu_idle_ms,gpu_longest_ms,gpu_jobs\n";
+// All times already have exactly two fractional digits. This path is shared
+// by normal exports, zone reports and the background diagnostic writer.
+using CsvLine = std::array<char, 320>;
+std::size_t formatRow(CsvLine& line, const Sample& s) {
+    // 29 fields, each at most 10 decimal characters, plus delimiters.
+    char* cursor = line.data();
+    const auto end = line.data() + line.size();
+    auto integer = [&](int value) {
+        *cursor++ = ',';
+        cursor = std::to_chars(cursor, end, value).ptr;
+    };
+    auto milliseconds = [&](unsigned hundredths) {
+        integer(hundredths / 100);
+        *cursor++ = '.';
+        *cursor++ = char('0' + (hundredths / 10) % 10);
+        *cursor++ = char('0' + hundredths % 10);
+    };
+    cursor = std::to_chars(cursor, end, s.frame).ptr;
+    *cursor++ = ',';
+    for (const char c : s.stage) {
+        if (!c) break;
+        *cursor++ = c;
+    }
+    integer(s.room); integer(s.zone); integer(s.phase); integer(s.flags);
+    for (auto value : {s.loop, s.execution, s.paint, s.update, s.draw, s.pace,
+                       s.gpuBegin, s.gpuEnd, s.gpuComplete, s.present, s.gpuTail, s.audio})
+        milliseconds(value);
+    integer(s.draws); integer(s.chunks); integer(s.completes); integer(s.reclaims); integer(s.ticks);
+    milliseconds(unsigned(s.gpuLists) + s.gpuCopies);
+    for (auto value : {s.gpuLists, s.gpuCopies, s.gpuIdle, s.gpuLongest}) milliseconds(value);
+    integer(s.gpuJobs);
+    *cursor++ = '\n';
+    return cursor - line.data();
 }
-void sampleRow(std::FILE* file,const Sample& s){
-    std::fprintf(file,"%lu,%.8s,%d,%u,%u,%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%u\n",
-        static_cast<unsigned long>(s.frame),s.stage,int(s.room),unsigned(s.zone),unsigned(s.phase),unsigned(s.flags),
-        s.loop*0.01,s.execution*0.01,s.paint*0.01,s.update*0.01,
-        s.draw*0.01,s.pace*0.01,s.gpuBegin*0.01,s.gpuEnd*0.01,s.gpuComplete*0.01,s.present*0.01,s.gpuTail*0.01,s.audio*0.01,
-        unsigned(s.draws),unsigned(s.chunks),unsigned(s.completes),unsigned(s.reclaims),unsigned(s.ticks));
+bool sampleRow(std::FILE* file, const Sample& s) {
+    CsvLine line;
+    const auto size = formatRow(line, s);
+    return std::fwrite(line.data(), 1, size, file) == size;
 }
 }
 bool writeFrameTelemetryZone(std::FILE* file,std::uint16_t zone){
-    if(!samples||!file)return false;
-    sampleHeader(file);
+    if(!samples||!file||std::fputs(recentHeader,file)<0)return false;
     eachSample([&](const Sample& s){if(s.zone==zone)sampleRow(file,s);});
     return !std::ferror(file);
 }
+bool queueZoneFrameCsv(const char* path, std::uint16_t zone) {
+    if (!path || !samples || pendingZoneCsv.load(std::memory_order_acquire)) return false;
+    auto snapshot = std::unique_ptr<ZoneFrameCsv>(new(std::nothrow) ZoneFrameCsv);
+    if (!snapshot || std::strlen(path) >= sizeof(snapshot->path)) return false;
+    std::strcpy(snapshot->path, path);
+    std::size_t count = 0;
+    eachSample([&](const Sample& row) { if (row.zone == zone) ++count; });
+    if (count) {
+        snapshot->rows.reset(new(std::nothrow) Sample[count]);
+        if (!snapshot->rows) return false;
+        eachSample([&](const Sample& row) {
+            if (row.zone == zone) snapshot->rows[snapshot->count++] = row;
+        });
+    }
+    pendingZoneCsv.store(snapshot.release(), std::memory_order_release);
+    return true;
+}
+bool writePendingZoneFrameCsv() {
+    std::unique_ptr<ZoneFrameCsv> snapshot(pendingZoneCsv.exchange(nullptr, std::memory_order_acquire));
+    if (!snapshot) return true;
+    char temporary[sizeof(snapshot->path)+5];
+    std::snprintf(temporary, sizeof(temporary), "%s.tmp", snapshot->path);
+    auto* file = std::fopen(temporary, "wb");
+    if (!file) return false;
+    const bool written = writeFrameTelemetryRows(file, {snapshot->rows.get(), snapshot->count});
+    return std::fclose(file) == 0 && written && std::rename(temporary, snapshot->path) == 0;
+}
+std::size_t copyRecentFrameTelemetry(std::span<FrameTelemetryRow> out){
+    if(!samples)return 0;
+    const auto count=std::min(out.size(),std::size_t(sampleCount));
+    const auto first=(sampleHead+sampleCapacity-count)%sampleCapacity;
+    if (count) {
+        const auto left = std::min(count, sampleCapacity - first);
+        std::memcpy(out.data(), samples + first, left * sizeof(Sample));
+        if (left < count) std::memcpy(out.data() + left, samples, (count - left) * sizeof(Sample));
+    }
+    return count;
+}
+bool writeFrameTelemetryRows(std::FILE* file,std::span<const FrameTelemetryRow> rows){
+    if(std::fputs(recentHeader,file)<0)return false;
+    for(const auto& row:rows)if(!sampleRow(file,row))return false;
+    return true;
+}
 std::size_t formatRecentFrameTelemetry(char* out,std::size_t capacity,unsigned frames){
-    if(!samples||!out||capacity<256)return 0;
-    std::size_t used=0;
-    auto add=[&](const char* format,auto... values){
-        const int n=std::snprintf(out+used,capacity-used,format,values...);
-        if(n<0||std::size_t(n)>=capacity-used)return false;
-        used+=n;return true;
-    };
-    if(!add("frame,stage,room,zone,phase,flags,loop_ms,exec_ms,paint_ms,update_ms,draw_ms,pace_ms,gpu_begin_ms,gpu_end_ms,gpu_complete_ms,present_ms,gpu_tail_ms,audio_mix_ms,draws,chunks,completes,reclaims,ticks\n"))return 0;
+    if(!samples||!out||capacity<sizeof(recentHeader))return 0;
+    std::size_t used=sizeof(recentHeader)-1;
+    std::memcpy(out,recentHeader,used);
+    CsvLine line;
     const unsigned count=frames<sampleCount?frames:sampleCount;
     const unsigned first=(sampleHead+sampleCapacity-count)%sampleCapacity;
     for(unsigned n=0;n<count;++n){
         const Sample& s=samples[(first+n)%sampleCapacity];
-        if(!add("%lu,%.8s,%d,%u,%u,%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%u\n",
-            static_cast<unsigned long>(s.frame),s.stage,int(s.room),unsigned(s.zone),unsigned(s.phase),unsigned(s.flags),
-            s.loop*0.01,s.execution*0.01,s.paint*0.01,s.update*0.01,s.draw*0.01,s.pace*0.01,s.gpuBegin*0.01,s.gpuEnd*0.01,
-            s.gpuComplete*0.01,s.present*0.01,s.gpuTail*0.01,s.audio*0.01,
-            unsigned(s.draws),unsigned(s.chunks),unsigned(s.completes),unsigned(s.reclaims),unsigned(s.ticks)))break;
+        const auto size=formatRow(line,s);
+        if(size>=capacity-used)break;
+        std::memcpy(out+used,line.data(),size);
+        used+=size;
     }
+    out[used]=0;
     return used;
 }
 bool writeFrameTelemetry(bool includeFrames){
@@ -173,7 +253,7 @@ bool writeFrameTelemetry(bool includeFrames){
         std::fprintf(file,"stage,room,frames,flagged,loop_ms,fps,exec_ms,paint_ms,update_ms,draw_ms,pace_ms,gpu_wait_ms,gpu_tail_ms,audio_mix_ms,draws,slowest_ms");
         for(const auto limit:bucketLimits)std::fprintf(file,",le_%u",unsigned(limit));
         // game_speed_pct: original 30 Hz logic ticks run per second of real time.
-        std::fprintf(file,",gt_%u,ticks_per_frame,game_speed_pct\n",unsigned(bucketLimits.back()));
+        std::fprintf(file,",gt_%u,ticks_per_frame,game_speed_pct,gpu_busy_ms,gpu_idle_ms\n",unsigned(bucketLimits.back()));
         for(unsigned n=0;n<summaryCount;++n){
             const auto& t=summaries[n];if(!t.frames)continue;
             const double scale=0.01/t.frames; // 10 us units -> mean milliseconds
@@ -184,14 +264,14 @@ bool writeFrameTelemetry(bool includeFrames){
                 double(t.draws)/t.frames,t.slowestLoop*0.01);
             for(const auto count:t.histogram)std::fprintf(file,",%lu",static_cast<unsigned long>(count));
             const double ticks=double(t.ticks)/t.frames;
-            std::fprintf(file,",%.2f,%.0f\n",ticks,loop>0?ticks*(1000.0/30.0)/loop*100.0:0.0);
+            std::fprintf(file,",%.2f,%.0f,%.2f,%.2f\n",ticks,loop>0?ticks*(1000.0/30.0)/loop*100.0:0.0,t.gpuBusy*scale,t.gpuIdle*scale);
         }
         std::fprintf(file,"# samples without a summary row=%lu, saturated samples (>655 ms)=%lu\n",
             static_cast<unsigned long>(droppedSummaries),static_cast<unsigned long>(saturatedSamples));
         written=!std::ferror(file);std::fclose(file);
     }
     if(includeFrames)if(auto* file=std::fopen("sdmc:/3ds/DuskLight/frames.csv","wb")){
-        sampleHeader(file);
+        std::fputs(recentHeader,file);
         eachSample([&](const Sample& s){sampleRow(file,s);});
         written=written&&!std::ferror(file);std::fclose(file);
     }
