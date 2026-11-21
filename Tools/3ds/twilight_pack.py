@@ -224,6 +224,22 @@ def publish(staging, output):
         if rename(os.fsencode(staging), os.fsencode(output), 0x00000004):
             code = ctypes.get_errno()
             raise OSError(code, os.strerror(code))
+    elif os.name == 'nt':
+        # Windows rename fails atomically if another converter won the race.
+        os.rename(staging, output)
+    elif sys.platform.startswith('linux'):
+        # FAT/exFAT destinations do not support hard links.
+        import ctypes
+        rename = getattr(ctypes.CDLL(None, use_errno=True), 'renameat2', None)
+        if rename:
+            if rename(-100, os.fsencode(staging), -100, os.fsencode(output), 1) == 0:
+                return
+            import errno
+            code = ctypes.get_errno()
+            if code not in (errno.ENOSYS, errno.EINVAL, errno.EOPNOTSUPP):
+                raise OSError(code, os.strerror(code))
+        os.link(staging, output)
+        os.unlink(staging)
     else:
         os.link(staging, output)
         os.unlink(staging)
@@ -321,7 +337,8 @@ def run():
             # Publication is the cancellation commit point (a few syscalls).
             # Keep signals blocked until process exit so a queued cancellation
             # cannot turn an already committed verified output into failure.
-            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
+            if hasattr(signal, 'pthread_sigmask'):
+                signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
             publish(staging, output)
             staging = None
             emit('complete', 'complete', physical, physical, 'Container verified and published',

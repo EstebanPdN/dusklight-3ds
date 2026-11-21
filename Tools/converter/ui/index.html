@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'"><title>Forge Store · 3DS ROM Converter</title><link rel="stylesheet" href="style.css"></head>
+<body data-port="dusklight">
+<header id="hero">
+<img id="art" src="art/dusklight-art.jpg" alt="">
+<nav><span class="brand"><img src="art/forge.png" alt=""><b>forge<span>.store</span></b></span><span class="platform">Nintendo <strong>3DS</strong></span></nav>
+<div class="hero-foot"><small id="route">GameCube → Nintendo 3DS</small><img id="logo" src="logo.png" alt="DuskLight"></div>
+</header>
+<main>
+<section id="library"><div class="section-head"><div><small>ROM CONVERTER</small><h1>Choose a port</h1></div></div><div id="games"></div></section>
+<section id="detail" hidden>
+<div class="section-head"><div><small id="format"></small><h1 id="heading"></h1></div><button class="back" id="back">‹ All ports</button></div>
+<div id="zone"><p id="note"></p><button class="action" id="choose"></button></div>
+<div class="status"><span role="status" id="status"></span><output id="value"></output></div>
+<progress id="bar" aria-label="Conversion progress" max="100" value="0" hidden></progress>
+</section>
+</main><script src="ui.js"></script></body></html>
