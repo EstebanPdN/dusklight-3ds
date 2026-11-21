@@ -48,6 +48,7 @@ CMakeFiles/
 *.dnm
 *.dnl
 *.dps
+*.lod
 *.bmd
 *.bdl
 *.bti
