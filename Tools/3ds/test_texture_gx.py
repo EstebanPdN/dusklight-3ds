@@ -82,7 +82,7 @@ vector<uint8_t> originalPaletteTexture(unsigned f,unsigned w,unsigned h,span<con
     inputs=[native/'runtime/texture_gx.cpp',native/'runtime/texture_gx.hpp',native/'tests/texture_gx_test.cpp',native/'runtime/disc.cpp',native/'runtime/disc.hpp',native/'runtime/resource_archive.cpp',native/'runtime/resource_archive.hpp',original,Path(__file__).resolve()]
     hashes={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     common=['-std=c++20','-Wall','-Wextra','-Werror']
-    commands=[['clang++',*common,'-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',str(inputs[0]),str(inputs[2]),str(inputs[3]),str(inputs[5]),str(oracle),'-o',str(OUT/'test')],['/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++',*common,'-O2','-march=armv6k','-mtune=mpcore','-mfloat-abi=hard','-mfpu=vfp','-mtp=soft','-fstack-usage','-c',str(inputs[0]),'-o',str(OUT/'texture-arm.o')]]
+    commands=[['clang++',*common,'-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',str(inputs[0]),str(inputs[2]),str(inputs[3]),str(inputs[5]),str(oracle),'-o',str(OUT/'test')],[os.path.join(os.environ.get('DEVKITPRO','/opt/devkitpro'),'devkitARM/bin/arm-none-eabi-g++'),*common,'-O2','-march=armv6k','-mtune=mpcore','-mfloat-abi=hard','-mfpu=vfp','-mtp=soft','-fstack-usage','-c',str(inputs[0]),'-o',str(OUT/'texture-arm.o')]]
     receipt={'status':'running','input_sha256':hashes,'commands':commands,'origin':'host sanitizer comparison and ARM compilation only; no GPU acceptance','oracle':'unchanged pinned decoder excerpt with standard-library wrapper','payload_saved':False}
     try:
         with (OUT/'build.log').open('w') as log:
@@ -94,7 +94,7 @@ vector<uint8_t> originalPaletteTexture(unsigned f,unsigned w,unsigned h,span<con
         fixture=OUT/'layout.pam';fixture.write_bytes(b'P7\nWIDTH 8\nHEIGHT 8\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n'+bytes([170,170,170,51])*64)
         cli=[]
         for fmt,pixel in [('la4',bytes([0xa3])),('la8',bytes([0x33,0xaa])),('rgba8',bytes([0x33,0xaa,0xaa,0xaa]))]:
-            output=OUT/(fmt+'.bin');cmd=['/opt/devkitpro/tools/bin/tex3ds','-f',fmt,'-r','-z','none','-o',str(output),str(fixture)]
+            output=OUT/(fmt+'.bin');cmd=[os.path.join(os.environ.get('DEVKITPRO','/opt/devkitpro'),'tools/bin/tex3ds'),'-f',fmt,'-r','-z','none','-o',str(output),str(fixture)]
             subprocess.run(cmd,check=True,capture_output=True,timeout=30)
             data=output.read_bytes();assert data[0]==0 and int.from_bytes(data[1:4],'little')==len(pixel)*64 and data[4:]==pixel*64;cli.append(cmd)
         assert hashes=={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}

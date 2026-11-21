@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Test native command storage with the actual J3D GD and display-list objects."""
+import argparse
 import hashlib
 import json
 import os
@@ -12,6 +13,10 @@ OUT = ROOT/'Diagnostics/implementation-07/gd'
 
 
 def main():
+    global OUT
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output',type=Path,default=OUT)
+    OUT=parser.parse_args().output
     OUT.mkdir(parents=True,exist_ok=True)
     native=ROOT/'Source/platforms/3ds'; aurora=ROOT/'Source/extern/aurora'
     common=['-std=c++20','-O1','-g','-DTARGET_PC=1','-DDUSK_TARGET_3DS=1',
@@ -24,12 +29,15 @@ def main():
           '-Wno-multichar','-Wno-deprecated-declarations']
     original=[ROOT/'Source/libs/JSystem/src/J3DGraphBase/J3DGD.cpp',
               ROOT/'Source/libs/JSystem/src/J3DGraphBase/J3DPacket.cpp',native/'tests/gd_packet_test.cpp']
-    sources=[native/'runtime/gd_native.cpp',aurora/'lib/dolphin/gd/GDGeometry.cpp',
+    sources=[native/'runtime/gd_native.cpp',aurora/'lib/dolphin/gd/GDGeometry.cpp',aurora/'lib/dolphin/gd/GDLight.cpp',
              aurora/'lib/gx/dl.cpp',aurora/'lib/gx/attr_fmt.cpp',native/'tests/gd_native_test.cpp',native/'runtime/gx_state.cpp',native/'runtime/resource_archive.cpp']
     objects=[OUT/(p.stem+'-host.o') for p in original]
     commands=[['clang++',*game,'-c',str(s),'-o',str(o)] for s,o in zip(original,objects)]
     commands.append(['clang++',*common,*map(str,sources),*map(str,objects),'-Wl,-dead_strip','-o',str(OUT/'test')])
-    arm='/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++'
+    # devkitARM: $DEVKITARM, /opt/devkitpro or ~/devkitpro.
+    candidates=[Path(os.environ['DEVKITARM'])/'bin/arm-none-eabi-g++'] if os.environ.get('DEVKITARM') else []
+    candidates+=[Path('/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++'),Path.home()/'devkitpro/devkitARM/bin/arm-none-eabi-g++']
+    arm=str(next((c for c in candidates if c.exists()),candidates[0]))
     flags=['-std=c++20','-O2','-g','-march=armv6k','-mtune=mpcore','-mfloat-abi=hard','-mfpu=vfp',
            '-mtp=soft','-D__3DS__','-DTARGET_PC=1','-DDUSK_TARGET_3DS=1','-I'+str(aurora/'include')]
     commands.append([arm,*flags,'-Wall','-Wextra','-Werror','-c',str(sources[0]),'-o',str(OUT/'gd-native-arm.o')])

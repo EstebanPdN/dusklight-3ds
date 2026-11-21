@@ -16,6 +16,7 @@ struct Panic : std::runtime_error { using std::runtime_error::runtime_error; };
 extern "C" void OSPanic(const char*, int, const char* msg, ...) { throw Panic(msg); }
 static thread_local void* flushed; static thread_local u32 flushBytes;
 void testOriginalPackets();
+void testCommandRuns();
 extern "C" void DCFlushRange(void* ptr, u32 size) { flushed=ptr;flushBytes=size; }
 static GDLObj grown; alignas(32) static u8 storage[128];
 static void grow() { GDInitGDLObj(&grown,storage,sizeof(storage));GDSetCurrent(&grown); }
@@ -86,5 +87,57 @@ int main() {
   assert(__GDCurrentDL==current && GDGetOverflowCallback()==ineffective);
   GDSetOverflowCallback(nullptr);GDSetCurrent(nullptr);
   testOriginalPackets();
-  puts("PASS: original J3D packets, GD endian writes, alignment/padding, bounds, callback revalidation, patch offsets, array command, thread isolation");
+  testCommandRuns();
+  puts("PASS: command runs equal to per-byte writes at every list end, original J3D packets, GD endian writes, alignment/padding, bounds, callback revalidation, patch offsets, array command, thread isolation");
+}
+
+// Alpha 21: each command written as one run of bytes (__GDWriteBytes) against
+// the per-byte writer (logic.txt gdwrite=0): the same bytes, final offset,
+// current list, overflow-callback calls and failures, for every command kind
+// at every position of a list's end, with no callback and with one that
+// moves the writing to a second list.
+namespace {
+struct RunResult { std::array<u8,32> list{}; std::array<u8,64> grown{}; u32 offset{}; bool panicked{}, inGrown{}; unsigned grows{}; };
+alignas(32) u8 runList[32]; alignas(32) u8 runGrown[64]; GDLObj runGrownObj; unsigned runGrows;
+void growRun() { ++runGrows; GDInitGDLObj(&runGrownObj, runGrown, sizeof(runGrown)); GDSetCurrent(&runGrownObj); }
+template<class F> RunResult runOnce(F&& write, u32 offset, bool callback, bool bytewise) {
+  memset(runList, 0xcd, sizeof(runList)); memset(runGrown, 0xab, sizeof(runGrown)); runGrows = 0;
+  GDLObj list{}; GDInitGDLObj(&list, runList, sizeof(runList)); GDSetCurrent(&list); GDSetCurrOffset(offset);
+  GDSetOverflowCallback(callback ? growRun : nullptr);
+  dusk_native_gd_bytewise = bytewise;
+  RunResult r;
+  try { write(); } catch (const Panic&) { r.panicked = true; }
+  dusk_native_gd_bytewise = 0;
+  r.inGrown = __GDCurrentDL == &runGrownObj; r.offset = u32(__GDCurrentDL->ptr - __GDCurrentDL->start); r.grows = runGrows;
+  memcpy(r.list.data(), runList, sizeof(runList)); memcpy(r.grown.data(), runGrown, sizeof(runGrown));
+  GDSetOverflowCallback(nullptr); GDSetCurrent(nullptr);
+  return r;
+}
+}
+void testCommandRuns() {
+  using Write = void (*)();
+  const Write writes[] = {
+    [] { J3DGDWrite_u8(0x5a); }, [] { J3DGDWrite_u16(0xa1b2); }, [] { J3DGDWrite_u32(0xa1b2c3d4); },
+    [] { J3DGDWrite_f32(-1.5f); }, [] { J3DGDWriteBPCmd(0xf3123456); }, [] { J3DGDWriteXFCmd(0x1009, 0x89abcdef); },
+    [] { J3DGDWriteXFCmdHdr(0x0400, 12); }, [] { J3DGDWriteXFCmdHdr(0x0400, 0); }, [] { J3DGDWriteCPCmd(0x50, 0x01020304); },
+    [] { J3DGDSetTevColorS10(GX_TEVREG1, GXColorS10{-12, 300, 1023, -1024}); },
+    [] { J3DGDSetTevKColor(GX_KCOLOR2, GXColor{1, 2, 3, 4}); },
+    [] { J3DGDSetLightColor(GX_LIGHT3, GXColor{9, 8, 7, 6}); },
+    [] { J3DGDSetLightPos(GX_LIGHT1, 1.0f, -2.5f, 1e-30f); },
+    [] { J3DGDSetGenMode(1, 1, 2, 0, GX_CULL_BACK); },
+    [] { J3DGDSetAlphaCompare(GX_GREATER, 0x12, GX_AOP_AND, GX_ALWAYS, 0x34); },
+    [] { GDWrite_u16(0x1234); }, [] { GDWrite_u24(0x123456); }, [] { GDWrite_u32(0x12345678); },
+    [] { GDWrite_u64(0x0123456789abcdefULL); }, [] { GDWrite_f32(3.25f); },
+    [] { const u8 data[11]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}; GDWrite_data(data, sizeof(data)); },
+  };
+  unsigned cases = 0;
+  for (Write write : writes)
+    for (bool callback : {false, true})
+      for (u32 offset = 0; offset <= 32; ++offset) {
+        const RunResult a = runOnce(write, offset, callback, true), b = runOnce(write, offset, callback, false);
+        assert(a.list == b.list && a.grown == b.grown && a.offset == b.offset && a.panicked == b.panicked &&
+               a.inGrown == b.inGrown && a.grows == b.grows);
+        ++cases;
+      }
+  printf("command runs: %u cases equal to the per-byte writer\n", cases);
 }

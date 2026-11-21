@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 import verify_application_dump as audit
+
+
+class PackedIndexWriterTests(unittest.TestCase):
+    def test_index_larger_than_fixed_workspace(self):
+        source = Path(__file__).resolve().parents[2] / 'Source/platforms/3ds/tests/packed_dump_index_test.cpp'
+        with tempfile.TemporaryDirectory() as temp:
+            exe = Path(temp) / 'packed-index'
+            subprocess.run(['c++', '-std=c++17', '-Wall', '-Wextra', '-Werror', str(source), '-o', str(exe)], check=True)
+            subprocess.run([exe, Path(temp) / 'index.tmp'], check=True)
 
 
 def fnv(data):

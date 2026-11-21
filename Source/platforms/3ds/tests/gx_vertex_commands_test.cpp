@@ -1,4 +1,5 @@
 #include "../runtime/gx_stream.hpp"
+#include "../runtime/gx_compact_cache.hpp"
 #include <dolphin/gx.h>
 #include <dolphin/gd.h>
 #include <dolphin/os.h>
@@ -9,6 +10,8 @@
 using namespace dusk::native::gx;
 extern "C" void OSPanic(const char*,int,const char* message,...){throw std::runtime_error(message);}
 extern "C" void DCFlushRange(void*,u32){}
+// Defined by the native draw code in the game; the processor only counts batches in it.
+thread_local dusk::native::gx::StaticGeometryHint dusk::native::gx::staticGeometryHint{};
 static std::span<const u8> liveBytes;
 static bool resolveLive(std::uint64_t address,u32 size){
     const auto base=reinterpret_cast<std::uintptr_t>(liveBytes.data());

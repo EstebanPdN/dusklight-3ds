@@ -28,6 +28,7 @@
 #include <vector>
 namespace dusk::native {
 void setHostFramebufferImages(std::span<const std::byte>,std::span<const std::byte>);
+void queueHostDraw();
 void logText(const char* text) { std::fputs(text, stderr); }
 [[noreturn]] void fatal(const char* text) { logText(text); std::abort(); }
 void waitForRetrace() { std::atomic_thread_fence(std::memory_order_seq_cst); }
@@ -304,6 +305,18 @@ static void indexedCaptureTests(){
         gx::Texture texture;const char* why;assert(gx::resolveCommandTexture(commands.registers(),0,texture,why));
         assert(texture.format==9&&texture.handle==(token&0x7fffff));
         for(auto index:texture.image)assert(index==1); // Red channel, never RGB luminance.
+        // The worker may still be drawing into the framebuffer or sampling the previous base.
+        auto mapBase = original;
+        gx::TextureHandle mapHandle{};
+        assert(gx::registerTexture(mapBase, mapHandle));
+        std::array<u8,64> retained{};
+        queueHostDraw();
+        assert(copyAreaMapBase(8, mapHandle, retained));
+        assert(std::memcmp(retained.data(), texture.image.data(), retained.size()) == 0);
+        queueHostDraw();
+        assert(!bindAreaMapBase(texture)); // The host has no resident PICA textures.
+        queueHostDraw();
+        assert(releaseAreaMapBase(mapHandle));
         NativeTexturePlan plan;assert(inspectNativeTexture(texture.bti,plan));std::vector<u8> decoded(plan.outputBytes);
         assert(decodeNativeTexture(texture.bti,plan,decoded));assert(decoded[0]==255&&decoded[3]==255&&decoded[1]==0);
         b[98]=0x80;b[99]=0x1f; // Live palette becomes blue after capture, before load.

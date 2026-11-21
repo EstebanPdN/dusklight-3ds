@@ -3,10 +3,13 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
+# devkitPro lives in the home folder on the build Mac; /opt is the installer default.
+DEVKITPRO = Path(os.environ.get('DEVKITPRO') or next((p for p in (Path.home()/'devkitpro',Path('/opt/devkitpro')) if p.is_dir()), '/opt/devkitpro'))
 OUT = ROOT / 'Diagnostics/implementation-18/geometry-layout'
 
 
@@ -18,7 +21,7 @@ def main():
     native = ROOT / 'Source/platforms/3ds'
     common = ['-std=c++20', '-DTARGET_PC=1', '-DDUSK_TARGET_3DS=1',
               '-I' + str(ROOT / 'Source/extern/aurora/include'), '-Wall', '-Wextra', '-Werror']
-    compiler = '/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++'
+    compiler = str(DEVKITPRO / 'devkitARM/bin/arm-none-eabi-g++')
     arm = [compiler, *common, '-O2', '-g', '-march=armv6k', '-mtune=mpcore',
            '-mfloat-abi=hard', '-mfpu=vfp', '-mtp=soft', '-D__3DS__', '-fstack-usage']
     fixture = OUT / 'sizes.cpp'
@@ -34,7 +37,7 @@ def main():
         *[[*arm, '-c', str(native / ('runtime/' + name + '.cpp')), '-o', str(OUT / (name + '.o'))]
           for name in ['gx_geometry', 'gx_vertex_transform', 'gx_pica_math']],
         [*arm, '-I' + str(native / 'runtime'), '-c', str(fixture), '-o', str(OUT / 'sizes.o')],
-        ['/opt/devkitpro/devkitARM/bin/arm-none-eabi-nm', '-S', '--size-sort', str(OUT / 'sizes.o')],
+        [str(DEVKITPRO / 'devkitARM/bin/arm-none-eabi-nm'), '-S', '--size-sort', str(OUT / 'sizes.o')],
     ]
     inputs = [native / 'tests/gx_pica_math_test.cpp', Path(__file__).resolve(), fixture]
     for name in ['gx_geometry', 'gx_vertex_transform', 'gx_pica_math', 'gx_vertex_decode', 'gx_commands', 'gx_state']:

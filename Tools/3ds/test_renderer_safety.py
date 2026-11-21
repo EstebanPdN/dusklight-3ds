@@ -20,7 +20,7 @@ def main():
     # Same command adapter fixture/dependencies as test_gx_command_draw.py;
     # this focused runner intentionally has no ARM compiler/build invocation.
     sources = [native / name for name in [
-        'runtime/gx_texture_commands.cpp', 'gx_command_draw.cpp',
+        'runtime/gx_texture_commands.cpp', 'gx_command_draw.cpp', 'runtime/gx_worker.cpp',
         'runtime/gx_gpu_geometry.cpp', 'runtime/gx_material.cpp',
         'runtime/gx_pica_material.cpp', 'runtime/gx_raster_plan.cpp',
         'runtime/gx_raster_color.cpp', 'runtime/gd_native.cpp',
@@ -31,7 +31,7 @@ def main():
         'runtime/gx_transform_commands.cpp', 'runtime/gx_vertex_commands.cpp',
         'runtime/gx_lighting_commands.cpp', 'runtime/gx_light_objects.cpp',
         'runtime/gx_tev_commands.cpp', 'gx_api.cpp', 'gx_command_api.cpp',
-        'runtime/gx_state.cpp', 'runtime/resource_archive.cpp']]
+        'runtime/gx_state.cpp', 'runtime/resource_archive.cpp', 'runtime/pica_blocks.cpp']]
     sources += [aurora / name for name in [
         'lib/dolphin/gd/GDGeometry.cpp', 'lib/dolphin/gd/GDTev.cpp',
         'lib/dolphin/gd/GDIndirect.cpp', 'lib/gx/dl.cpp', 'lib/gx/attr_fmt.cpp']]

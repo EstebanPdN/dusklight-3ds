@@ -102,7 +102,7 @@ bool dusk::native::platformReadFramebufferDepthImage(FramebufferHandle,std::span
 bool dusk::native::platformReadFramebufferDepthView(FramebufferHandle,std::span<const std::byte>&){assert(false);return false;}
 // No alpha-interval backend, static geometry cache or state observer here.
 bool dusk::native::alphaIntervalCopySafe(){return true;}
-dusk::native::gx::StaticGeometryHint dusk::native::gx::staticGeometryHint{};
+thread_local dusk::native::gx::StaticGeometryHint dusk::native::gx::staticGeometryHint{};
 void dusk::native::gx::setStateResetObserver(void (*)()){}
 int main(){
     CommandMemory memory;CommandProcessor processor(memory);std::array<u8,256> scratch{};

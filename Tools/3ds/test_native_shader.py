@@ -160,7 +160,7 @@ def main():
     source=SHADER.read_text();cases=algebra(source);detected=[]
     for name,old,new in [('weight-scale','mul r3.x, k.z, v7.x','mul r3.x, k.y, v7.x'),
                          ('normal-palette','u[a0.x+24]','u[a0.x+0]'),
-                         ('uv2-source','mov outtex2.xy, v4','mov outtex2.xy, v3'),
+                         ('uv2-source','mov r7.xy, v4','mov r7.xy, v3'),
                          ('color-scale','mul r10, k.z, v5','mov r10, v5')]:
         assert old in source
         try:algebra(source.replace(old,new))

@@ -17,7 +17,7 @@ extern "C" void OSReport(const char* fmt,...){
 namespace dusk::native {
 bool configureGxTextureCache(std::size_t bytes,unsigned slots,bool reference,
     std::span<const NativeTextureFingerprint> policy,bool fused){
-    ++calls;assert(bytes==10*1024*1024&&slots==128&&reference&&policy.size()==2);
+    ++calls;assert(bytes==12*1024*1024&&slots==128&&reference&&policy.size()==2);
     assert(policy[0][0]==17&&policy[1][0]==23);assert(fused==expected);configured=fused;return !refuse;
 }
 const char* gxTextureFailure(){return "original configuration error";}

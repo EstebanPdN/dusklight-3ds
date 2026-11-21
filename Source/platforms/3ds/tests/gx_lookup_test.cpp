@@ -58,6 +58,18 @@ int main(){
         assert(actual.bti.data()==images[i].data());
     }
     for(auto& o:objects)gx::destroyTextureObject(o.data());
+    // Destroyed objects free their slots for other addresses: a stage change
+    // destroys whole models, and the next stage's objects live elsewhere.
+    // The slots leaked until the table refused every new object (a model in
+    // the eighth zone of a random test had none of its textures).
+    {
+        static std::array<std::array<std::uint8_t,64>,4096> fresh{};
+        for(unsigned n=0;n<fresh.size();++n){
+            gx::initTextureObject(fresh[n].data(),images[n%images.size()].data()+32,8,8,0,0,0,0,false,0);
+            assert(gx::queryTextureObject(fresh[n].data(),actual));++checks;
+        }
+        for(auto& o:fresh)gx::destroyTextureObject(o.data());
+    }
     for(auto h:handles)assert(gx::unregisterTexture(h));
     // A later registration can introduce an earlier first match for an image
     // identity previously known only as an alias. A hint must not change the
@@ -88,6 +100,49 @@ int main(){
     gx::destroyTextureObject(objects[0].data());assert(gx::unregisterTexture(b));
     assert(!gx::queryTextureObject(nullptr,actual));
     assert(!gx::textureFromCommandToken(0x800000,actual));
+    // The lookup indexes are kept up to date by every change (they are read
+    // by two threads, so no lookup may rebuild them). Random registrations,
+    // releases and aliases, with identities that two registrations share:
+    // every answer must be the one a walk of the table gives.
+    {
+        constexpr unsigned pool=240;
+        std::array<gx::TextureHandle,pool> live{};
+        std::uint32_t seed=0x1234567u;
+        auto next=[&]{seed^=seed<<13;seed^=seed>>17;seed^=seed<<5;return seed;};
+        auto identity=[&](unsigned n){return static_cast<const void*>(images[n].data()+32);};
+        auto walk=[&](const void* wanted)->gx::TextureHandle{
+            for(std::size_t slot=0;slot<gx::textureRegistrationCapacity();++slot){
+                gx::Texture t;
+                if(gx::registeredTextureAt(slot,t)&&(t.image.data()==wanted||gx::textureAliasImage(t.handle)==wanted))return t.handle;
+            }
+            return 0;
+        };
+        auto check=[&](unsigned n){
+            std::uint32_t token{};const auto expected=walk(identity(n));
+            const bool found=gx::textureCommandToken(identity(n),token);
+            assert(found==bool(expected)&&token==(expected?0x800000|std::uint32_t(expected):0));
+            if(live[n]){assert(gx::textureFromCommandToken(0x800000|std::uint32_t(live[n]),actual)&&actual.bti.data()==images[n].data());}
+            ++checks;
+        };
+        std::array<gx::TextureHandle,64> retired{};unsigned retiredCount=0;
+        for(unsigned step=0;step<6000;++step){
+            const unsigned n=next()%pool,kind=next()%8;
+            if(!live[n]){assert(gx::registerTexture(images[n],live[n]));}
+            else if(kind<3){retired[retiredCount++%retired.size()]=live[n];assert(gx::unregisterTexture(live[n]));live[n]=0;}
+            else if(kind<6){
+                // May be refused (another registration has the identity): the
+                // answers must stay those of the table either way.
+                (void)gx::aliasTextureImage(live[n],identity(next()%pool));
+            }
+            if(step%97==0)gx::compactTextureRegistry();
+            check(n);for(unsigned k=0;k<12;++k)check(next()%pool);
+            if(step%500==0)for(unsigned k=0;k<pool;++k)check(k);
+            for(const auto handle:retired)if(handle)assert(!gx::textureFromCommandToken(0x800000|std::uint32_t(handle),actual));
+        }
+        for(unsigned k=0;k<pool;++k){check(k);if(live[k])assert(gx::unregisterTexture(live[k]));}
+        gx::compactTextureRegistry();
+        for(unsigned k=0;k<pool;++k){std::uint32_t token{};assert(!gx::textureCommandToken(identity(k),token));}
+    }
     // Forward-only fixture reaches the production token boundary without
     // millions of registrations. Reinitializations cross the old shared limit.
     constexpr gx::TextureHandle lastId=0x7fffff;

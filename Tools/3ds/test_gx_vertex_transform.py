@@ -24,15 +24,18 @@ def main():
                native/'runtime/gx_tev_commands.cpp',native/'gx_api.cpp',native/'gx_command_api.cpp',native/'runtime/gx_state.cpp',native/'runtime/resource_archive.cpp',
                aurora/'lib/gx/dl.cpp',aurora/'lib/gx/attr_fmt.cpp']
     headers = [native/'runtime/gx_geometry.hpp',native/'runtime/gx_vertex_transform.hpp',native/'runtime/gx_vertex_decode.hpp',native/'runtime/gx_commands.hpp',
-               native/'runtime/gx_pica_math.hpp',native/'runtime/gx_state.hpp',native/'runtime/gx_stream.hpp']
+               native/'runtime/gx_pica_math.hpp',native/'runtime/gx_state.hpp',native/'runtime/gx_stream.hpp',
+               native/'runtime/gx_screen_projectors.hpp']
     inputs = [*sources, *headers, Path(__file__).resolve()]
     hashes = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     common = ['-std=c++20', '-DTARGET_PC=1', '-DDUSK_TARGET_3DS=1',
               '-I'+str(aurora/'include'), '-Wall', '-Wextra', '-Werror']
+    devkitpro = Path(os.environ.get('DEVKITPRO') or
+                     next((p for p in (Path.home()/'devkitpro', Path('/opt/devkitpro')) if p.is_dir()), '/opt/devkitpro'))
     commands = [['clang++', *common, '-O1', '-g',
                  '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
                  *map(str,sources), '-o', str(OUT/'test')],
-                ['/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++', *common,
+                [str(devkitpro/'devkitARM/bin/arm-none-eabi-g++'), *common,
                  '-O2', '-g', '-march=armv6k', '-mtune=mpcore', '-mfloat-abi=hard',
                  '-mfpu=vfp', '-mtp=soft', '-D__3DS__', '-fstack-usage', '-c',
                  str(native/'runtime/gx_vertex_transform.cpp'), '-o', str(OUT/'commands-arm.o')]]

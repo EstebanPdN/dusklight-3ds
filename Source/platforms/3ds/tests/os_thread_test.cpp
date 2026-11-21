@@ -3,6 +3,7 @@
 #include "../runtime/os_sync.hpp"
 #include "../runtime/clock.hpp"
 #include "../runtime/thread_backend.hpp"
+#include "../runtime/light_lock_wait.hpp"
 #include "JSystem/JKernel/JKRThread.h"
 #include "JSystem/JKernel/JKRExpHeap.h"
 #include "JSystem/JKernel/JKRSolidHeap.h"
@@ -19,6 +20,7 @@
 #include <cstring>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace dusk::native {
 int testLastRequestedCore();
@@ -143,8 +145,104 @@ void* joining(void* value) {
     assert(OSJoinThread(work.child, &result));
     return result;
 }
+// Host model of the libctru LightLock (synchronization.c as disassembled from
+// libctru.a) and of the kernel address arbiter, to run the production
+// counted-waiter slice (light_lock_wait.hpp) against the real lock protocol.
+namespace model {
+std::mutex arbiter; std::condition_variable signalled;
+thread_local std::int32_t exclusive;
+std::atomic_ref<std::int32_t> at(std::int32_t* word) { return std::atomic_ref<std::int32_t>(*word); }
+struct Ops {
+    static std::int32_t load(std::int32_t* word) { return exclusive = at(word).load(std::memory_order_acquire); }
+    static bool store(std::int32_t* word, std::int32_t value) {
+        auto expected = exclusive; return !at(word).compare_exchange_strong(expected, value, std::memory_order_acq_rel);
+    }
+    static void clear() {}
+    static void barrier() { std::atomic_thread_fence(std::memory_order_seq_cst); }
+    static std::uint64_t now() { return dusk::native::platformThreadTime(); }
+    // Kernel WAIT_IF_LESS_THAN(0): the check and the sleep are atomic with respect to a signal.
+    static void wait(std::int32_t* word, std::int64_t nanoseconds) {
+        std::unique_lock lock(arbiter);
+        signalled.wait_for(lock, std::chrono::nanoseconds(nanoseconds), [&] { return at(word).load() >= 0; });
+    }
+};
+void lock(std::int32_t* word) { // LightLock_Lock
+    std::int32_t value; bool waiting;
+    do {
+        value = Ops::load(word); waiting = value < 0;
+        value = value == 0 ? -1 : waiting ? value - 1 : -value;
+    } while (Ops::store(word, value));
+    while (waiting) {
+        { std::unique_lock guard(arbiter); signalled.wait(guard, [&] { return at(word).load() >= 0; }); }
+        for (;;) {
+            value = Ops::load(word);
+            if (value < 0) break;
+            if (!Ops::store(word, 1 - value)) { waiting = false; break; }
+        }
+    }
+    Ops::barrier();
+}
+bool tryLock(std::int32_t* word) { // LightLock_TryLock (true when taken)
+    std::int32_t value;
+    do {
+        value = Ops::load(word);
+        if (value < 0) return false;
+    } while (Ops::store(word, value == 0 ? -1 : -value));
+    return true;
+}
+void unlock(std::int32_t* word) { // LightLock_Unlock: signal one waiter while any is counted
+    Ops::barrier();
+    std::int32_t value;
+    do value = Ops::load(word); while (Ops::store(word, -value));
+    if (value < -1) { std::lock_guard guard(arbiter); signalled.notify_one(); }
+}
+void lightLockModelTest() {
+    // Mutual exclusion and no lost wake-up between blocking lockers (the main
+    // thread's LightLock_Lock) and slice waiters (managed workers), with slices
+    // short enough that many end in a timeout; afterwards no waiter is still
+    // counted (the word is back to 1).
+    std::int32_t word = 1; long counter = 0; std::atomic<bool> inside{};
+    std::atomic<unsigned> timeouts{};
+    constexpr unsigned rounds = 3000;
+    std::vector<std::thread> threads;
+    for (unsigned t = 0; t < 6; ++t) threads.emplace_back([&, t] {
+        for (unsigned i = 0; i < rounds; ++i) {
+            if (t < 2) lock(&word);
+            else if (!tryLock(&word)) while (!dusk::native::lightLockWithin<Ops>(&word, t == 5 ? 1000 : 20000)) ++timeouts;
+            assert(!inside.exchange(true)); ++counter; inside = false;
+            unlock(&word);
+        }
+    });
+    for (auto& thread : threads) thread.join();
+    assert(counter == long(6 * rounds) && word == 1);
+    // A long hold: the slice waiter times out repeatedly, owes nothing, then
+    // is woken by the unlock and holds the lock.
+    lock(&word);
+    std::atomic<unsigned> slices{}; std::atomic<bool> taken{};
+    std::thread waiter([&] {
+        while (!dusk::native::lightLockWithin<Ops>(&word, 2000000)) { ++slices; assert(at(&word).load() == -1); }
+        taken = true; unlock(&word);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    assert(!taken && slices >= 3);
+    const auto released = dusk::native::platformThreadTime();
+    unlock(&word); waiter.join();
+    assert(taken && word == 1 && dusk::native::platformThreadTime() - released < 1000000000);
+    std::printf("LightLock model: %u lock rounds, %u slice timeouts, %u timeouts while held\n", 6 * rounds, timeouts.load(), slices.load());
+}
+}
+struct WatchWork { OSMutex* mutex; std::atomic<bool> started{}, held{}, release{}; bool hold{}; };
+void* watchedEntry(void* argument) {
+    auto& work = *static_cast<WatchWork*>(argument);
+    work.started = true;
+    OSLockMutex(work.mutex); work.held = true;
+    while (work.hold && !work.release) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    OSUnlockMutex(work.mutex);
+    return nullptr;
+}
 }
 int main() {
+    model::lightLockModelTest();
     using namespace dusk::native;
     alignas(32) static std::array<unsigned char, 512 * 1024> memory;
     assert(initializeKernel(memory.data(), memory.size()));
@@ -208,6 +306,34 @@ int main() {
         assert(work.unwound == 1 && OSIsThreadTerminated(&record));
         assert(OSTryLockMutex(&work.lock)); OSUnlockMutex(&work.lock);
         assert(!record.queueMutex.head && !record.queue);
+    }
+    {
+        // Wait accounting of a watched lock (the JAS exclusion in the game).
+        static OSMutex watched; OSInitMutex(&watched); watchLockWaits(&watched.nativeLock);
+        const auto first = watchedLockWaits();
+        OSLockMutex(&watched);
+        OSThread blocked{}; WatchWork behind{&watched};
+        assert(OSCreateThread(&blocked, watchedEntry, &behind, nullptr, 4096, 16, 0)); OSResumeThread(&blocked);
+        eventually([&] { return behind.started.load(); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        assert(!behind.held);
+        OSUnlockMutex(&watched); assert(OSJoinThread(&blocked, nullptr));
+        const auto second = watchedLockWaits();
+        assert(second.workerWaits == first.workerWaits + 1 && second.workerNanoseconds - first.workerNanoseconds >= 20000000);
+        assert(second.mainWaits == first.mainWaits);
+        OSThread holder{}; WatchWork ahead{&watched}; ahead.hold = true;
+        assert(OSCreateThread(&holder, watchedEntry, &ahead, nullptr, 4096, 16, 0)); OSResumeThread(&holder);
+        eventually([&] { return ahead.held.load(); });
+        std::thread release([&] { std::this_thread::sleep_for(std::chrono::milliseconds(40)); ahead.release = true; });
+        OSLockMutex(&watched); OSUnlockMutex(&watched);
+        release.join(); assert(OSJoinThread(&holder, nullptr));
+        const auto third = watchedLockWaits();
+        assert(third.mainWaits == second.mainWaits + 1 && third.mainNanoseconds - second.mainNanoseconds >= 20000000);
+        assert(third.workerWaits == second.workerWaits);
+        OSLockMutex(&watched); OSUnlockMutex(&watched); // uncontended: not counted
+        assert(watchedLockWaits().mainWaits == third.mainWaits);
+        watchLockWaits(nullptr);
+        assert(threadStats().workers == 0);
     }
     SleepWork sleep{}; OSInitThreadQueue(&sleep.queue); OSThread record{};
     assert(OSCreateThread(&record, sleeping, &sleep, nullptr, 4096, 16, 0));

@@ -19,10 +19,10 @@ def main():
     native = ROOT/'Source/platforms/3ds'
     aurora = ROOT/'Source/extern/aurora'
     sources = [native/'runtime/gx_texture_commands.cpp',native/'gx_command_draw.cpp',native/'runtime/gx_gpu_geometry.cpp',native/'runtime/gx_material.cpp',native/'runtime/gx_pica_material.cpp',native/'runtime/gx_raster_plan.cpp',native/'runtime/gx_raster_color.cpp',native/'runtime/gd_native.cpp',aurora/'lib/dolphin/gd/GDGeometry.cpp',aurora/'lib/dolphin/gd/GDTev.cpp',aurora/'lib/dolphin/gd/GDIndirect.cpp',native/'tests/gx_command_draw_test.cpp',native/'runtime/gx_vertex_transform.cpp',native/'runtime/gx_geometry.cpp',native/'runtime/gx_pica_math.cpp',
-               native/'runtime/gx_commands.cpp',native/'runtime/gx_stream.cpp',native/'runtime/gx_vertex_decode.cpp',native/'runtime/gx_rigid_decode.cpp',
+               native/'runtime/gx_commands.cpp',native/'runtime/gx_worker.cpp',native/'runtime/gx_stream.cpp',native/'runtime/gx_vertex_decode.cpp',native/'runtime/gx_rigid_decode.cpp',
                native/'runtime/gx_transform_commands.cpp',native/'runtime/gx_vertex_commands.cpp',native/'runtime/gx_lighting_commands.cpp',native/'runtime/gx_light_objects.cpp',
                native/'runtime/gx_tev_commands.cpp',native/'gx_api.cpp',native/'gx_command_api.cpp',native/'runtime/gx_state.cpp',native/'runtime/resource_archive.cpp',
-               aurora/'lib/gx/dl.cpp',aurora/'lib/gx/attr_fmt.cpp']
+               aurora/'lib/gx/dl.cpp',aurora/'lib/gx/attr_fmt.cpp',native/'runtime/pica_blocks.cpp']
     headers = [native/'runtime/gx_texture_commands.hpp',native/'gx_command_draw.hpp',native/'gx_geometry_pica.hpp',native/'gx_texture_pica.hpp',native/'gx_pica.hpp',native/'runtime/gx_gpu_geometry.hpp',native/'runtime/gx_raster_plan.hpp',native/'runtime/gx_raster_color.hpp',native/'runtime/gx_pica_material.hpp',native/'runtime/gx_material.hpp',native/'runtime/gx_geometry.hpp',native/'runtime/gx_vertex_transform.hpp',native/'runtime/gx_vertex_decode.hpp',native/'runtime/gx_commands.hpp',
                native/'runtime/gx_pica_math.hpp',native/'runtime/gx_state.hpp',native/'runtime/gx_stream.hpp']
     headers.append(native/'runtime/gx_copy_setup.hpp')
@@ -37,6 +37,7 @@ def main():
     headers.append(native/'runtime/gx_camera_clip.hpp')
     headers.extend([native/'runtime/gx_i4_quarter_bake67.hpp',native/'runtime/gx_i4_bake_cache68.hpp'])
     headers.append(native/'tests/gx_rigid_reference.hpp')
+    headers.append(native/'runtime/gx_compact_cache.hpp')
     inputs = [*sources, *headers, Path(__file__).resolve()]
     hashes = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     common = ['-std=c++20', '-DTARGET_PC=1', '-DDUSK_TARGET_3DS=1',

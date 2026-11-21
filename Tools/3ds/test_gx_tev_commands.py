@@ -3,6 +3,12 @@
 import argparse,hashlib,json,os,subprocess
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
+def devkit_arm():
+    """devkitARM g++: $DEVKITARM, $DEVKITPRO, /opt/devkitpro or ~/devkitpro."""
+    candidates = [Path(os.environ['DEVKITARM'])/'bin/arm-none-eabi-g++'] if os.environ.get('DEVKITARM') else []
+    candidates += [Path(os.environ['DEVKITPRO'])/'devkitARM/bin/arm-none-eabi-g++'] if os.environ.get('DEVKITPRO') else []
+    candidates += [Path('/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++'), Path.home()/'devkitpro/devkitARM/bin/arm-none-eabi-g++']
+    return str(next((c for c in candidates if c.exists()), candidates[0]))
 p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
 out=a.output;out.mkdir(parents=True,exist_ok=False)
 n=ROOT/'Source/platforms/3ds';aurora=ROOT/'Source/extern/aurora'
@@ -11,7 +17,7 @@ headers=[n/x for x in ['runtime/gx_tev_commands.hpp','runtime/gx_stream.hpp','ru
 inputs=[Path(__file__).resolve(),*sources,*headers];hashes={str(x.relative_to(ROOT)):hashlib.sha256(x.read_bytes()).hexdigest() for x in inputs}
 common=['-std=c++20','-DTARGET_PC=1','-DDUSK_TARGET_3DS=1','-I'+str(aurora/'include'),'-Wall','-Wextra','-Werror','-Wno-switch']
 commands=[['clang++',*common,'-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',*map(str,sources),'-o',str(out/'test')]]
-arm=['/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++',*common,'-O2','-g','-march=armv6k','-mtune=mpcore','-mfloat-abi=hard','-mfpu=vfp','-mtp=soft','-D__3DS__','-fstack-usage']
+arm=[devkit_arm(),*common,'-O2','-g','-march=armv6k','-mtune=mpcore','-mfloat-abi=hard','-mfpu=vfp','-mtp=soft','-D__3DS__','-fstack-usage']
 for s in [n/'runtime/gx_tev_commands.cpp',n/'gx_api.cpp']:commands.append([*arm,'-c',str(s),'-o',str(out/(s.stem+'-arm.o'))])
 receipt={'status':'running','origin':'host ASan/UBSan actual native command execution and ARM compile; not GPU or hardware acceptance','commands':commands,'input_sha256':hashes,'limitations':['TEV/indirect command state is preserved; PICA rendering coverage remains separate and strict','No allocation in typed setters or queries; GPU submission/performance is not exercised','GXFlush is command completion, not a GPU wait']}
 report=out/'results.json';report.write_text(json.dumps(receipt,indent=2)+'\n')

@@ -1,7 +1,9 @@
 #include "../runtime/gx_vertex_transform.hpp"
 #include "../runtime/gx_geometry.hpp"
+#include "../runtime/gx_screen_projectors.hpp"
 #include <vector>
 #include "../runtime/gx_stream.hpp"
+#include "../runtime/gx_compact_cache.hpp"
 #include <dolphin/gx.h>
 #include <dolphin/os.h>
 #include <cassert>
@@ -13,6 +15,8 @@
 using namespace dusk::native::gx;
 extern "C" void OSPanic(const char*,int,const char* message,...){throw std::runtime_error(message);}
 extern "C" void DCFlushRange(void*,u32){}
+// The command processor reads the static geometry hint; no cache here.
+thread_local dusk::native::gx::StaticGeometryHint dusk::native::gx::staticGeometryHint{};
 using Matrix=std::array<float,12>;
 using Vector=std::array<double,4>;
 static Vector multiply(const Matrix& m,const Vector& v){Vector out{0,0,0,1};for(unsigned r=0;r<3;++r)for(unsigned c=0;c<4;++c)out[r]+=double(m[4*r+c])*v[c];return out;}
@@ -95,8 +99,91 @@ static void geometryCases(CommandProcessor& processor,CommandStream& stream){
     }
     assert(context.calls==8);processor.setSink(nullptr);
 }
+static void pairedScreenProjectors(CommandStream& stream){
+    // A viewport offset, unequal clip-W values and a skinned vertex selector
+    // distinguish perspective-correct GX division from per-vertex division.
+    projectionSetup(true);
+    const Matrix identity{1,0,0,0,0,1,0,0,0,0,1,0};
+    const Matrix projectors[]{
+        {2.4907138f,0,-1.3f,0,0,-3.3798988f,-2.5f,0,0,0,-1,0},
+        {0,0,-.5f,0,0,12.071067f,1.2333331f,0,0,0,-1,0}
+    };
+    GXLoadPosMtxImm(identity.data(),GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
+    GXSetNumTexGens(3);
+    GXSetTexCoordGen2(GX_TEXCOORD0,GX_TG_MTX2x4,GX_TG_TEX0,GX_IDENTITY,GX_FALSE,GX_PTIDENTITY);
+    GXSetTexCoordGen2(GX_TEXCOORD1,GX_TG_MTX3x4,GX_TG_POS,GX_PNMTX0,GX_FALSE,GX_PTTEXMTX1);
+    GXSetTexCoordGen2(GX_TEXCOORD2,GX_TG_MTX3x4,GX_TG_POS,GX_PNMTX0,GX_FALSE,GX_PTTEXMTX2);
+    GXLoadTexMtxImm(projectors[0].data(),GX_PTTEXMTX1,GX_MTX3x4);
+    GXLoadTexMtxImm(projectors[1].data(),GX_PTTEXMTX2,GX_MTX3x4);
+    assert(stream.finish());
+    auto regs=stream.registers();
+    VertexTransformPlan transform;
+    assert(planVertexTransform(regs,7,transform)&&transform.projectiveMask()==6);
+    std::array<Texture,3> textures{};
+    for(auto& t:textures){t.width=t.height=64;t.immutablePixels=true;t.minFilter=t.magFilter=1;}
+    PicaMaterialPlan original{};
+    original.stageCount=original.textureCount=3;
+    original.textures={{{0,0},{1,1},{2,2}}};
+    original.stages[0].rgb.inputs[0]={MaterialSource::texture0,MaterialOperand::color};
+    original.stages[1].rgb.inputs[0]={MaterialSource::texture1,MaterialOperand::blue};
+    original.stages[1].alpha.inputs[0]={MaterialSource::texture1,MaterialOperand::alpha,true};
+    original.stages[2].rgb.inputs[0]={MaterialSource::texture2,MaterialOperand::color};
+    auto material=original;
+    ScreenProjectors plan;
+    assert(planScreenProjectors(regs,transform,textures,material,plan));
+    assert(material.textureCount==2&&material.projectiveTexture0&&material.stageCount==original.stageCount);
+    assert(material.stages[0].rgb.inputs[0].source==MaterialSource::texture1);
+    assert((material.stages[1].rgb.inputs[0]==MaterialInput{MaterialSource::texture0,MaterialOperand::red}));
+    assert((material.stages[1].alpha.inputs[0]==MaterialInput{MaterialSource::texture0,MaterialOperand::red,true}));
+    assert((material.stages[2].rgb.inputs[0]==MaterialInput{MaterialSource::texture0,MaterialOperand::alpha}));
+    std::array<TransformedVertex,3> values;
+    constexpr float positions[3][3]{{2,3,-8},{-6,4,-11},{4,-8,-22}};
+    for(unsigned n=0;n<3;++n){
+        auto v=vertex();
+        for(unsigned c=0;c<3;++c)v.position[c]=positions[n][c];
+        v.present|=1u<<GX_VA_TEX1MTXIDX;
+        assert(screenProjectorsMatchPosition(regs,6,v));
+        assert(transformVertex(transform,v,values[n]));
+        for(unsigned c:{1,2})assert(values[n].texcoord[c][2]==values[n].clip[3]);
+        v.matrix[2]=3;
+        assert(!screenProjectorsMatchPosition(regs,6,v));
+    }
+    constexpr std::array<float,2> extent{240.f/256,400.f/512};
+    for(unsigned i=0;i<=20;++i)for(unsigned j=0;j<=20-i;++j){
+        const double weights[]{i/20.0,j/20.0,1-(i+j)/20.0};
+        double ndc[2]{},screen[2]{},uv[2][2]{},q[2]{};
+        for(unsigned n=0;n<3;++n){
+            const auto& v=values[n];const double weight=weights[n]/v.clip[3];
+            const auto uvw=screenProjectorUV(v.clip,extent);
+            for(unsigned c=0;c<2;++c){ndc[c]+=weight*v.clip[c];screen[c]+=weight*uvw[c];}
+            for(unsigned k=0;k<2;++k){
+                q[k]+=weight*v.texcoord[k+1][2];
+                for(unsigned c=0;c<2;++c)uv[k][c]+=weight*v.texcoord[k+1][c];
+            }
+        }
+        for(unsigned c=0;c<2;++c)assert(std::abs(screen[c]-(ndc[c]+1)*extent[c]/2)<1e-6);
+        const double x=(ndc[0]+1)/2,y=(ndc[1]+1)/2;
+        for(unsigned k=0;k<2;++k)for(unsigned c=0;c<2;++c){
+            const auto& corners=plan.corners[k];
+            const double gathered=corners[0][c]+x*(corners[1][c]-corners[0][c])+y*(corners[3][c]-corners[0][c]);
+            assert(std::abs(gathered-uv[k][c]/q[k])<2e-6);
+        }
+    }
+    auto refuse=[&]{
+        material=original;
+        assert(!planScreenProjectors(regs,transform,textures,material,plan));
+        assert(material.textureCount==3&&!material.projectiveTexture0);
+    };
+    textures[2].minFilter=0;refuse();textures[2].minFilter=1;
+    textures[2].format=3;refuse();textures[2].format=0;
+    regs.xf[0x522]=std::bit_cast<u32>(-2.f);refuse();
+    std::puts("PASS paired projectors: GX perspective reference, all texture operands, exact selector guard, independent divisor and sampler refusals");
+}
+
 int main(){
     CommandMemory memory;CommandProcessor processor(memory);u8 scratch[256];CommandStream stream(processor,scratch);assert(setCommandStream(&stream));
+    pairedScreenProjectors(stream);
     const auto positionA=affine(1),positionB=affine(2),texA=affine(3),texB=affine(4),post=affine(5);
     GXLoadPosMtxImm(positionA.data(),GX_PNMTX0);GXLoadPosMtxImm(positionB.data(),GX_PNMTX1);GXSetCurrentMtx(GX_PNMTX0);
     GXLoadTexMtxImm(texA.data(),GX_TEXMTX0,GX_MTX3x4);GXLoadTexMtxImm(texB.data(),GX_TEXMTX1,GX_MTX3x4);GXLoadTexMtxImm(post.data(),GX_PTTEXMTX2,GX_MTX3x4);GXSetNumTexGens(8);
