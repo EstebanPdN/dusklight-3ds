@@ -14,22 +14,42 @@
 
 #define CHECK_FLOAT_RANGE(line, x) JUT_ASSERT(line, -1.0e32f < x && x < 1.0e32f);
 
+#if TARGET_PC && defined(DUSK_TARGET_3DS)
+// The desktop port's range warning fires every frame for some colliders:
+// 9,049 lines in the Alpha 6 console run (2,534 in one Hyrule Field zone),
+// each an svcOutputDebugString plus RAM log and SD bytes. The value is
+// clamped either way. Per message, the first lines stay in full, then at most
+// one line every 10 seconds of game time, with the count of the lines left
+// out. One limiter per message: a rare fault (the Epona yDiv INT_MIN case)
+// is never hidden in the count of a frequent one (xDiv var1 32).
+namespace {
+enum DivideRangeMessage { xDivVar1, xDivVar3, yDivVar1, yDivVar3, zDivVar1, zDivVar3, divideRangeMessages };
+}
+static void reportDivideRange(DivideRangeMessage message, s32 value) {
+    static const char* const names[divideRangeMessages] = {"xDiv var1", "xDiv var3", "yDiv var1",
+                                                           "yDiv var3", "zDiv var1", "zDiv var3"};
+    static u32 total[divideRangeMessages], skipped[divideRangeMessages];
+    static OSTime last[divideRangeMessages];
+    ++total[message];
+    const OSTime now = OSGetTime();
+    if (total[message] <= 4 || now - last[message] >= OSSecondsToTicks((OSTime)10)) {
+        OSReport("CalcDivideInfo: %s out of range: %ld (%lu left out since the last line, %lu in total)\n",
+                 names[message], static_cast<long>(value), static_cast<unsigned long>(skipped[message]),
+                 static_cast<unsigned long>(total[message]));
+        skipped[message] = 0;
+        last[message] = now;
+    } else {
+        ++skipped[message];
+    }
+}
+#endif
+
 DUSK_GAME_DATA cXyz cCcD_ShapeAttr::m_virtual_center = cXyz::Zero;
 
 void cCcD_DivideInfo::Set(u32 xDivInfo, u32 yDivInfo, u32 zDivInfo) {
     mXDivInfo = xDivInfo;
     mYDivInfo = yDivInfo;
     mZDivInfo = zDivInfo;
-}
-
-bool cCcD_DivideInfo::Chk(const cCcD_DivideInfo& other) const {
-    if ((mXDivInfo & other.mXDivInfo) == 0 || (mZDivInfo & other.mZDivInfo) == 0 ||
-        (mYDivInfo & other.mYDivInfo) == 0)
-    {
-        return false;
-    } else {
-        return true;
-    }
 }
 
 void cCcD_DivideArea::SetArea(const cM3dGAab& aab) {
@@ -76,14 +96,14 @@ void cCcD_DivideArea::CalcDivideInfo(cCcD_DivideInfo* pDivideInfo, const cM3dGAa
             // This goes for yDiv and zDiv as well.
             if (var1 < 0 || var1 > 31) {
 #if defined(DUSK_TARGET_3DS)
-                OSReport("CalcDivideInfo: xDiv var1 out of range: %ld\n", static_cast<long>(var1));
+                reportDivideRange(xDivVar1, var1);
 #else
                 DuskLog.warn("CalcDivideInfo: xDiv var1 out of range: {}", var1);
 #endif
             }
             if (var3 < 0) {
 #if defined(DUSK_TARGET_3DS)
-                OSReport("CalcDivideInfo: xDiv var3 out of range: %ld\n", static_cast<long>(var3));
+                reportDivideRange(xDivVar3, var3);
 #else
                 DuskLog.warn("CalcDivideInfo: xDiv var3 out of range: {}", var3);
 #endif
@@ -113,14 +133,14 @@ void cCcD_DivideArea::CalcDivideInfo(cCcD_DivideInfo* pDivideInfo, const cM3dGAa
             // When the Epona taming minigame ends, yDiv var1 and var3 can both be INT_MIN.
             if (var1 < 0 || var1 > 31) {
 #if defined(DUSK_TARGET_3DS)
-                OSReport("CalcDivideInfo: yDiv var1 out of range: %ld\n", static_cast<long>(var1));
+                reportDivideRange(yDivVar1, var1);
 #else
                 DuskLog.warn("CalcDivideInfo: yDiv var1 out of range: {}", var1);
 #endif
             }
             if (var3 < 0) {
 #if defined(DUSK_TARGET_3DS)
-                OSReport("CalcDivideInfo: yDiv var3 out of range: %ld\n", static_cast<long>(var3));
+                reportDivideRange(yDivVar3, var3);
 #else
                 DuskLog.warn("CalcDivideInfo: yDiv var3 out of range: {}", var3);
 #endif
@@ -148,14 +168,14 @@ void cCcD_DivideArea::CalcDivideInfo(cCcD_DivideInfo* pDivideInfo, const cM3dGAa
 #if TARGET_PC
             if (var1 < 0 || var1 > 31) {
 #if defined(DUSK_TARGET_3DS)
-                OSReport("CalcDivideInfo: zDiv var1 out of range: %ld\n", static_cast<long>(var1));
+                reportDivideRange(zDivVar1, var1);
 #else
                 DuskLog.warn("CalcDivideInfo: zDiv var1 out of range: {}", var1);
 #endif
             }
             if (var3 < 0) {
 #if defined(DUSK_TARGET_3DS)
-                OSReport("CalcDivideInfo: zDiv var3 out of range: %ld\n", static_cast<long>(var3));
+                reportDivideRange(zDivVar3, var3);
 #else
                 DuskLog.warn("CalcDivideInfo: zDiv var3 out of range: {}", var3);
 #endif

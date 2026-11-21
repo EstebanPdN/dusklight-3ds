@@ -12,7 +12,26 @@ extern "C" bool duskNativeTickPaint __attribute__((weak));
 extern "C" bool duskNativeTickDraw __attribute__((weak));
 extern "C" float duskNativePaintTicks __attribute__((weak));
 extern "C" float duskNativeDrawTicks __attribute__((weak));
+// A tick that enters no draw lists still runs the logic of the play scene's
+// draw phase (collision pass, moving backgrounds, particles, frame counter:
+// d_s_play.cpp). The SD switch tick-logic-off.txt restores Alpha 7, where it
+// ran once per picture.
+extern "C" bool duskNativeTickLogic __attribute__((weak));
+// Second-core worker overlap (platforms/3ds runtime/gx_worker.hpp): the worker
+// may still draw the painter's shapes during this tick. Deleting a process
+// frees what they read, creating one builds heaps and may set up shared model
+// data: both first have them drawn (2 deletion, 3 creation; only when one is
+// pending, a no-op when nothing is left to draw).
+#include "../../platforms/3ds/runtime/gx_worker_sync.hpp"
 namespace {
+// Every 30th drawn picture (census=1): the state the logic carries from tick
+// to tick that a replay must reproduce. Two runs with the same input that
+// print the same line at the script's first picture and different lines
+// later diverged in logic; different lines already at the first picture mean
+// they started from different states (the curtain's warm-up length depends on
+// picture times: scene_transition.cpp).
+void nativeLogicStateProbe();
+bool nativeTickLogic() { return !&duskNativeTickLogic || duskNativeTickLogic; }
 bool nativeTickPaints() { return !&duskNativeTickPaint || duskNativeTickPaint; }
 bool nativeTickDraws() { return !&duskNativeTickDraw || duskNativeTickDraw; }
 float nativePaintTicks() { return &duskNativePaintTicks ? duskNativePaintTicks : 1.0f; }
@@ -36,9 +55,14 @@ float nativeDrawTicks() { return &duskNativeDrawTicks ? duskNativeDrawTicks : 1.
 #include "d/d_error_msg.h"
 #include "d/d_lib.h"
 #include "d/d_particle.h"
+#if defined(DUSK_TARGET_3DS)
+#include "d/d_s_play.h"
+#endif
 #include "f_ap/f_ap_game.h"
 #include "f_pc/f_pc_creator.h"
 #include "f_pc/f_pc_deletor.h"
+#include "f_pc/f_pc_delete_tag.h"
+#include "f_pc/f_pc_create_tag.h"
 #include "f_pc/f_pc_draw.h"
 #include "f_pc/f_pc_fstcreate_req.h"
 #include "f_pc/f_pc_line.h"
@@ -47,7 +71,13 @@ float nativeDrawTicks() { return &duskNativeDrawTicks ? duskNativeDrawTicks : 1.
 #include "m_Do/m_Do_controller_pad.h"
 
 #if defined(DUSK_TARGET_3DS)
+#include "JSystem/J3DGraphAnimator/J3DModel.h"
 #include "JSystem/JUtility/JUTFader.h"
+#include "d/d_native_lod.h"
+#include "d/d_native_logic.h"
+#include "d/d_tick_profile.h"
+#include "SSystem/SComponent/c_counter.h"
+#include "SSystem/SComponent/c_math.h"
 #include "dusk/game_clock.h"
 #include "m_Do/m_Do_graphic.h"
 #endif
@@ -85,9 +115,22 @@ void fpcM_Management(fpcM_ManagementFunc i_preExecuteFn, fpcM_ManagementFunc i_p
     ZoneScoped;
 #endif
     MtxInit();
+#if defined(DUSK_TARGET_3DS)
+    // Depth peeks (the sun/lens-flare visibility points) read the frame's
+    // depth buffer. Only the tick that paints starts with no picture on the
+    // GPU; on the later ticks of a picture the peek waited for the whole
+    // picture just submitted (console Alpha 11, F_SP104: 104-147 waits per
+    // 300 pictures, 8-16 ms each). The requests stay queued (64 slots, the
+    // sun asks for 5) and are read on the next painting tick: the flare
+    // follows one picture later, as it already did between ticks.
+    if (!fapGm_HIO_c::isCaptureScreen() && nativeTickPaints()) {
+        dComIfGd_peekZdata();
+    }
+#else
     if (!fapGm_HIO_c::isCaptureScreen()) {
         dComIfGd_peekZdata();
     }
+#endif
     fapGm_HIO_c::executeCaptureScreen();
 
     bool shutdownRet = dShutdownErrorMsg_c::execute();
@@ -136,6 +179,9 @@ void fpcM_Management(fpcM_ManagementFunc i_preExecuteFn, fpcM_ManagementFunc i_p
 #endif
 
             if (!dPa_control_c::isStatus(1)) {
+#if defined(DUSK_TARGET_3DS)
+                if (g_fpcDtTg_Queue.mSize != 0) dusk::native::syncGxOverlap(2);
+#endif
                 fpcDt_Handler();
             } else {
                 dPa_control_c::offStatus(1);
@@ -145,6 +191,9 @@ void fpcM_Management(fpcM_ManagementFunc i_preExecuteFn, fpcM_ManagementFunc i_p
                 JUT_ASSERT(353, FALSE);
             }
 
+#if defined(DUSK_TARGET_3DS)
+            if (g_fpcCtTg_Queue.mSize != 0) dusk::native::syncGxOverlap(3);
+#endif
             if (!fpcCt_Handler()) {
                 JUT_ASSERT(357, FALSE);
             }
@@ -159,9 +208,21 @@ void fpcM_Management(fpcM_ManagementFunc i_preExecuteFn, fpcM_ManagementFunc i_p
 #endif
                 #if defined(DUSK_TARGET_3DS)
                 { dusk::native::GxProfileScope profile(dusk::native::GxProfilePart::gameUpdate, true);
+                // Level of detail "skin": a tick whose picture is not drawn
+                // leaves the skin matrices to the draw (J3DModel::calc).
+                J3DModel::sNativeDeferEnvelope = dNativeLod::config().skin && !nativeTickDraws();
+                if (dNativeLogic::g_split) {
+                    // The cost of one section timer on this machine: 32 empty
+                    // pairs per tick ("profile.emptyPair", ms / calls).
+                    for (int i = 0; i < 32; i++) {
+                        DUSK_SPLIT_SPAN(split_empty, "profile.emptyPair");
+                        split_empty.stop();
+                    }
+                }
 #endif
                 fpcEx_Handler((fpcLnIt_QueueFunc)fpcM_Execute);
 #if defined(DUSK_TARGET_3DS)
+                J3DModel::sNativeDeferEnvelope = false;
                 }
 #endif
 #if DUSK_GX_TRACE
@@ -180,12 +241,15 @@ void fpcM_Management(fpcM_ManagementFunc i_preExecuteFn, fpcM_ManagementFunc i_p
 #endif
                 #if defined(DUSK_TARGET_3DS)
                 dusk::game_clock::set_presentation_frames(nativeDrawTicks());
+                dNativeLod::beginDrawPhase();
                 { dusk::native::GxProfileScope profile(dusk::native::GxProfilePart::gameDraw, true);
 #endif
                 fpcDw_Handler((fpcDw_HandlerFuncFunc)fpcM_DrawIterater, (fpcDw_HandlerFunc)fpcM_Draw);
 #if defined(DUSK_TARGET_3DS)
                 }
                 dusk::game_clock::set_presentation_frames(1.0f);
+                dNativeLogic::endPicture();
+                nativeLogicStateProbe();
 #endif
 #if DUSK_GX_TRACE
                 dusk_gx_trace_cpu(1, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - traceDrawStart).count());
@@ -193,6 +257,12 @@ void fpcM_Management(fpcM_ManagementFunc i_preExecuteFn, fpcM_ManagementFunc i_p
             }
 
 #if defined(DUSK_TARGET_3DS)
+            if (!drawTick && nativeTickLogic()) {
+                static const unsigned logicProfile = dusk::native::registerGxNamedProfile("tick.sceneLogic");
+                dusk::native::GxNamedProfileScope named(logicProfile);
+                dusk::native::GxProfileScope profile(dusk::native::GxProfilePart::gameUpdate, true);
+                fpcM_DrawIterater(dScnPly_LogicOnlyDraw);
+            }
             if (drawTick) dComIfGp_drawSimpleModel();
 #else
             IF_DUSK(dComIfGp_drawSimpleModel());
@@ -220,6 +290,30 @@ void fpcM_Management(fpcM_ManagementFunc i_preExecuteFn, fpcM_ManagementFunc i_p
         }
     }
 }
+
+#if defined(DUSK_TARGET_3DS)
+namespace {
+void nativeLogicStateProbe() {
+    static unsigned picture;
+    if (++picture % 30 != 0 || !dNativeLogic::config().census) {
+        return;
+    }
+    int rnd[6];
+    cM_rndState(rnd);
+    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    if (player != NULL) {
+        OSReport("Native logic state picture=%u counter=%lu rnd=%d,%d,%d rnd2=%d,%d,%d link=%.3f,%.3f,%.3f "
+                 "angle=%d speed=%.3f\n",
+                 picture, (unsigned long)g_Counter.mCounter0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5],
+                 player->current.pos.x, player->current.pos.y, player->current.pos.z,
+                 player->shape_angle.y, player->speedF);
+    } else {
+        OSReport("Native logic state picture=%u counter=%lu rnd=%d,%d,%d rnd2=%d,%d,%d no player\n", picture,
+                 (unsigned long)g_Counter.mCounter0, rnd[0], rnd[1], rnd[2], rnd[3], rnd[4], rnd[5]);
+    }
+}
+}  // namespace
+#endif
 
 void fpcM_Init() {
     static layer_class rootlayer;

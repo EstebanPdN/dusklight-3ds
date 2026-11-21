@@ -221,6 +221,10 @@ public:
     /* 0x429C */ dCcD_Sph mSphArr[16];
     /* 0x561C */ u32 mParticleKeys[4];
     /* 0x562C */ u8 mHioInit;
+#ifdef DUSK_TARGET_3DS
+    // Per-instance witness for the native story benchmark.
+    u8 mAcceptedPlayerSwordHits{};
+#endif
 };
 
 STATIC_ASSERT(sizeof(daB_TN_c) == 0x5630);

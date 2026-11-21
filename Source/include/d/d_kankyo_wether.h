@@ -34,6 +34,14 @@ void dKyw_pntwind_cut(WIND_INFLUENCE* i_pntwind);
 cXyz dKyw_pntwind_get_vecpow(cXyz* param_0);
 void dKyw_pntwind_set(WIND_INFLUENCE* i_pntwind);
 void dKyw_pntlight_collision_get_info(cXyz* param_0, cXyz* param_1, f32* param_2);
+#if defined(DUSK_TARGET_3DS)
+// Native New 3DS: the point lights (pntwind with field_0x29 == 1) in table
+// order, at most 30, and dKyw_pntlight_collision_get_info over such a list
+// (same result while the table does not change).
+int dKyw_pntlight_collision_list(WIND_INFLUENCE** o_list);
+void dKyw_pntlight_collision_get_info_list(cXyz* param_0, cXyz* param_1, f32* param_2,
+                                           WIND_INFLUENCE* const* i_list, int i_count);
+#endif
 void dKyw_plight_collision_set(cXyz* param_0, s16 param_1, s16 param_2, f32 param_3, f32 param_4,
                                f32 param_5, f32 param_6, f32 param_7);
 

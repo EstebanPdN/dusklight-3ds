@@ -2,6 +2,9 @@
 #include "runtime/gx_alpha_interval.hpp"
 #include <array>
 #include <cstdint>
+#include <span>
+namespace dusk::native::gxworker {struct Adapter;}
+namespace dusk::native::gx {class CommandProcessor;}
 namespace dusk::native::gx { struct CommandDraw; struct PicaMaterialPlan; class CompactVertexCache; }
 namespace dusk::native {
 // Borrowed, bounded pre-submit report. This is an attempt, not a success event.
@@ -94,6 +97,19 @@ struct CommandDrawContext {
     // divides per vertex on the CPU instead, which is wrong for textures
     // mapped in screen space.
     bool allowProjectionMode{true};
+    // GPU vertex route, warped unit 0 projected through the camera and
+    // divided per pixel: keep that division when vertices lie behind the
+    // camera plane (gx::projectedUnitFollowsCamera; the PICA clips the
+    // triangle before any pixel divides). Off (SD file
+    // camera-divisor-off.txt): such a draw divides per vertex with a clamped
+    // divisor, as in Alpha 8, which samples the image's border beside the
+    // camera.
+    bool allowCameraDivisor{true};
+    // A draw whose compact records were decoded into the frame arena returns
+    // the part of its reservation they do not fill (gx_command_draw.cpp).
+    // compactReservationBytes: bytes returned so far.
+    bool shrinkCompactReservations{true};
+    std::uint64_t compactReservationBytes{};
     gx::CompactVertexCache* compactCache{};
     bool allowBehindCameraCull{};
     std::uint64_t cameraCulled{};
@@ -107,6 +123,9 @@ struct CommandDrawContext {
     bool allowTriangleFog{};
     std::uint64_t triangleFogDraws{};
     std::uint64_t vertexFogDraws{};
+    // Draws whose fog curve went to the ramp texture instead of the primary
+    // alpha (preferFogRampForAlpha).
+    std::uint64_t fogAlphaRampDraws{};
     bool allowVertexIndirect{};
     // DEFAULT OFF, experimental. ACTIVATION HOLD (review107): fp32 alignment
     // does not prove float24 transport/visible-W margin/sampler ratio bounds.
@@ -161,6 +180,9 @@ struct CommandDrawContext {
     // Fog factor through the ramp texture instead of the red channel when a
     // texture unit is free: the red route exists only on the CPU vertex path.
     bool preferFogRamp{};
+    // The same for a factor carried in the primary alpha when the fog curve
+    // is not the linear one (the GPU vertex route makes only that one).
+    bool preferFogRampForAlpha{};
     // Game policy: a draw this translator cannot express (unsupported GX
     // state, invalid vertex data, a texture it cannot resolve) is left out and
     // counted in rejected and skippedDraws instead of ending the stream. Its
@@ -211,6 +233,23 @@ void nativeShapeDiagnostics(std::uint64_t& refreshes,std::uint64_t& refusals,std
 // components; the switch disables continuation for an A/B comparison.
 void nativeShapeChainStatistics(std::uint64_t& chained,std::uint64_t& keyCacheHits);
 void setNativeShapeChain(bool enabled);
+// Lean shape replay (multi-texture records, exact; on by default): the clip
+// projection and the fog plan come from caches that hold while their
+// register words hold, the texgens are checked without a transform plan and
+// the uniform plan is built in one reused storage; continuations keep only
+// the unit rows. The switch is an A/B (SD file native-lean-replay.txt, '0').
+void setNativeLeanReplay(bool enabled);
+// Cumulative, printed on profiled frames as "Native shape replay": lean
+// plans, lean replays refused at the plan step, replays planned the complete
+// way, continuations served from the kept unit rows, and the projection and
+// fog cache lookups by outcome (same state epoch, words compared equal,
+// planned again).
+struct NativeLeanReplayStatistics {
+    std::uint64_t leanPlans{},leanRefusals{},fullPlans{},rowContinuations{};
+    std::uint64_t projectionEpochHits{},projectionEqualHits{},projectionPlanned{};
+    std::uint64_t fogEpochHits{},fogEqualHits{},fogPlanned{};
+};
+void nativeLeanReplayStatistics(NativeLeanReplayStatistics& out);
 // Why static batches were or were not recorded (see nativeRecordOutcome).
 void nativeShapeRecordOutcomes(std::array<std::uint64_t,13>& outcomes);
 // Profiled-frame 2D draws: total, with only zero vertex alpha, with standard alpha blending.
@@ -219,6 +258,75 @@ void native2dStatistics(std::uint64_t& draws,std::uint64_t& zeroAlpha,std::uint6
 // made and replays that fell back to the complete path. The switch is an A/B.
 void immediateDrawStatistics(std::uint64_t& hits,std::uint64_t& misses,std::uint64_t& stores,std::uint64_t& fallbacks);
 void setImmediateDrawRecords(bool enabled);
+// Cumulative, printed on profiled frames as "Native immediate draw detail".
+// repeats: replays that reused the previous replay's uniform block and
+// vertices (inputs unchanged); keyMemoHits: lookups that reused the last key
+// (state epoch unchanged); evictions: records replaced while in use; misses
+// by cause: no record of the state key, a record whose other extra state
+// differs, one that differs in colours only (TEV/konst/fog/channel colours);
+// zeroVertexAlpha: replays whose every vertex alpha is zero under a
+// vertex-alpha channel (hidden panes still drawn).
+struct ImmediateDrawDetail {
+    std::uint64_t repeats{},keyMemoHits{},evictions{},missState{},missExtra{},missColor{},zeroVertexAlpha{};
+};
+void immediateDrawDetail(ImmediateDrawDetail& detail);
+// A/B switch for the repeats and the key memo (both exact, on by default).
+void setImmediateDrawShortcuts(bool enabled);
+// Shape records that keep a deterministic visual fallback (the TEV stand-in,
+// the relaxed dual alpha test): their pictures are those of the complete
+// path, which drew them every frame before 2026-11-16. A/B switch, on by
+// default (SD file fallback-records.txt, '0' refuses them as before).
+void setNativeFallbackRecords(bool enabled);
+// Second-core worker (runtime/gx_worker.hpp): the adapter's entry point for
+// the queue.
+gxworker::Adapter nativeWorkerAdapter();
+// The processor queued display lists run on (its own batch scratch; the game
+// processor's memory registry, array resolver, topology cache and sink).
+void setNativeListProcessor(gx::CommandProcessor* processor);
+// gxWorkerJobHook (runtime/gx_worker_sync.hpp).
+bool queueNativeJob(unsigned job,const void* arguments,std::size_t bytes);
+// gxWorkerSectionHook (runtime/gx_worker_sync.hpp), its SD switch
+// (gx-sections-off.txt) and its counts: sections queued, sections whose
+// condition failed and the shapes and runs left out with them.
+bool nativeSection(unsigned condition);
+void setNativeSections(bool on);
+void nativeSectionStatistics(std::uint64_t& queued,std::uint64_t& skipped,std::uint64_t& shapesSkipped,std::uint64_t& runsDropped);
+// Late runs (duskNativeDeferRuns(2), SD switch gx-late-runs-off.txt).
+void setNativeLateRuns(bool on);
+// The frame loop opens the queue before the game's frame and the painter's
+// end closes it (duskNativePainterDone): a shape issued after the painter
+// (none is expected) is drawn at once, on the game thread, as with the
+// worker off. Open from the start, for a frame without a painter.
+void setNativePainterOpen(bool open);
+// Alpha 15 (gx-overlap.txt 2): runs stay deferred through the bloom and the
+// 2D passes until the painter's end (duskNativeDeferRuns(0) is then ignored).
+void setNativeLate2D(bool on);
+// Shapes queued, those drawn through their display list, lists not drawn.
+void nativeWorkerStatistics(std::uint64_t& queued,std::uint64_t& lists,std::uint64_t& failures);
+// The run deferral of the game thread's processor (context: that processor):
+// see CommandProcessor::setRunDeferral and duskNativeDeferRuns.
+bool deferNativeRun(std::span<const std::uint8_t> run,bool arraysFixed,void* context);
+// Primitive runs queued, and runs kept on the game thread because their
+// arrays could change.
+void nativeRunStatistics(std::uint64_t& queued,std::uint64_t& refusedForArrays);
+// Palette split: lit multi-texture draws whose matrices overflow the palette
+// are drawn as consecutive runs of their triangles, each with its own
+// palette, instead of on the CPU vertex route. On by default (SD file
+// palette-split.txt, '0' = the CPU route as before).
+void setPaletteSplit(bool enabled);
+// Vertex formats with one attribute (position only) on the multi-texture GPU
+// route (gx::gxCompactSingleAttribute). On by default (SD file
+// mt-single-attribute.txt, '0' = the CPU vertex route as before).
+void setCompactSingleAttribute(bool enabled);
+// Cumulative, printed on profiled frames as "Native fallback records" and
+// "Native draw gaps": fallback records stored, replays of a stand-in and of a
+// relaxed alpha test, stand-in decisions repeated on new TEV colours and those
+// refused; split draws, their runs, and splits refused (CPU route).
+struct DrawGapStatistics {
+    std::uint64_t fallbackStored{},standInReplays{},relaxedAlphaReplays{},standInRefreshes{},standInRefusals{};
+    std::uint64_t paletteSplitDraws{},paletteSplitRuns{},paletteSplitRefusals{};
+};
+void drawGapStatistics(DrawGapStatistics& out);
 // Triangle-fog draws submitted by the GPU rigid path (two draws per mesh).
 void setRigidTriangleFog(bool enabled); // development switch, default off (never exercised)
 // gates: why others stayed on the CPU (0 restarted or switched off, 1 unavailable, 2 fog

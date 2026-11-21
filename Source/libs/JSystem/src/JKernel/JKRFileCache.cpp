@@ -11,6 +11,137 @@
 #include "helpers/string.hpp"
 #include "global.h"
 
+#if defined(DUSK_TARGET_3DS)
+#include <dolphin/os.h>
+
+namespace {
+// Names a file cache searched its whole directory tree for and did not find.
+// JKRGetNameResource asks every mounted volume in turn, and the REL cache
+// (/rel/Final/Release, 623 files) sits before main2d in the volume list, so
+// every global lookup of a 2D resource walked that directory through the DVD
+// API, one locked call per entry. The minigame timer (d_timer.cpp setTimer)
+// changes its 12 digit textures by name in every logic tick, even while the
+// pause menu is open: about 7,500 directory reads per tick, 46-55 ms per tick
+// on the console (Alpha 12, F_SP00 goat herding and its save screen), and the
+// core-2 audio mixer waited behind the same DVD service lock meanwhile
+// (DVDGetDriveStatus in JASAramStream::dvdErrorCheck, every subframe).
+// The disc's file table never changes once opened, so a complete walk that
+// missed a name misses it again: the answer is kept, per cache. A walk in
+// which a directory could not be opened is not kept.
+struct MissedName {
+    const JKRFileCache* cache;
+    u32 hash;
+    char name[64];
+};
+MissedName sMissedNames[64];
+u32 sMissedNext;
+
+struct MissedNamesLock {
+    OSMutex value;
+    MissedNamesLock() { OSInitMutex(&value); }
+};
+
+OSMutex* missedNamesMutex() {
+    static MissedNamesLock lock;
+    return &lock.value;
+}
+
+u32 missedNameHash(const char* name) {
+    u32 hash = 2166136261u;
+    for (; *name != '\0'; name++) {
+        hash = (hash ^ (u8)*name) * 16777619u;
+    }
+    return hash;
+}
+
+bool missedBefore(const JKRFileCache* cache, const char* name, u32 hash) {
+    OSLockMutex(missedNamesMutex());
+    bool found = false;
+    for (u32 i = 0; i < ARRAY_SIZEU(sMissedNames); i++) {
+        const MissedName& entry = sMissedNames[i];
+        if (entry.cache == cache && entry.hash == hash && strcmp(entry.name, name) == 0) {
+            found = true;
+            break;
+        }
+    }
+    OSUnlockMutex(missedNamesMutex());
+    return found;
+}
+
+void rememberMiss(const JKRFileCache* cache, const char* name, u32 hash) {
+    OSLockMutex(missedNamesMutex());
+    MissedName& entry = sMissedNames[sMissedNext++ % ARRAY_SIZEU(sMissedNames)];
+    entry.cache = cache;
+    entry.hash = hash;
+    strcpy(entry.name, name);
+    OSUnlockMutex(missedNamesMutex());
+}
+
+void forgetMisses(const JKRFileCache* cache) {
+    OSLockMutex(missedNamesMutex());
+    for (u32 i = 0; i < ARRAY_SIZEU(sMissedNames); i++) {
+        if (sMissedNames[i].cache == cache) {
+            sMissedNames[i].cache = NULL;
+        }
+    }
+    OSUnlockMutex(missedNamesMutex());
+}
+
+// JKRFileCache::findFile, step for step, which also reports whether every
+// directory of the walk could be opened.
+bool walkForFile(char* path, const char* fileName, bool& complete) {
+    bool result = false;
+    u32 pathLength = strlen(path);
+    DVDDir dir;
+    if (DVDOpenDir(path, &dir)) {
+        DVDDirEntry dirEntry;
+        while (DVDReadDir(&dir, &dirEntry)) {
+            if (dirEntry.isDir) {
+                path[pathLength] = '/';
+                strcpy(path + pathLength + 1, dirEntry.name);
+                result = walkForFile(path, fileName, complete);
+                if (result)
+                    break;
+                path[pathLength] = '\0';
+            } else {
+                result = (strcmp(fileName, dirEntry.name) == 0);
+                if (result) {
+                    strcat(path, "/");
+                    strcat(path, fileName);
+                    break;
+                }
+            }
+        }
+
+        DVDCloseDir(&dir);
+    } else {
+        complete = false;
+    }
+
+    return result;
+}
+
+// findFile(path, fileName) with the misses kept (see MissedName).
+bool findFileRemembered(const JKRFileCache* cache, char* path, const char* fileName) {
+    const bool keep = strlen(fileName) < sizeof(MissedName::name);
+    const u32 hash = keep ? missedNameHash(fileName) : 0;
+    if (keep && missedBefore(cache, fileName, hash)) {
+        return false;
+    }
+
+    bool complete = true;
+    if (walkForFile(path, fileName, complete)) {
+        return true;
+    }
+
+    if (keep && complete) {
+        rememberMiss(cache, fileName, hash);
+    }
+    return false;
+}
+}  // namespace
+#endif
+
 JKRFileCache* JKRFileCache::mount(const char* path, JKRHeap* heap, const char* param_3) {
     if (!path || *path != '/') {
         return NULL;
@@ -80,6 +211,9 @@ JKRFileCache::JKRFileCache(const char* path, const char* volume) {
 }
 
 JKRFileCache::~JKRFileCache() {
+#if defined(DUSK_TARGET_3DS)
+    forgetMisses(this);
+#endif
     removeResourceAll();
     if (mRootPath)
         JKRFreeToHeap(mParentHeap, mRootPath);
@@ -145,7 +279,11 @@ void* JKRFileCache::getResource(u32, const char* path) {
     char* filePath = finalPath + strlen(mRootPath);
     strcpy(finalPath, mRootPath);
 
+#if defined(DUSK_TARGET_3DS)
+    if (findFileRemembered(this, finalPath, path)) {
+#else
     if (findFile(finalPath, path)) {
+#endif
         return getResource(filePath);
     }
     return NULL;
@@ -190,7 +328,11 @@ u32 JKRFileCache::readResource(void* dst, u32 dstLength, u32, const char* path) 
     char* filePath = finalPath + strlen(mRootPath);
     strcpy(finalPath, mRootPath);
 
+#if defined(DUSK_TARGET_3DS)
+    if (findFileRemembered(this, finalPath, path)) {
+#else
     if (findFile(finalPath, path)) {
+#endif
         return readResource(dst, dstLength, filePath);
     }
     return 0;

@@ -1,9 +1,12 @@
 #include "disc.hpp"
+#include "tour_load_cost.hpp"
 #if defined(__3DS__)
 #include <3ds.h>
 #include <cstdio>
+extern "C" void OSReport(const char*,...);
 #endif
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <limits>
@@ -67,6 +70,43 @@ bool Disc::mapped(std::uint64_t offset, std::uint64_t size) const {
     }
     return !size;
 }
+#if defined(__3DS__)
+std::uint64_t tourGameLoadStart(){
+    return !threadGetCurrent() && measureTourLoads ? svcGetSystemTick() : 0;
+}
+void finishTourDvdLock(std::uint64_t start,const char* operation){
+    if(!start)return;
+    const auto elapsed=svcGetSystemTick()-start;
+    tourLoadCost.dvdLockTicks+=elapsed;
+    if(elapsed>SYSCLOCK_ARM11/20)
+        OSReport("Native DVD service wait %s %lu ms\n",operation,(unsigned long)(elapsed*1000/SYSCLOCK_ARM11));
+}
+namespace {
+// Disc reads by thread kind: the game thread (libctru's main thread has no
+// Thread object) against the loader threads. A read on the game thread is a
+// picture held for its whole length (Alpha 11 measurement).
+struct DiscReadCounter{std::atomic<std::uint64_t> reads{},bytes{},ticks{},longest{};};
+DiscReadCounter gameReads,loaderReads;
+void noteDiscRead(std::uint64_t ticks,std::size_t bytes){
+    auto& counter=threadGetCurrent()?loaderReads:gameReads;
+    if(&counter==&gameReads && measureTourLoads)tourLoadCost.gameReadTicks+=ticks;
+    counter.reads.fetch_add(1,std::memory_order_relaxed);counter.bytes.fetch_add(bytes,std::memory_order_relaxed);
+    counter.ticks.fetch_add(ticks,std::memory_order_relaxed);
+    for(auto seen=counter.longest.load(std::memory_order_relaxed);ticks>seen&&!counter.longest.compare_exchange_weak(seen,ticks););
+}
+}
+void reportDiscReads(unsigned pictures){
+    const auto take=[](DiscReadCounter& c){
+        return std::array<std::uint64_t,4>{c.reads.exchange(0),c.bytes.exchange(0),c.ticks.exchange(0),c.longest.exchange(0)};
+    };
+    const auto game=take(gameReads),loader=take(loaderReads);
+    if(!game[0]&&!loader[0])return;
+    const auto ms=[](std::uint64_t t){return t*1000.0/SYSCLOCK_ARM11;};
+    OSReport("Native disc reads, last %u pictures: game thread %llu (%llu KiB, %.1f ms, longest %.1f) loaders %llu (%llu KiB, %.1f ms, longest %.1f)\n",pictures,
+        static_cast<unsigned long long>(game[0]),static_cast<unsigned long long>(game[1]/1024),ms(game[2]),ms(game[3]),
+        static_cast<unsigned long long>(loader[0]),static_cast<unsigned long long>(loader[1]/1024),ms(loader[2]),ms(loader[3]));
+}
+#endif
 bool Disc::readPhysical(std::uint64_t offset, void* output, std::size_t size) {
     if (!file || (!output && size) || !contains(physicalLength, offset, size) ||
         offset > std::uint64_t(std::numeric_limits<off_t>::max())) return false;
@@ -89,6 +129,10 @@ bool Disc::readPhysical(std::uint64_t offset, void* output, std::size_t size) {
             at=info.base_addr+info.size;
         }
     }
+#endif
+#if defined(__3DS__)
+    const u64 readStart=svcGetSystemTick();
+    struct ReadTimer{u64 start;std::size_t bytes;~ReadTimer(){noteDiscRead(svcGetSystemTick()-start,bytes);}} readTimer{readStart,size};
 #endif
     if (fseeko(file, static_cast<off_t>(offset), SEEK_SET) != 0) {recordStatus(DiscStatus::ioError); return false;}
     // Bounded FS requests: 256 KiB per read.
@@ -316,10 +360,16 @@ DiscFileStatus Disc::readEntry(std::uint32_t index, Entry& output) {
         (size == 2 && output.name[0] == '.' && output.name[1] == '.')) return DiscFileStatus::malformed;
     return DiscFileStatus::ready;
 }
-DiscFileStatus Disc::findEntry(const char* path, std::uint32_t& output) {
+DiscFileStatus Disc::findEntry(const char* path, std::uint32_t& output) const {
     output = 0;
     if (!validated) return DiscFileStatus::notReady;
     if (!path) return DiscFileStatus::invalidPath;
+#if defined(__3DS__)
+    struct LookupTime {
+        std::uint64_t start = tourGameLoadStart();
+        ~LookupTime(){if(start)tourLoadCost.pathLookupTicks+=svcGetSystemTick()-start;}
+    } timer;
+#endif
     // Validate the complete request before touching SD. Fixed bounds also match
     // the accepted FST directory depth and 255-byte basename limit.
     struct Component { std::uint16_t start, size; };
@@ -343,35 +393,37 @@ DiscFileStatus Disc::findEntry(const char* path, std::uint32_t& output) {
         if (cursor < length && ++cursor == length) return DiscFileStatus::invalidPath;
     }
     if (!count) return length == 1 && path[0] == '/' ? DiscFileStatus::ready : DiscFileStatus::invalidPath;
-    std::uint32_t parent = 0, first = 1, end = entryCount;
+    // validate() checked every entry, parent, extent and NUL-terminated name
+    // before publishing this immutable FST. Compare in place while traversing
+    // siblings instead of copying and revalidating 256 bytes per candidate.
+    const auto* entries = fstCache.get();
+    const auto* strings = entries + entryCount * 12;
+    std::uint32_t first = 1, end = entryCount;
     for (unsigned component = 0; component < count; ++component) {
+        const auto& part = components[component];
         std::uint32_t found = 0, foundEnd = 0;
         bool foundDirectory = false;
         for (auto index = first; index < end;) {
-            Entry entry;
-            const auto status = readEntry(index, entry);
-            if (status != DiscFileStatus::ready) return status;
-            const auto type = entry.directory;
-            const auto next = entry.extent;
-            if (type && (entry.value != parent || next > end)) return DiscFileStatus::malformed;
-            const auto& basename = entry.name;
-            const auto* terminator = static_cast<const unsigned char*>(std::memchr(basename.data(), 0, basename.size()));
-            const auto& part = components[component];
-            bool match = std::size_t(terminator - basename.data()) == part.size;
-            for (unsigned i = 0; match && i < part.size; ++i)
-                match = fold(basename[i]) == fold(static_cast<unsigned char>(path[part.start + i]));
+            const auto* entry = entries + index * 12;
+            const auto nameAndType = be32(entry);
+            const bool type = (nameAndType >> 24) != 0;
+            const auto next = type ? be32(entry + 8) : index + 1;
+            const auto* basename = strings + (nameAndType & 0xffffff);
+            unsigned i = 0;
+            while (i < part.size && fold(basename[i]) == fold(static_cast<unsigned char>(path[part.start+i]))) ++i;
+            const bool match = i == part.size && basename[i] == 0;
             if (match) {
                 // A case-insensitive duplicate is ambiguous; never choose one
                 // based on on-disc order and accidentally load another resource.
                 if (found) return DiscFileStatus::malformed;
                 found = index; foundEnd = next; foundDirectory = type != 0;
             }
-            index = type ? next : index + 1;
+            index = next;
         }
         if (!found) return DiscFileStatus::notFound;
         if (component + 1 == count) { output = found; return DiscFileStatus::ready; }
         if (!foundDirectory) return DiscFileStatus::notFound;
-        parent = found; first = found + 1; end = foundEnd;
+        first = found + 1; end = foundEnd;
     }
     return DiscFileStatus::notFound;
 }

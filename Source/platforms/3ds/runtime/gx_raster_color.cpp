@@ -15,22 +15,29 @@ unsigned arity(MaterialFunction f){
     return 0;
 }
 }
+// Every draw plans its colour (the native shape replay too): the plan is
+// built in the caller's storage, one 560-byte clear instead of two more
+// cleared plans and a copy. A failure leaves the cleared plan, as before.
 bool planRasterColor(const CommandRegisters& r,const PicaMaterialPlan& material,RasterColorPlan& out,RasterColorError* error){
-    out={};if(error)*error=RasterColorError::none;RasterColorPlan p;
-    if(material.rasterCarrier!=RasterCarrier::none||!material.stageCount||material.stageCount>6)return fail(RasterColorError::material,error);
+    std::uint8_t required=0;
+    if(error)*error=RasterColorError::none;
+    auto refuse=[&]{out={};return fail(RasterColorError::material,error);};
+    if(material.rasterCarrier!=RasterCarrier::none||!material.stageCount||material.stageCount>6)return refuse();
     for(unsigned i=0;i<material.stageCount;++i)for(unsigned alpha=0;alpha<2;++alpha){
         const auto& channel=alpha?material.stages[i].alpha:material.stages[i].rgb;
-        const auto count=arity(channel.function);if(!count)return fail(RasterColorError::material,error);
+        const auto count=arity(channel.function);if(!count)return refuse();
         for(unsigned n=0;n<count;++n){
             const auto& in=channel.inputs[n];if(in.source!=MaterialSource::primary)continue;
-            if(in.operand==MaterialOperand::alpha||(alpha&&in.operand==MaterialOperand::color))p.required|=2;
-            else p.required|=1;
+            if(in.operand==MaterialOperand::alpha||(alpha&&in.operand==MaterialOperand::color))required|=2;
+            else required|=1;
         }
     }
-    return planRasterColorChannel(r,0,p.required,out,error,false);
+    return planRasterColorChannel(r,0,required,out,error,false);
 }
 bool planRasterColorChannel(const CommandRegisters& r,unsigned rasterChannel,std::uint8_t required,RasterColorPlan& out,RasterColorError* error,bool strictFinite){
-    out={};if(error)*error=RasterColorError::none;RasterColorPlan p;
+    out={};if(error)*error=RasterColorError::none;
+    struct ClearOnFailure {RasterColorPlan& plan;bool keep{};~ClearOnFailure(){if(!keep)plan={};}} guard{out};
+    auto& p=out;
     if(rasterChannel>1||required>3)return fail(RasterColorError::material,error);
     p.required=required;p.rasterChannel=rasterChannel;p.strictFinite=strictFinite;
     if(p.required){
@@ -77,13 +84,22 @@ bool planRasterColorChannel(const CommandRegisters& r,unsigned rasterChannel,std
             }
         }
     }
-    out=p;return true;
+    guard.keep=true;return true;
+}
+const float* rasterVertexColor(const DecodedVertex& v,unsigned channel){
+    if(v.present&(1u<<(GX_VA_CLR0+channel)))return v.color[channel];
+    if(!channel&&(v.present&(1u<<GX_VA_CLR1)))return v.color[1];
+    return missingVertexColor.data();
 }
 bool evaluateRasterColor(const RasterColorPlan& p,const DecodedVertex& v,std::array<float,4>& out,RasterColorError* error,const TransformedVertex* transformed){
     out={};if(error)*error=RasterColorError::none;
     if(p.rasterChannel>1)return fail(RasterColorError::material,error);
     auto color=p.material;
-    if((p.vertex|p.ambientVertex)&&!(v.present&(1u<<(GX_VA_CLR0+p.rasterChannel))))return fail(RasterColorError::vertex,error);
+    const float* vertexColor=nullptr;
+    if(p.vertex|p.ambientVertex){
+        vertexColor=rasterVertexColor(v,p.rasterChannel);
+        if(vertexColor==missingVertexColor.data())++gxMissingColorVertices;
+    }
     if((p.needsPosition||p.needsNormal)&&(!transformed||(p.needsNormal&&!transformed->normalValid)))return fail(RasterColorError::transform,error);
     if(p.needsNormal)for(float c:transformed->viewNormal)if(!std::isfinite(c))return fail(RasterColorError::nonfinite,error);
     auto dot=[](const auto& a,const auto& b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];};
@@ -92,7 +108,7 @@ bool evaluateRasterColor(const RasterColorPlan& p,const DecodedVertex& v,std::ar
         const auto& channel=p.channels[alpha];std::array<float,4> illumination=p.ambient;
         for(unsigned c=alpha?3:0;c<(alpha?4:3);++c){
             if((p.vertex|p.ambientVertex)&(1u<<alpha)){
-                const auto value=v.color[p.rasterChannel][c];if(!std::isfinite(value)||value<0||value>1)return fail(RasterColorError::nonfinite,error);
+                const auto value=vertexColor[c];if(!std::isfinite(value)||value<0||value>1)return fail(RasterColorError::nonfinite,error);
                 if(p.vertex&(1u<<alpha))color[c]=value;
                 if(p.ambientVertex&(1u<<alpha))illumination[c]=value;
             }

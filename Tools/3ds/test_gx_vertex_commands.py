@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Verify typed vertex state against original GD and decode registered arrays."""
+import argparse
 import hashlib
 import json
 import os
@@ -7,10 +8,19 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
-OUT = ROOT / 'Diagnostics/implementation-12/vertex-state'
+def devkit_arm():
+    """devkitARM g++: $DEVKITARM, $DEVKITPRO, /opt/devkitpro or ~/devkitpro."""
+    candidates = [Path(os.environ['DEVKITARM'])/'bin/arm-none-eabi-g++'] if os.environ.get('DEVKITARM') else []
+    candidates += [Path(os.environ['DEVKITPRO'])/'devkitARM/bin/arm-none-eabi-g++'] if os.environ.get('DEVKITPRO') else []
+    candidates += [Path('/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++'), Path.home()/'devkitpro/devkitARM/bin/arm-none-eabi-g++']
+    return str(next((c for c in candidates if c.exists()), candidates[0]))
+DEFAULT_OUT = ROOT / 'Diagnostics/implementation-12/vertex-state'
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output', type=Path, default=DEFAULT_OUT)
+    OUT = parser.parse_args().output
     OUT.mkdir(parents=True, exist_ok=True)
     native = ROOT/'Source/platforms/3ds'
     aurora = ROOT/'Source/extern/aurora'
@@ -28,7 +38,7 @@ def main():
     commands = [['clang++', *common, '-Wno-switch', '-O1', '-g',
                  '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
                  *map(str,sources), '-o', str(OUT/'test')],
-                ['/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++', *common,
+                [devkit_arm(), *common,
                  '-O2', '-g', '-march=armv6k', '-mtune=mpcore', '-mfloat-abi=hard',
                  '-mfpu=vfp', '-mtp=soft', '-D__3DS__', '-fstack-usage', '-c',
                  str(native/'runtime/gx_vertex_commands.cpp'), '-o', str(OUT/'commands-arm.o')]]

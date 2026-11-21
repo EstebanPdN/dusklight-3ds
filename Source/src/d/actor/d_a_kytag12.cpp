@@ -13,6 +13,145 @@
 #include "d/d_kankyo_wether.h"
 #include <cstring>
 
+#if defined(DUSK_TARGET_3DS)
+#include "d/d_native_logic.h"
+
+// Native New 3DS (logic.txt kytag12): one particle loop walks up to 2000
+// particles per tick. For each it scanned the 10 dark-mist slots and the 30
+// point-wind slots and asked twice for Link's form and once for the event
+// state. Nothing in the loop changes any of them (it only reads them, plays
+// sounds and moves its own particles), so they are read once per tick: the
+// non-empty dark-mist slots and the point lights in slot order, and the two
+// states. Same tests on the same entries in the same order: same results.
+// Verify (kytag12=2) runs the original and compares every particle.
+namespace {
+struct KytagTick {
+    unsigned mode;
+    int mistCount;
+    DALKMIST_INFLUENCE* mist[10];
+    int lightCount;
+    WIND_INFLUENCE* light[30];
+    BOOL nowWolf;
+    BOOL eventRun;
+};
+KytagTick l_kytag;
+
+void kytagBegin() {
+    KytagTick& t = l_kytag;
+    t.mode = dNativeLogic::config().kytag12;
+    dNativeLogic::census.kytagTicks++;
+    dNativeLogic::census.kytagParticles += g_env_light.field_0x1054;
+    if (t.mode == dNativeLogic::Off) {
+        return;
+    }
+    t.mistCount = 0;
+    for (int j = 0; j < 10; j++) {
+        if (g_env_light.dalkmist_influence[j] != NULL) {
+            t.mist[t.mistCount++] = g_env_light.dalkmist_influence[j];
+        }
+    }
+    t.lightCount = dKyw_pntlight_collision_list(t.light);
+    t.nowWolf = daPy_py_c::checkNowWolf();
+    t.eventRun = dComIfGp_event_runCheck();
+}
+
+// The dark-mist slots the particle loop walks: the compact list when on, the
+// original slots otherwise (verify keeps the original and compares below).
+inline DALKMIST_INFLUENCE* const* kytagMistList() {
+    return l_kytag.mode == dNativeLogic::On ? l_kytag.mist : g_env_light.dalkmist_influence;
+}
+inline int kytagMistCount() {
+    return l_kytag.mode == dNativeLogic::On ? l_kytag.mistCount : 10;
+}
+
+bool kytagMistHit(DALKMIST_INFLUENCE* const* list, int count, const cXyz& pos) {
+    for (int j = 0; j < count; j++) {
+        if (list[j] != NULL && list[j]->mPos.abs(pos) < list[j]->field_0xc + 100.0f) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline void kytagVerifyMist(const cXyz& pos) {
+    if (l_kytag.mode != dNativeLogic::Verify) {
+        return;
+    }
+    dNativeLogic::census.kytagChecks++;
+    if (kytagMistHit(l_kytag.mist, l_kytag.mistCount, pos) !=
+        kytagMistHit(g_env_light.dalkmist_influence, 10, pos))
+    {
+        dNativeLogic::census.kytagMismatches++;
+    }
+}
+
+void kytagPntLight(cXyz* pos, cXyz* dir, f32* power) {
+    if (l_kytag.mode == dNativeLogic::Off) {
+        dKyw_pntlight_collision_get_info(pos, dir, power);
+        return;
+    }
+    dKyw_pntlight_collision_get_info_list(pos, dir, power, l_kytag.light, l_kytag.lightCount);
+    if (l_kytag.mode == dNativeLogic::Verify) {
+        cXyz originalDir;
+        f32 originalPower;
+        dKyw_pntlight_collision_get_info(pos, &originalDir, &originalPower);
+        dNativeLogic::census.kytagChecks++;
+        if (std::memcmp(&originalDir, dir, sizeof(cXyz)) != 0 ||
+            std::memcmp(&originalPower, power, sizeof(f32)) != 0)
+        {
+            dNativeLogic::census.kytagMismatches++;
+        }
+        *dir = originalDir;
+        *power = originalPower;
+    }
+}
+
+BOOL kytagNowWolf() {
+    if (l_kytag.mode != dNativeLogic::On) {
+        const BOOL now = daPy_py_c::checkNowWolf();
+        if (l_kytag.mode == dNativeLogic::Verify) {
+            dNativeLogic::census.kytagChecks++;
+            if ((now != 0) != (l_kytag.nowWolf != 0)) {
+                dNativeLogic::census.kytagMismatches++;
+            }
+        }
+        return now;
+    }
+    return l_kytag.nowWolf;
+}
+
+BOOL kytagEventRun() {
+    if (l_kytag.mode != dNativeLogic::On) {
+        const BOOL now = dComIfGp_event_runCheck();
+        if (l_kytag.mode == dNativeLogic::Verify) {
+            dNativeLogic::census.kytagChecks++;
+            if ((now != 0) != (l_kytag.eventRun != 0)) {
+                dNativeLogic::census.kytagMismatches++;
+            }
+        }
+        return now;
+    }
+    return l_kytag.eventRun;
+}
+}  // namespace
+
+#define KY12_BEGIN() kytagBegin()
+#define KY12_MIST_LIST() kytagMistList()
+#define KY12_MIST_COUNT() kytagMistCount()
+#define KY12_VERIFY_MIST(pos) kytagVerifyMist(pos)
+#define KY12_PNTLIGHT(pos, dir, power) kytagPntLight(pos, dir, power)
+#define KY12_NOW_WOLF() kytagNowWolf()
+#define KY12_EVENT_RUN() kytagEventRun()
+#else
+#define KY12_BEGIN()
+#define KY12_MIST_LIST() g_env_light.dalkmist_influence
+#define KY12_MIST_COUNT() 10
+#define KY12_VERIFY_MIST(pos)
+#define KY12_PNTLIGHT(pos, dir, power) dKyw_pntlight_collision_get_info(pos, dir, power)
+#define KY12_NOW_WOLF() daPy_py_c::checkNowWolf()
+#define KY12_EVENT_RUN() dComIfGp_event_runCheck()
+#endif
+
 static BOOL d_kytag12_cut_turn_check() {
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
     BOOL var_r3 = false;
@@ -71,6 +210,9 @@ static void daKytag12_light_swprd_proc(kytag12_class* i_this) {
 }
 
 static int daKytag12_Execute_standard(kytag12_class* i_this) {
+    // The stage cannot change during one execute: compared once instead of
+    // up to twice per effect (2000 effects) every tick. Same results.
+    const bool inMN08 = strcmp(dComIfGp_getStartStageName(), "D_MN08") == 0;
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
     dKankyo_evil_Packet* temp_r25 = dKy_getEnvlight()->mpEvilPacket;
@@ -103,13 +245,14 @@ static int daKytag12_Execute_standard(kytag12_class* i_this) {
     cXyz spDC;
     cXyz spA8;
 
+    KY12_BEGIN();
     for (int i = 0; i < g_env_light.field_0x1054; i++) {
         EF_EVIL_EFF* effect_p = &temp_r25->mEffect[i];
         var_f29 = 1.0f;
 
         switch (effect_p->mStatus) {
         case 0:
-            if (strcmp(dComIfGp_getStartStageName(), "D_MN08") == 0 && a_this->home.roomNo == 1 &&
+            if (inMN08 && a_this->home.roomNo == 1 &&
                 i < 400)
             {
                 effect_p->mBasePos.x = cM_rndFX(30.0f) + -5200.0f;
@@ -118,7 +261,7 @@ static int daKytag12_Execute_standard(kytag12_class* i_this) {
 
                 effect_p->field_0x24 = 1.0f;
                 effect_p->field_0x38 = fabsf(var_f30) * 50.0f + 100.0f;
-            } else if (strcmp(dComIfGp_getStartStageName(), "D_MN08") == 0 &&
+            } else if (inMN08 &&
                        a_this->home.roomNo == 1 && i >= 400 && i < 800)
             {
                 effect_p->mBasePos.x = cM_rndFX(30.0f) + -2700.0f;
@@ -127,7 +270,7 @@ static int daKytag12_Execute_standard(kytag12_class* i_this) {
 
                 effect_p->field_0x24 = 1.0f;
                 effect_p->field_0x38 = fabsf(var_f30) * 50.0f + 100.0f;
-            } else if (strcmp(dComIfGp_getStartStageName(), "D_MN08") == 0 &&
+            } else if (inMN08 &&
                        a_this->home.roomNo == 1 && i >= 800 && i < 1200)
             {
                 effect_p->mBasePos.x = cM_rndFX(30.0f) + -2700.0f;
@@ -136,7 +279,7 @@ static int daKytag12_Execute_standard(kytag12_class* i_this) {
 
                 effect_p->field_0x24 = 1.0f;
                 effect_p->field_0x38 = fabsf(var_f30) * 50.0f + 100.0f;
-            } else if (strcmp(dComIfGp_getStartStageName(), "D_MN08") == 0 &&
+            } else if (inMN08 &&
                        a_this->home.roomNo == 1 && i >= 1200 && i < 1600)
             {
                 effect_p->mBasePos.x = cM_rndFX(30.0f) + -5200.0f;
@@ -145,7 +288,7 @@ static int daKytag12_Execute_standard(kytag12_class* i_this) {
 
                 effect_p->field_0x24 = 1.0f;
                 effect_p->field_0x38 = fabsf(var_f30) * 50.0f + 100.0f;
-            } else if (strcmp(dComIfGp_getStartStageName(), "D_MN08") == 0 &&
+            } else if (inMN08 &&
                        a_this->home.roomNo == 11)
             {
                 effect_p->mBasePos.x = cM_rndFX(1000.0f);
@@ -250,7 +393,7 @@ static int daKytag12_Execute_standard(kytag12_class* i_this) {
             break;
         }
 
-        if (strcmp(dComIfGp_getStartStageName(), "D_MN08") == 0 && a_this->home.roomNo == 1 &&
+        if (inMN08 && a_this->home.roomNo == 1 &&
             i < 1600)
         {
             effect_p->mBasePos.y += -8.0f;
@@ -276,10 +419,13 @@ static int daKytag12_Execute_standard(kytag12_class* i_this) {
             }
         }
 
-        for (int j = 0; j < 10; j++) {
-            if (g_env_light.dalkmist_influence[j] != NULL &&
-                g_env_light.dalkmist_influence[j]->mPos.abs(effect_p->mBasePos) <
-                    g_env_light.dalkmist_influence[j]->field_0xc + 100.0f)
+        KY12_VERIFY_MIST(effect_p->mBasePos);
+        DALKMIST_INFLUENCE* const* mistList = KY12_MIST_LIST();
+        const int mistCount = KY12_MIST_COUNT();
+        for (int j = 0; j < mistCount; j++) {
+            if (mistList[j] != NULL &&
+                mistList[j]->mPos.abs(effect_p->mBasePos) <
+                    mistList[j]->field_0xc + 100.0f)
             {
                 if (effect_p->mStatus != 2 && effect_p->field_0x40 == 0 && var_r23 < 1) {
                     cXyz spF4;
@@ -307,7 +453,7 @@ static int daKytag12_Execute_standard(kytag12_class* i_this) {
             }
         }
 
-        if (!daPy_py_c::checkNowWolf()) {
+        if (!KY12_NOW_WOLF()) {
             if (effect_p->field_0x38 >= 9000.0f) {
                 var_f29 = 0.0f;
             }
@@ -316,7 +462,7 @@ static int daKytag12_Execute_standard(kytag12_class* i_this) {
             spB8.y -= 100.0f;
 
             f32 sp34;
-            dKyw_pntlight_collision_get_info(&spB8, &spDC, &sp34);
+            KY12_PNTLIGHT(&spB8, &spDC, &sp34);
 
             if (sp34 > 0.2f) {
                 if (effect_p->mStatus != 2 && effect_p->field_0x40 == 0 && var_r23 < 1) {
@@ -356,12 +502,12 @@ static int daKytag12_Execute_standard(kytag12_class* i_this) {
             }
         }
 
-        if (!dComIfGp_event_runCheck() && effect_p->field_0x40 != 0) {
+        if (!KY12_EVENT_RUN() && effect_p->field_0x40 != 0) {
             effect_p->field_0x40--;
         }
 
         if (effect_p->field_0x24 > 0.95f) {
-            if (strcmp(dComIfGp_getStartStageName(), "D_MN08") == 0 && a_this->home.roomNo == 1 &&
+            if (inMN08 && a_this->home.roomNo == 1 &&
                 i < 1600)
             {
                 if (i < 400) {
@@ -415,7 +561,7 @@ static int daKytag12_Execute_standard(kytag12_class* i_this) {
         g_env_light.mEvilInitialized |= 0x80;
     }
 
-    if (strcmp(dComIfGp_getStartStageName(), "D_MN08") == 0 && a_this->home.roomNo == 1) {
+    if (inMN08 && a_this->home.roomNo == 1) {
         f32 temp = (f32)var_r20 / (f32)(g_env_light.field_0x1054 / 5);
         i_this->field_0x57c[0].x = -5200.0f;
         i_this->field_0x57c[0].y = player->current.pos.y;
@@ -462,6 +608,9 @@ static int daKytag12_Execute_standard(kytag12_class* i_this) {
 }
 
 static int daKytag12_Execute_arrival(kytag12_class* i_this) {
+    // The stage cannot change during one execute: compared once instead of
+    // up to twice per effect (2000 effects) every tick. Same results.
+    const bool inMN08 = strcmp(dComIfGp_getStartStageName(), "D_MN08") == 0;
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
     dKankyo_evil_Packet* temp_r25 = dKy_getEnvlight()->mpEvilPacket;
@@ -482,6 +631,7 @@ static int daKytag12_Execute_arrival(kytag12_class* i_this) {
     cXyz sp80;
     cXyz sp8C;
 
+    KY12_BEGIN();
     for (int i = 0; i < g_env_light.field_0x1054; i++) {
         EF_EVIL_EFF* effect_p = &temp_r25->mEffect[i];
         var_f27 = 1.0f;
@@ -548,7 +698,7 @@ static int daKytag12_Execute_arrival(kytag12_class* i_this) {
             effect_p->mPosition.y = (var_f22 + 1.0f) * 20.0f;
             effect_p->mPosition.z = var_f21 * 20.0f;
 
-            if (strcmp(dComIfGp_getStartStageName(), "D_MN08") == 0 && a_this->home.roomNo == 1 &&
+            if (inMN08 && a_this->home.roomNo == 1 &&
                 i < 1600)
             {
                 effect_p->mBasePos.y += cM_rndF(-4.0f) + -4.0f;
@@ -584,10 +734,13 @@ static int daKytag12_Execute_arrival(kytag12_class* i_this) {
             break;
         }
 
-        for (int j = 0; j < 10; j++) {
-            if (g_env_light.dalkmist_influence[j] != NULL &&
-                g_env_light.dalkmist_influence[j]->mPos.abs(effect_p->mBasePos) <
-                    g_env_light.dalkmist_influence[j]->field_0xc + 100.0f)
+        KY12_VERIFY_MIST(effect_p->mBasePos);
+        DALKMIST_INFLUENCE* const* mistList = KY12_MIST_LIST();
+        const int mistCount = KY12_MIST_COUNT();
+        for (int j = 0; j < mistCount; j++) {
+            if (mistList[j] != NULL &&
+                mistList[j]->mPos.abs(effect_p->mBasePos) <
+                    mistList[j]->field_0xc + 100.0f)
             {
                 if (effect_p->mStatus != 3 && effect_p->field_0x40 == 0 && var_r21 < 1) {
                     sp80 = effect_p->mBasePos;
@@ -614,7 +767,7 @@ static int daKytag12_Execute_arrival(kytag12_class* i_this) {
             }
         }
 
-        if (!daPy_py_c::checkNowWolf()) {
+        if (!KY12_NOW_WOLF()) {
             if (effect_p->field_0x38 >= 9000.0f) {
                 var_f27 = 0.0f;
             }
@@ -624,7 +777,7 @@ static int daKytag12_Execute_arrival(kytag12_class* i_this) {
             sp80.y -= 100.0f;
 
             f32 sp34;
-            dKyw_pntlight_collision_get_info(&sp80, &sp98, &sp34);
+            KY12_PNTLIGHT(&sp80, &sp98, &sp34);
 
             if (sp34 > 0.2f) {
                 if (effect_p->mStatus != 3 && effect_p->field_0x40 == 0 && var_r21 < 1) {
@@ -661,7 +814,7 @@ static int daKytag12_Execute_arrival(kytag12_class* i_this) {
             }
         }
 
-        if (!dComIfGp_event_runCheck() && effect_p->field_0x40 != 0) {
+        if (!KY12_EVENT_RUN() && effect_p->field_0x40 != 0) {
             effect_p->field_0x40--;
         }
 
@@ -722,6 +875,7 @@ static int daKytag12_Execute_R00(kytag12_class* i_this) {
     cXyz sp8C;
     cXyz sp98;
 
+    KY12_BEGIN();
     for (int i = 0; i < g_env_light.field_0x1054; i++) {
         EF_EVIL_EFF* effect_p = &temp_r25->mEffect[i];
         var_f25 = 1.0f;
@@ -887,10 +1041,13 @@ static int daKytag12_Execute_R00(kytag12_class* i_this) {
             effect_p->field_0x40 = 360;
         }
 
-        for (int j = 0; j < 10; j++) {
-            if (g_env_light.dalkmist_influence[j] != NULL &&
-                g_env_light.dalkmist_influence[j]->mPos.abs(effect_p->mBasePos) <
-                    g_env_light.dalkmist_influence[j]->field_0xc + 100.0f)
+        KY12_VERIFY_MIST(effect_p->mBasePos);
+        DALKMIST_INFLUENCE* const* mistList = KY12_MIST_LIST();
+        const int mistCount = KY12_MIST_COUNT();
+        for (int j = 0; j < mistCount; j++) {
+            if (mistList[j] != NULL &&
+                mistList[j]->mPos.abs(effect_p->mBasePos) <
+                    mistList[j]->field_0xc + 100.0f)
             {
                 if (effect_p->mStatus != 2 && effect_p->field_0x40 == 0 && var_r24 < 1) {
                     cXyz spA4;
@@ -905,7 +1062,7 @@ static int daKytag12_Execute_R00(kytag12_class* i_this) {
             }
         }
 
-        if (!daPy_py_c::checkNowWolf()) {
+        if (!KY12_NOW_WOLF()) {
             if (effect_p->field_0x38 >= 9000.0f) {
                 var_f25 = 0.0f;
             }
@@ -915,7 +1072,7 @@ static int daKytag12_Execute_R00(kytag12_class* i_this) {
             sp80.y -= 100.0f;
 
             f32 sp34;
-            dKyw_pntlight_collision_get_info(&sp80, &spB0, &sp34);
+            KY12_PNTLIGHT(&sp80, &spB0, &sp34);
 
             if (sp34 > 0.2f) {
                 if (effect_p->mStatus != 2 && effect_p->field_0x40 == 0 && var_r24 < 1) {

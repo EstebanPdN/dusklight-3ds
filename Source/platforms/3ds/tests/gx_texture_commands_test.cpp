@@ -1,4 +1,5 @@
 #include "../runtime/gx_commands.hpp"
+#include "../runtime/gx_compact_cache.hpp"
 #include "../runtime/gx_texture_commands.hpp"
 #include "../runtime/gx_state.hpp"
 #include "../runtime/gx_stream.hpp"
@@ -14,6 +15,9 @@ using namespace dusk::native::gx;
 void OriginalGXInitTexCacheRegion(GXTexRegion*,u8,u32,GXTexCacheSize,u32,GXTexCacheSize);
 extern "C" void OSPanic(const char*,int,const char* message,...){throw std::runtime_error(message);}
 extern "C" void DCFlushRange(void*,u32){}
+extern "C" void OSReport(const char*,...){} // diagnostics of the capture consumer path
+// Defined by the native draw code in the game; the processor only counts batches in it.
+thread_local dusk::native::gx::StaticGeometryHint dusk::native::gx::staticGeometryHint{};
 int main(){
     std::array<std::array<u8,96>,2> images{};
     TextureHandle handles[2]{};

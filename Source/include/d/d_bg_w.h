@@ -229,15 +229,15 @@ public:
     MtxP GetBaseMtxP() { return *pm_base; }
     BOOL ChkNoCalcVtx() { return mFlags & NO_CALC_VTX_e; }
     BOOL ChkFlush() { return field_0x91 & 8; }
-    void SetLock() { mFlags |= (u8)LOCK_e; }
-    void OffRoofRegist() { field_0x91 |= (u8)0x4; }
-    void OnRoofRegist() { field_0x91 &= ~0x04; }
+    void SetLock() { DUSK_BG_SET(mFlags, (u8)(mFlags | (u8)LOCK_e), "SetLock"); }
+    void OffRoofRegist() { DUSK_BG_SET(field_0x91, (u8)(field_0x91 | (u8)0x4), "OffRoofRegist"); }
+    void OnRoofRegist() { DUSK_BG_SET(field_0x91, (u8)(field_0x91 & ~0x04), "OnRoofRegist"); }
     bool ChkRoofRegist() { return (field_0x91 & 4) == 0;}
     cBgD_Vtx_t* GetVtxTbl() const { return pm_vtx_tbl; }
     int GetVtxNum() const { return pm_bgd->m_v_num; }
-    void ClrNoCalcVtx() { mFlags &= ~NO_CALC_VTX_e; }
-    void SetBaseMtxP(Mtx* mtx) { pm_base = mtx; }
-    void SetNoCalcVtx() { mFlags |= NO_CALC_VTX_e; }
+    void ClrNoCalcVtx() { DUSK_BG_SET(mFlags, (u8)(mFlags & ~NO_CALC_VTX_e), "ClrNoCalcVtx"); }
+    void SetBaseMtxP(Mtx* mtx) { DUSK_BG_SET(pm_base, mtx, "SetBaseMtxP"); }
+    void SetNoCalcVtx() { DUSK_BG_SET(mFlags, (u8)(mFlags | NO_CALC_VTX_e), "SetNoCalcVtx"); }
     cBgD_t* GetBgd() const { return pm_bgd; }
 
 public:
@@ -339,14 +339,21 @@ public:
     virtual bool ChkPolyThrough(int, cBgS_PolyPassChk*);
     virtual bool ChkShdwDrawThrough(int, cBgS_PolyPassChk*);
     virtual bool ChkGrpThrough(int, cBgS_GrpPassChk*, int);
+#if defined(DUSK_TARGET_3DS)
+    // dBgWSv and dBgWHf keep every query, ChkNotReady and GetBnd of dBgW/cBgW.
+    virtual cBgW* DuskBroadPhaseDzb() { return this; }
+#endif
 
     void DrawBox() const;
     void DebugDraw() const;
     void DrawPoly(const cBgS_PolyInfo&, const GXColor&) const;
 
-    void SetCrrFunc(dBgW_CrrFunc func) { m_crr_func = func; }
-    void SetRideCallback(dBgW_RideCallback func) { m_ride_callback = func; }
-    void SetArrowStickCallback(dBgW_ArrowStickCallback func) { m_arrow_stick_callback = func; }
+    void SetCrrFunc(dBgW_CrrFunc func) { DUSK_BG_SET(m_crr_func, func, "SetCrrFunc"); }
+    void SetRideCallback(dBgW_RideCallback func) { DUSK_BG_SET(m_ride_callback, func, "SetRideCallback"); }
+    void SetArrowStickCallback(dBgW_ArrowStickCallback func) { DUSK_BG_SET(m_arrow_stick_callback, func, "SetArrowStickCallback"); }
+    // The move flag is read only by the moving-BG corrections, which the
+    // CrrPos skip refuses by itself whenever an object under the actor has it
+    // set (at the stored call and now): no version note.
     void OnMoveFlag() { m_flags |= (u8)1; }
 
     /* 0xB0 */ dBgW_CrrFunc m_crr_func;

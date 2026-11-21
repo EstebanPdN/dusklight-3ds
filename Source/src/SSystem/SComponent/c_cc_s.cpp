@@ -3,6 +3,11 @@
  *
  */
 
+#if defined(DUSK_TARGET_3DS)
+#include "d/d_native_logic.h"
+#include <dolphin/ppc_math.h>
+#include "d/d_tick_profile.h"
+#endif
 #include "SSystem/SComponent/c_cc_s.h"
 #include "JSystem/JUtility/JUTAssert.h"
 #include <cmath>
@@ -134,17 +139,15 @@ void cCcS::ClrAtHitInf() {
 }
 
 bool cCcS::ChkNoHitAtTg(cCcD_Obj* pat_obj, cCcD_Obj* ptg_obj) {
-    fopAc_ac_c* pat_ac = pat_obj->GetAc();
-    fopAc_ac_c* ptg_ac = ptg_obj->GetAc();
-    if ((pat_ac != NULL && ptg_ac != NULL && pat_ac == ptg_ac) ||
-        (pat_obj->GetAtGrp() & ptg_obj->GetTgGrp()) == 0 ||
+    if ((pat_obj->GetAtGrp() & ptg_obj->GetTgGrp()) == 0 ||
         (pat_obj->GetAtType() & ptg_obj->GetTgType()) == 0)
     {
         return true;
-    } else {
-        return ChkNoHitGAtTg(pat_obj->GetGObjInf(), ptg_obj->GetGObjInf(),
-                             pat_obj->GetStts()->GetGStts(), ptg_obj->GetStts()->GetGStts());
     }
+    fopAc_ac_c* pat_ac = pat_obj->GetAc();
+    return (pat_ac != NULL && pat_ac == ptg_obj->GetAc()) ||
+           ChkNoHitGAtTg(pat_obj->GetGObjInf(), ptg_obj->GetGObjInf(),
+                         pat_obj->GetStts()->GetGStts(), ptg_obj->GetStts()->GetGStts());
 }
 
 void cCcS::ChkAtTg() {
@@ -159,12 +162,21 @@ void cCcS::ChkAtTg() {
         JUT_ASSERT(338, pat_sa != NULL);
 
         for (cCcD_Obj** ptg_obj = mpObjTg; ptg_obj < objTgEnd; ++ptg_obj) {
+#if defined(DUSK_TARGET_3DS)
+            dNativeLogic::census.ccAtTgPairs++;
+#endif
             if (*ptg_obj == NULL || !(*ptg_obj)->ChkTgSet())
                 continue;
             if (!(*pat_obj)->GetPDivideInfo()->Chk(*(*ptg_obj)->GetPDivideInfo()))
                 continue;
+#if defined(DUSK_TARGET_3DS)
+            dNativeLogic::census.ccAtTgArea++;
+#endif
             if (ChkNoHitAtTg(*pat_obj, *ptg_obj))
                 continue;
+#if defined(DUSK_TARGET_3DS)
+            dNativeLogic::census.ccAtTgShape++;
+#endif
 
             cCcD_ShapeAttr* ptg_sa = (*ptg_obj)->GetShapeAttr();
             JUT_ASSERT(354, ptg_sa != NULL);
@@ -206,10 +218,126 @@ bool cCcS::ChkNoHitCo(cCcD_Obj* pco1_obj, cCcD_Obj* pco2_obj) {
     }
 }
 
+#if defined(DUSK_TARGET_3DS)
+#include "SSystem/SComponent/c_m3d.h"
+#include <typeinfo>
+
+// Native New 3DS (logic.txt ccpre): a pair of push colliders that passes the
+// area test is first tested with the very function the double dispatch of
+// CrossCo would reach for cylinders and spheres, in the same argument order,
+// on the live shapes (pco1->CrossCo(pco2) ends in pco2's typed overload with
+// pco1 as the argument: CylCyl(pco2, pco1), CylSph(pco1 cyl, pco2 sph),
+// CylSph(pco2 cyl, pco1 sph), SphSph(pco2, pco1)). When it says "no cross",
+// the original would also find no cross; ChkNoHitCo (dCcS::ChkNoHitGCo is
+// "false") and CrossCo have no side effects, so the pair is left out. A hit
+// takes the original path. Other shapes always take it.
+namespace {
+enum CoKind { kCoOther = 0, kCoCyl = 1, kCoSph = 2 };
+struct CoShape {
+    cCcD_Obj* obj;  // the entry this was made for (a changed entry takes the original path)
+    int kind;
+    const cM3dGCyl* cyl;
+    const cM3dGSph* sph;
+};
+CoShape l_coShape[0x100];
+
+// Shape kind by vtable pointer, filled with dynamic_cast on first sight.
+struct CoKindCache {
+    const void* vptr;
+    int kind;
+};
+CoKindCache l_coKinds[32];
+int l_coKindCount;
+
+void coShapeOf(cCcD_Obj* obj, CoShape& out) {
+    out.obj = obj;
+    out.kind = kCoOther;
+    out.cyl = NULL;
+    out.sph = NULL;
+    if (obj == NULL) {
+        return;
+    }
+    cCcD_ShapeAttr* sa = obj->GetShapeAttr();
+    if (sa == NULL) {
+        return;
+    }
+    const void* vptr = *(const void* const*)sa;
+    int kind = -1;
+    for (int i = 0; i < l_coKindCount; i++) {
+        if (l_coKinds[i].vptr == vptr) {
+            kind = l_coKinds[i].kind;
+            break;
+        }
+    }
+    if (kind < 0) {
+        kind = dynamic_cast<cCcD_CylAttr*>(sa) != NULL   ? kCoCyl
+               : dynamic_cast<cCcD_SphAttr*>(sa) != NULL ? kCoSph
+                                                           : kCoOther;
+        if (l_coKindCount < (int)(sizeof(l_coKinds) / sizeof(l_coKinds[0]))) {
+            l_coKinds[l_coKindCount].vptr = vptr;
+            l_coKinds[l_coKindCount].kind = kind;
+            l_coKindCount++;
+        }
+    }
+    if (kind == kCoCyl) {
+        out.cyl = static_cast<const cM3dGCyl*>(static_cast<cCcD_CylAttr*>(sa));
+    } else if (kind == kCoSph) {
+        out.sph = static_cast<const cM3dGSph*>(static_cast<cCcD_SphAttr*>(sa));
+    }
+    out.kind = kind;
+}
+
+// -1: no answer (original path); 0: no cross; 1: cross.
+inline int coPreCross(const CoShape& s1, const CoShape& s2) {
+    f32 len;
+    if (s1.kind == kCoCyl) {
+        if (s2.kind == kCoCyl) {
+            return cM3d_Cross_CylCyl(s2.cyl, s1.cyl, &len) ? 1 : 0;
+        }
+        if (s2.kind == kCoSph) {
+            return cM3d_Cross_CylSph(s1.cyl, s2.sph, &len) ? 1 : 0;
+        }
+    } else if (s1.kind == kCoSph) {
+        if (s2.kind == kCoCyl) {
+            return cM3d_Cross_CylSph(s2.cyl, s1.sph, &len) ? 1 : 0;
+        }
+        if (s2.kind == kCoSph) {
+            // The PPC length uses a reciprocal-square-root estimate. Over this
+            // normal binary32 interval its result is at least half the true
+            // length. Near contacts and inputs outside the interval use its original length.
+            if (dusk_native_frsqrte_mode == 1 && dusk_native_fmaf_mode == 1) {
+                Vec delta;
+                VECSubtract(s2.sph->GetCP(), s1.sph->GetCP(), &delta);
+                const float square = PSVECSquareMag(&delta);
+                const float radiusSum = s2.sph->GetR() + s1.sph->GetR();
+                const float diameter = 2.0f * radiusSum;
+                if (square >= 1.0f && square <= 4294967296.0f && square > diameter * diameter) {
+                    return 0;
+                }
+                // PSVECMag's exact operation on the square already calculated.
+                const float distance = square == 0.0f ? 0.0f : square * ppc_rsqrte(square);
+                return radiusSum - distance > G_CM3D_F_ABS_MIN;
+            }
+            return cM3d_Cross_SphSph(s2.sph, s1.sph, &len) ? 1 : 0;
+        }
+    }
+    return -1;
+}
+}  // namespace
+#endif
+
 void cCcS::ChkCo() {
     ClrCoHitInf();
     if (mObjCoCount <= 1)
         return;
+#if defined(DUSK_TARGET_3DS)
+    const unsigned preMode = dNativeLogic::config().ccPre;
+    if (preMode != dNativeLogic::Off) {
+        for (int i = 0; i < mObjCoCount; i++) {
+            coShapeOf(mpObjCo[i], l_coShape[i]);
+        }
+    }
+#endif
 
     cCcD_Obj** objCoEnd = mpObjCo + mObjCoCount;
     for (cCcD_Obj** pco1_obj = mpObjCo; pco1_obj < objCoEnd - 1; ++pco1_obj) {
@@ -220,18 +348,53 @@ void cCcS::ChkCo() {
         JUT_ASSERT(444, pco1_sa != NULL);
 
         for (cCcD_Obj** pco2_obj = pco1_obj + 1; pco2_obj < objCoEnd; ++pco2_obj) {
+#if defined(DUSK_TARGET_3DS)
+            dNativeLogic::census.ccCoPairs++;
+#endif
             if (*pco2_obj == NULL || !(*pco2_obj)->ChkCoSet())
                 continue;
             if (!(*pco1_obj)->GetPDivideInfo()->Chk(*(*pco2_obj)->GetPDivideInfo()))
                 continue;
+#if defined(DUSK_TARGET_3DS)
+            dNativeLogic::census.ccCoArea++;
+            if (preMode != dNativeLogic::Off) {
+                const CoShape& s1 = l_coShape[pco1_obj - mpObjCo];
+                const CoShape& s2 = l_coShape[pco2_obj - mpObjCo];
+                const int pre = s1.obj == *pco1_obj && s2.obj == *pco2_obj ? coPreCross(s1, s2) : -1;
+                if (pre == 0) {
+                    dNativeLogic::census.ccPreSkipped++;
+                    if (preMode != dNativeLogic::Verify) {
+                        continue;
+                    }
+                    // Verify: the original predicates must agree ("no hit").
+                    dNativeLogic::census.ccPreChecks++;
+                    bool originalHit = false;
+                    if (!ChkNoHitCo(*pco1_obj, *pco2_obj)) {
+                        f32 len;
+                        originalHit = (*pco1_obj)->GetShapeAttr()->CrossCo(*(*pco2_obj)->GetShapeAttr(), &len);
+                    }
+                    if (!originalHit) {
+                        continue;
+                    }
+                    dNativeLogic::census.ccPreMismatches++;
+                    // Fall through: the original path below handles the pair.
+                }
+            }
+#endif
             if (ChkNoHitCo(*pco1_obj, *pco2_obj))
                 continue;
+#if defined(DUSK_TARGET_3DS)
+            dNativeLogic::census.ccCoShape++;
+#endif
 
             cCcD_ShapeAttr* pco2_sa = (*pco2_obj)->GetShapeAttr();
             JUT_ASSERT(456, pco2_sa != NULL);
 
             f32 cross_len;
             if (pco1_sa->CrossCo(*pco2_sa, &cross_len)) {
+#if defined(DUSK_TARGET_3DS)
+                dNativeLogic::census.ccCoHits++;
+#endif
                 SetCoCommonHitInf(*pco1_obj, &pco1_sa->GetCoCP(), *pco2_obj, &pco2_sa->GetCoCP(), cross_len);
             }
         }
@@ -467,9 +630,24 @@ void cCcS::Move() {
     JUT_ASSERT(866, m_debug_code == 1234);
     #endif
 
+#if defined(DUSK_TARGET_3DS)
+    {
+        DUSK_SPLIT_SPAN(split_area, "cc.s.area");
+        CalcArea();
+    }
+    {
+        DUSK_SPLIT_SPAN(split_attg, "cc.s.attg");
+        ChkAtTg();
+    }
+    {
+        DUSK_SPLIT_SPAN(split_co, "cc.s.co");
+        ChkCo();
+    }
+#else
     CalcArea();
     ChkAtTg();
     ChkCo();
+#endif
     MoveAfterCheck();
 
     field_0x280c = mObjAtCount;
@@ -482,6 +660,41 @@ void cCcS::Move() {
     mObjCoCount = 0;
     mObjCount = 0;
 }
+
+#if defined(DUSK_TARGET_3DS)
+unsigned cCcS::RemoveActor(const fopAc_ac_c* actor, const void* begin0, const void* end0,
+                           const void* begin1, const void* end1) {
+    unsigned removed = 0;
+    // Address ranges first: they need no read through the collider.
+    auto owned = [&](cCcD_Obj* obj) {
+        if (obj == NULL) {
+            return false;
+        }
+        const void* at = obj;
+        if ((at >= begin0 && at < end0) || (at >= begin1 && at < end1)) {
+            return true;
+        }
+        cCcD_Stts* stts = obj->GetStts();
+        return stts != NULL && stts->GetActor() == actor;
+    };
+    auto compact = [&](cCcD_Obj** list, u16& count) {
+        u16 kept = 0;
+        for (u16 i = 0; i < count; ++i) {
+            if (owned(list[i])) {
+                ++removed;
+            } else {
+                list[kept++] = list[i];
+            }
+        }
+        count = kept;
+    };
+    compact(mpObjAt, mObjAtCount);
+    compact(mpObjTg, mObjTgCount);
+    compact(mpObjCo, mObjCoCount);
+    compact(mpObj, mObjCount);
+    return removed;
+}
+#endif
 
 void cCcS::DrawClear() {
     for (cCcD_Obj** obj = mpObjAt; obj < mpObjAt + mObjAtCount; ++obj) {

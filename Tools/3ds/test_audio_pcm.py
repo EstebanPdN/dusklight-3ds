@@ -53,14 +53,22 @@ def main():
     run(flags + ["-Wno-sign-compare", "-DDUSK_TARGET_3DS=1", f"-I{TESTS / 'audio_pcm_stubs'}",
                  f"-I{RUNTIME}", TESTS / "audio_pcm_lifecycle_test.cpp", RUNTIME / "audio_ndsp.cpp",
                  *shared, component, "-o", out / "lifecycle-test"])
-    for mode in ["ndsp", "muted", "disabled", "fatal"]:
+    for mode in ["ndsp", "ndsp48", "old", "muted", "disabled", "fatal", "stall"]:
+        print(run([out / "lifecycle-test", out / mode, mode]).strip())
+    # Where the mixer runs (audio-core.txt): core 3, core 1 under the APT
+    # limit, and every fallback to core 2.
+    for mode in ["place-auto", "place-word", "place-3", "place-refuse3", "place-mixer-refuse3", "place-2",
+                 "place-1", "place-1-default", "place-1-refused", "place-1-mixer-refused"]:
         print(run([out / "lifecycle-test", out / mode, mode]).strip())
 
     outputs = []
     for path in sorted(out.rglob("*.wav")):
         data = path.read_bytes()
+        # The game's PCM is 32 kHz (7 x 80 frames per block) unless a 48 kHz switch was set.
+        rate48 = bool({"capture", "ndsp48", "old"} & set(path.relative_to(out).parts))
+        block_frames = 800 if rate48 else 560
         with wave.open(str(path), "rb") as wav:
-            assert wav.getnchannels() == 2 and wav.getsampwidth() == 2 and wav.getframerate() == 48000
+            assert wav.getnchannels() == 2 and wav.getsampwidth() == 2 and wav.getframerate() == (48000 if rate48 else 32000)
             pcm = wav.readframes(wav.getnframes())
             assert len(data) == 44 + len(pcm)
         metadata_path = path.with_suffix(".json")
@@ -83,7 +91,7 @@ def main():
                 assert metadata["capture_submitted_queue_calls"] == metadata["capture_observed_completed_blocks"] == 0
             if path.name == "audio-pcm.wav":
                 assert metadata["first_captured_block"] == 1 and metadata["end_block_exclusive"] == 5
-                assert struct.unpack("<" + "hh" * 3200, pcm) == (8192, -16384) * 3200
+                assert struct.unpack("<" + "hh" * (4 * block_frames), pcm) == (8192, -16384) * (4 * block_frames)
                 if "muted" in path.parts:
                     assert metadata["output"] == "muted_missing_component" and metadata["ndsp_result"] == 0xd880a7fa
                     assert metadata["submitted_queue_calls"] == metadata["observed_completed_blocks"] == 0

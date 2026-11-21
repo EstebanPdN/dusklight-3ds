@@ -1,8 +1,13 @@
+#include "boot_options.hpp"
 #include "developer_script.hpp"
 #include "dump_io.hpp"
 #include "gx_state.hpp"
 #include "gx_profile.hpp"
 #include "gx_commands.hpp"
+#include "gx_pica_material.hpp"
+#include "gx_indirect_gpu.hpp"
+#include "hud_tape.hpp"
+#include "screen_tape.hpp"
 #include "../gx_command_draw.hpp"
 #include "../gx_pica.hpp"
 #include "gx_framebuffer.hpp"
@@ -45,9 +50,8 @@ std::uint32_t key(std::string_view name){
     for(const auto& entry:table)if(name==entry.name)return entry.key;
     return 0;
 }
-template<class F> bool eachLine(const char* name,F&& handle){
-    char path[64];std::snprintf(path,sizeof(path),"%s%s",root,name);
-    auto* file=std::fopen(path,"rb");if(!file)return true;
+template<class F> bool eachLine(const BootOptions& options,const char* name,F&& handle){
+    auto* file=options.open(name);if(!file)return true;
     static char text[16*1024];
     const auto count=std::fread(text,1,sizeof(text),file);const bool error=std::ferror(file)||count==sizeof(text);std::fclose(file);
     if(error)return false;
@@ -61,8 +65,8 @@ template<class F> bool eachLine(const char* name,F&& handle){
     }
     return true;
 }
-template<std::size_t N> bool frameList(const char* name,std::array<std::uint64_t,N>& out,unsigned& count){
-    return eachLine(name,[&](std::string_view line){
+template<std::size_t N> bool frameList(const BootOptions& options,const char* name,std::array<std::uint64_t,N>& out,unsigned& count){
+    return eachLine(options,name,[&](std::string_view line){
         std::uint64_t frame{};if(!number(token(line),frame)||!token(line).empty()||count>=N)return false;
         out[count++]=frame;return true;
     });
@@ -91,62 +95,178 @@ bool parseInputScriptLine(std::string_view line,ScriptedInput& out){
     out=parsed;return true;
 }
 void loadDeveloperScripts(){
+    const BootOptions options("sdmc:/3ds/dusklight");
     // Explicit A/B switch for measuring instrumentation overhead with one binary.
-    if(auto* profile=std::fopen("sdmc:/3ds/dusklight/profile-all-frames.txt","rb")){
+    if(auto* profile=options.open("profile-all-frames.txt")){
         std::fclose(profile);gxProfileEveryFrame=true;
     }
     // Development switches for the native fast paths: '0' turns the path off
     // (A/B measurement), 'v' keeps compiled lists on and checks every replay
     // against the interpreter.
-    if(auto* lists=std::fopen("sdmc:/3ds/dusklight/compiled-lists.txt","rb")){
+    if(auto* lists=options.open("compiled-lists.txt")){
         const int c=std::fgetc(lists);std::fclose(lists);
         gx::setCompiledLists(c!='0',c=='v');
         OSReport("Native compiled lists: %s\n",c=='0'?"off":c=='v'?"verified against the interpreter":"on");
     }
-    if(auto* fog=std::fopen("sdmc:/3ds/dusklight/triangle-fog-mesh.txt","rb")){
+    // J2D material memo (gx_commands.cpp): '0' keeps every HUD material on
+    // the original setters (A/B), 'v' checks each replay and recording.
+    // Read here, at boot, rather than inside the first J2DMaterial::setGX.
+    if(auto* memo=options.open("material-memo.txt")){
+        const int c=std::fgetc(memo);std::fclose(memo);
+        gx::setMaterialMemo(c!='0',c=='v');
+    }
+    // TEV sum rules (gx_pica_material.cpp): '0' keeps the wave 1 planner,
+    // whose refusals then take the one-stage stand-in again (A/B).
+    if(auto* sums=options.open("tev-sum-rules.txt")){
+        const int c=std::fgetc(sums);std::fclose(sums);
+        gx::setMaterialSumRules(c!='0');
+        OSReport("Native TEV sum rules: %s\n",c=='0'?"off (wave 1 planner)":"on");
+    }
+    // Incremental state key (gx_commands.hpp, stateHashComponents): '0'
+    // rehashes the register words on every state epoch change as before (A/B),
+    // 'v' keeps it on and recomputes on each epoch change, counting differences.
+    if(auto* hash=options.open("state-hash.txt")){
+        const int c=std::fgetc(hash);std::fclose(hash);
+        gx::setStateHash(c!='0',c=='v');
+        OSReport("Native state key: %s\n",c=='0'?"rehashed per epoch":c=='v'?"incremental, verified per epoch":"incremental");
+    }
+    if(auto* fog=options.open("triangle-fog-mesh.txt")){
         const int c=std::fgetc(fog);std::fclose(fog);
         setTriangleFogMeshPass(c!='0');
         OSReport("Native triangle fog: %s\n",c=='0'?"one pair of draws per triangle":"two whole-mesh passes");
     }
-    if(auto* rigidFog=std::fopen("sdmc:/3ds/dusklight/rigid-triangle-fog.txt","rb")){
+    // Alpha-union layers (gx_pica.cpp): '0' one pair of draws per triangle on
+    // the CPU vertex path (Alpha 6), '1' two whole-mesh passes on the CPU
+    // vertex path; absent or '2', two whole-mesh passes on the GPU shaders.
+    {int c='2';
+    if(auto* unionFile=options.open("alpha-union.txt")){
+        c=std::fgetc(unionFile);std::fclose(unionFile);
+        setAlphaUnionPasses(c!='0',c!='0'&&c!='1');
+    }
+    OSReport("Native alpha-union layers: %s\n",c=='0'?"one pair of draws per triangle (SD switch)":
+        c=='1'?"two whole-mesh passes on the CPU vertex path (SD switch)":"two whole-mesh passes on the GPU");}
+    if(auto* rigidFog=options.open("rigid-triangle-fog.txt")){
         const int c=std::fgetc(rigidFog);std::fclose(rigidFog);
         setRigidTriangleFog(c=='1');
         OSReport("Native GPU triangle fog: %s\n",c=='1'?"on (unexercised route)":"off");
     }
-    if(auto* limit=std::fopen("sdmc:/3ds/dusklight/texture-object-limit.txt","rb")){
+    if(auto* limit=options.open("texture-object-limit.txt")){
         unsigned value=0;const int got=std::fscanf(limit,"%u",&value);std::fclose(limit);
         if(got==1&&value){gx::setTextureObjectSoftLimit(value);OSReport("Native GX texture object sweep threshold: %u (development switch)\n",value);}
     }
-    if(auto* immediate=std::fopen("sdmc:/3ds/dusklight/immediate-records.txt","rb")){
+    if(auto* immediate=options.open("immediate-records.txt")){
         const int c=std::fgetc(immediate);std::fclose(immediate);
         setImmediateDrawRecords(c!='0');
         OSReport("Native immediate draw records: %s\n",c=='0'?"off":"on");
     }
-    if(auto* file=std::fopen("sdmc:/3ds/dusklight/shadows.txt","rb")){
+    // Immediate record shortcuts (gx_command_draw.cpp): '0' turns off the
+    // unchanged-draw repeats and the lookup key memo for an A/B. Both are
+    // exact (host parity test), so they are on without the file.
+    if(auto* shortcuts=options.open("immediate-shortcuts.txt")){
+        const int c=std::fgetc(shortcuts);std::fclose(shortcuts);
+        setImmediateDrawShortcuts(c!='0');
+        OSReport("Native immediate draw shortcuts: %s\n",c=='0'?"off":"on");
+    }
+    // Lean native shape replay (gx_command_draw.cpp): '0' plans every
+    // replayed shape the complete way (A/B measurement).
+    if(auto* lean=options.open("native-lean-replay.txt")){
+        const int c=std::fgetc(lean);std::fclose(lean);
+        setNativeLeanReplay(c!='0');
+        OSReport("Native lean shape replay: %s\n",c=='0'?"off (SD switch)":"on");
+    }
+    // HUD tape (hud_tape.hpp): pictures per recording of the 2D pass. '1'
+    // draws the pass in every picture (Alpha 6), '2' every second one (the
+    // default since Alpha 7), up to '8'.
+    if(auto* file=options.open("hud-tape.txt")){
+        const int c=std::fgetc(file);std::fclose(file);
+        if(c>='1'&&c<='8')setHudTapePictures(unsigned(c-'0'));
+    }
+    // Retained 2D screens (screen_tape.hpp): '0' draws every screen in every
+    // picture (Alpha 7), '1' (no file) replays unchanged screens, 'v' draws
+    // them as well and compares the two command runs.
+    if(auto* file=options.open("screen-tape.txt")){
+        const int c=std::fgetc(file);std::fclose(file);
+        if(c=='0')setScreenTapeMode(ScreenTapeMode::off);
+        else if(c=='v')setScreenTapeMode(ScreenTapeMode::verify);
+        else if(c=='1')setScreenTapeMode(ScreenTapeMode::on);
+    }
+    // The two work together: in a picture the HUD tape records, the retained
+    // screens replay what did not change; the picture after it runs the tape.
+    OSReport("Native retained 2D screens: %s (screen-tape.txt)\n",screenTapeMode()==ScreenTapeMode::off?"off":
+        screenTapeMode()==ScreenTapeMode::verify?"on, verified against a real draw":"on");
+    OSReport("Native HUD tape: one recording of the 2D pass every %u pictures%s\n",hudTapePictures(),hudTapePictures()<2?" (off)":"");
+    // Draw-gap paths (gx_command_draw.hpp), on by default: '0' turns one off
+    // for an A/B run.
+    if(auto* file=options.open("fallback-records.txt")){
+        const int c=std::fgetc(file);std::fclose(file);
+        setNativeFallbackRecords(c!='0');
+        OSReport("Native fallback records: %s\n",c=='0'?"off (stand-in draws take the complete path)":"on");
+    }
+    if(auto* file=options.open("palette-split.txt")){
+        const int c=std::fgetc(file);std::fclose(file);
+        setPaletteSplit(c!='0');
+        OSReport("Native palette split: %s\n",c=='0'?"off (overflowing palettes on the CPU vertex route)":"on");
+    }
+    if(auto* file=options.open("mt-single-attribute.txt")){
+        const int c=std::fgetc(file);std::fclose(file);
+        setCompactSingleAttribute(c!='0');
+        OSReport("Native one-attribute formats: %s\n",c=='0'?"CPU vertex route":"multi-texture GPU route");
+    }
+    if(auto* file=options.open("shadows.txt")){
         const int c=std::fgetc(file);std::fclose(file);
         if(c>='0'&&c<='2'){native_effects::shadows=c-'0';OSReport("Native shadows: %d (0 off, 1 blobs only, 2 blobs and model shadows)\n",c-'0');}
     }
-    if(auto* file=std::fopen("sdmc:/3ds/dusklight/bloom.txt","rb")){
+    if(auto* file=options.open("bloom.txt")){
         const int c=std::fgetc(file);std::fclose(file);
         if(c>='0'&&c<='1'){native_effects::bloom=c-'0';OSReport("Native bloom: %s\n",c=='1'?"on":"off");}
     }
-    if(auto* file=std::fopen("sdmc:/3ds/dusklight/particles.txt","rb")){
+    if(auto* file=options.open("particles.txt")){
         const int c=std::fgetc(file);std::fclose(file);
         if(c>='0'&&c<='2'){native_effects::particles=c-'0';OSReport("Native world particles: %d (0 off, 1 one draw per particle, 2 one draw per emitter)\n",c-'0');}
     }
-    if(auto* cls=std::fopen("sdmc:/3ds/dusklight/profile-class.txt","rb")){
+    if(auto* file=options.open("refraction.txt")){
+        const int c=std::fgetc(file);std::fclose(file);
+        if(c>='0'&&c<='3'){native_effects::refraction=c-'0';OSReport("Native refraction particles: %d (0 left out, 1 those without a warp, 2 also the warped ones with a sway; 1-2 only when the frame copy is already made, 3 always)\n",c-'0');}
+    }
+    if(auto* file=options.open("particle-mask.txt")){
+        const int c=std::fgetc(file);std::fclose(file);
+        if(c>='0'&&c<='1'){native_effects::particleMask=c-'0';OSReport("Native particle masks: %s\n",c=='1'?"own coordinates (original)":"main texture coordinates (Alpha 6)");}
+    }
+    // Particle emitter loop (JPAResource.cpp, JPANativeDrawGroup): '0' is the
+    // Alpha 11 loop, '1' only leaves out emitters with nothing on screen.
+    if(auto* file=options.open("particle-runs.txt")){
+        const int c=std::fgetc(file);std::fclose(file);
+        if(c>='0'&&c<='2'){native_effects::particleRuns=c-'0';OSReport("Native particle emitter loop: %d (0 Alpha 11, 1 emitters off screen left out, 2 also emitters of one resource in one batch)\n",c-'0');}
+    }
+    // Pixels: emitters whose whole footprint is smaller are left out (off by default).
+    if(auto* file=options.open("particle-size-cull.txt")){
+        float pixels=0.0f;const bool read=std::fscanf(file,"%f",&pixels)==1;std::fclose(file);
+        if(read&&pixels>=0.0f&&pixels<=64.0f){native_effects::particleCullPixels=pixels;OSReport("Native particle size cull: emitters under %.2f pixels left out\n",double(pixels));}
+    }
+    if(auto* cls=options.open("profile-class.txt")){
         const int c=std::fgetc(cls);std::fclose(cls);
         if(c>='0'&&c<='3'){gxProfileClassFilter=c-'0';OSReport("Native profile class filter: %d (2 = orthographic only)\n",gxProfileClassFilter);}
     }
+    // Indirect warps as constant offsets on the GPU route (gx_indirect_gpu.hpp):
+    // the largest accepted warp in destination texels. No file: every warp
+    // (water without its moving distortion, Alpha 8); 0: exact plans only,
+    // the rest on the CPU route with its animation (Alpha 7); negative:
+    // every warped draw on the CPU route (wave 1).
+    if(auto* file=options.open("indirect-constant.txt")){
+        float texels=0;const int got=std::fscanf(file,"%f",&texels);std::fclose(file);
+        if(got==1)gx::setIndirectConstantLimit(texels);
+    }
+    OSReport("Native indirect constant offsets: %s, limit %.2f texels (indirect-constant.txt)\n",
+        gx::indirectConstantLimit<0?"off":gx::indirectConstantLimit>0?"approximate":"exact only",double(gx::indirectConstantLimit));
     OSReport("Native detailed profiling: %s\n",gxProfileEveryFrame?"every frame":"one frame in 30");
-    const bool okay=eachLine("input-script.txt",[](std::string_view line){
+    const bool okay=eachLine(options,"input-script.txt",[](std::string_view line){
             ScriptedInput entry;if(inputCount>=inputs.size()||!parseInputScriptLine(line,entry))return false;
             inputs[inputCount++]=entry;return true;})&&
-        frameList("capture-frames.txt",captures,captureCount)&&
-        frameList("dump-frames.txt",dumps,dumpCount)&&
-        frameList("depth-audit-frames.txt",depthAudits,depthAuditCount)&&
-        frameList("depth-retained-frames.txt",retainedFrames,retainedFrameCount)&&
-        eachLine("exit-frame.txt",[](std::string_view line){
+        frameList(options,"capture-frames.txt",captures,captureCount)&&
+        frameList(options,"dump-frames.txt",dumps,dumpCount)&&
+        frameList(options,"depth-audit-frames.txt",depthAudits,depthAuditCount)&&
+        frameList(options,"depth-retained-frames.txt",retainedFrames,retainedFrameCount)&&
+        eachLine(options,"exit-frame.txt",[](std::string_view line){
             if(hasExit||!number(token(line),exitFrame)||!token(line).empty())return false;
             hasExit=true;return true;});
     if(!okay)OSPanic(__FILE__,__LINE__,"Invalid developer script on SD card");
@@ -163,7 +283,7 @@ void loadDeveloperScripts(){
             static_cast<unsigned long long>(hasExit?exitFrame:0));
     diagnosticsRequested=inputCount||captureCount||dumpCount||depthAuditCount||retainedFrameCount||hasExit||
         gxProfileEveryFrame||gxProfileClassFilter>=0;
-    if(auto* file=std::fopen("sdmc:/3ds/dusklight/diagnostics.txt","rb")){std::fclose(file);diagnosticsRequested=true;}
+    if(auto* file=options.open("diagnostics.txt")){std::fclose(file);diagnosticsRequested=true;}
     OSReport("Native diagnostics: %s\n",diagnosticsRequested?"detailed (developer run)":"off (ordinary play; telemetry kept in RAM)");
 }
 bool developerDiagnosticsRequested(){return diagnosticsRequested;}

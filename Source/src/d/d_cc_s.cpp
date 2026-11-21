@@ -4,6 +4,7 @@
  */
 
 #include "d/dolzel.h" // IWYU pragma: keep
+#include "d/d_tick_profile.h"
 
 #include "d/d_cc_s.h"
 #include "d/d_com_inf_game.h"
@@ -738,6 +739,7 @@ void dCcS::MoveAfterCheck() {}
 void dCcS::DrawAfter() {}
 
 void dCcS::Move() {
+    DUSK_TICK_PROFILE(tick_profile, "logic.ccMove");
     #if DEBUG
     if (s_Hio.ChkAllMassTimer()) {
         OnMassAllTimer();

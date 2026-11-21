@@ -79,6 +79,13 @@ public:
     virtual void executeAfter(JPABaseEmitter*) {}
     virtual void draw(JPABaseEmitter*) {}
     virtual void drawAfter(JPABaseEmitter*) {}
+#if defined(DUSK_TARGET_3DS)
+    // True when draw() and drawAfter() do nothing at all (no draw, no state):
+    // the emitter's refraction particles may then be left to the second-core
+    // worker's decision (JPAResource.cpp, a conditional section). Unknown
+    // callbacks keep the game thread's own decision.
+    virtual bool drawsNothing() const { return false; }
+#endif
 };
 
 enum {

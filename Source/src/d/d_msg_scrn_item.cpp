@@ -425,7 +425,7 @@ void dMsgScrnItem_c::exec() {
         setBpk1Animation(field_0x12c[1]);
         field_0x19d = true;
     }
-#if !TARGET_PC
+#if !TARGET_PC || defined(DUSK_TARGET_3DS)
     for (int i = 0; i < 1; i++) {
         field_0x140[i] += g_MsgObject_HIO_c.mBoxItemAnmSpeed;
         if (field_0x140[i] >= field_0x118[i]->getFrameMax()) {

@@ -3093,7 +3093,7 @@ void dMeter2_c::alphaAnimeButtonCross() {
     }
 
     if (mpMap != NULL) {
-        IF_NOT_DUSK(mpMap->setMapAlpha((field_0x190 * 255.0f) / 5.0f));
+        DUSK_ORIGINAL_ONLY(mpMap->setMapAlpha((field_0x190 * 255.0f) / 5.0f));
     }
 }
 

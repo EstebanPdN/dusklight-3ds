@@ -2,6 +2,7 @@
 #include <array>
 #include "runtime/gx_stream.hpp"
 #include "runtime/gx_state.hpp"
+#include "runtime/perf_features.hpp"
 #include <dolphin/gx.h>
 #include <dolphin/os.h>
 #if defined(DUSK_PICA_GAME_DRAW)
@@ -18,7 +19,7 @@ thread_local dusk::native::gx::CommandStream* current=nullptr;
 void write(u64 value,unsigned count,const char* call){
     if(!current)fail(call);
     u8 bytes[8];for(unsigned i=0;i<count;++i)bytes[i]=static_cast<u8>(value>>((count-i-1)*8));
-    if(!current->write({bytes,count}))fail(call);
+    if(!current->writeValue(bytes,count))fail(call);
 }
 void resetOwnerState(){
     if(current&&!current->resetAutomaticSuOwnerState())fail("resetState/automatic SU busy");
@@ -54,9 +55,30 @@ void duskNativeCallVertexSetup(const void* data,u32 size){
     static std::array<u8,0x180> last{};static u32 lastSize{},lastEpoch{};static bool valid{};
     if(!current||(!data&&size))fail("duskNativeCallVertexSetup");
     if(valid&&size==lastSize&&current->registers().vertexSetupEpoch==lastEpoch&&!std::memcmp(data,last.data(),size))return;
+    // packetPaint: the epoch also moves when a shape binds its matrix arrays
+    // (slots 12-15, which no vertex setup list touches), so the test above
+    // misses on nearly every packet. The same bytes again, with every
+    // descriptor, format and array binding they set still in place, are
+    // held as well (CommandStream::callHeld).
+    if(valid&&size==lastSize&&dusk::native::features::on(dusk::native::features::Id::packetPaint)&&
+       !std::memcmp(data,last.data(),size)&&current->callHeld({static_cast<const u8*>(data),size})){
+        lastEpoch=current->registers().vertexSetupEpoch;return;
+    }
     GXCallDisplayList(data,size);
     valid=size&&size<=last.size();
     if(valid){std::memcpy(last.data(),data,size);lastSize=size;lastEpoch=current->registers().vertexSetupEpoch;}
+}
+// packetPaint: J3DCurrentMtx::load (CP 0x30, CP 0x40, XF 0x1018-0x1019) as
+// the typed writes those three commands become once parsed: the same
+// applyCp and XF store, the same command counts, a held merged draw drawn
+// first in both. Only on an idle stream outside a native packet capture,
+// whose records keep the commands' own byte form.
+bool duskNativeLoadCurrentMtx(u32 a,u32 b){
+    using namespace dusk::native;
+    if(!current||!features::on(features::Id::packetPaint)||!current->idle()||current->capturing()||current->nativePendingRun())return false;
+    const u32 both[2]{a,b};
+    if(!current->writeCp(0x30,a)||!current->writeCp(0x40,b)||!current->writeXf(0x1018,both))fail("J3DCurrentMtx::load");
+    return true;
 }
 void GXNativeLoadIndx(u8 cmd,u16 indx,u16 addr){
     if(!current||!current->loadIndexed(cmd,indx,addr))fail("GXNativeLoadIndx");

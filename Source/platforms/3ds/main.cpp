@@ -6,14 +6,21 @@
 #if defined(DUSK_PICA_GAME_DRAW)
 #include "native/game_draw_api.hpp"
 #endif
+#include "runtime/beta_screen.hpp"
 #include <3ds.h>
 #include <citro3d.h>
 #include "runtime/ctru_abi.hpp"
 #include "diagnostics.hpp"
 #include "runtime/bootstrap.hpp"
+#ifdef DUSK_GAME_STARTUP
+#include "runtime/application_dump_ctru.hpp"
+#include "runtime/frame_telemetry.hpp"
+#include "runtime/benchmark_input.hpp"
+#endif
 #include "runtime/cache_maintenance_profile.hpp"
 #include "runtime/video_retrace.hpp"
 #include "runtime/gpu_sync.hpp"
+#include "runtime/gpu_canary.hpp"
 #include "runtime/gx_framebuffer.hpp"
 #include "runtime/video_mode.hpp"
 #include "runtime/game_startup.hpp"
@@ -28,7 +35,10 @@
 #include "runtime/gx_state.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <malloc.h>
 
@@ -138,39 +148,155 @@ void panel(const DiagnosticSnapshot& s, unsigned page, const DumpArm& arm, bool 
 }
 namespace dusk::native {
 // Hardware diagnosis: the native log is kept in a RAM ring and written to
-// sdmc:/3ds/DuskLight/log.txt only by the main thread (flushNativeLog, every
-// 30 frames) or on fatal/exception. Per-line SD writes from many threads made
+// sdmc:/3ds/DuskLight/log.txt only by the main thread (flushNativeLog from the
+// frame loop) or on fatal/exception. Per-line SD writes from many threads made
 // the system FS module fault on hardware.
 // The ring lives in the linear heap: the executable's static size must stay at
 // the 114 baseline (code+bss+96 MiB heaps fill the New 3DS application region).
-namespace { constexpr std::size_t logRingBytes=128*1024; char* logRing{}; std::size_t logHead{},logFlushed{}; LightLock logLock=1; DurableLog sdLog{}; bool sdLogTried{};
+namespace { constexpr std::size_t logRingBytes=128*1024,flushChunkBytes=32*1024; char* logRing{}; char* flushChunk{};
+std::size_t logHead{},logFlushed{}; LightLock logLock=1; DurableLog sdLog{}; bool sdLogTried{};
+// One SD writer at a time (frame loop, fatal paths); logLock only guards the ring.
+LightLock flushLock=1; u64 lastFlushTick{};
+struct { unsigned calls,writes; std::uint64_t bytes,ticks,longest; } flushStats{};
 // Each start keeps the logs of the three before it (log-1.txt is the last
 // one): a console that froze and was switched off keeps its evidence.
-void openSdLog(){ if(sdLogTried)return; sdLogTried=true; durableRotate("/3ds/DuskLight/log","txt",3); durableLogOpen(sdLog,"/3ds/DuskLight/log.txt"); } }
+void openSdLog(){ if(sdLogTried)return; sdLogTried=true; durableRotate("/3ds/DuskLight/log","txt",3); durableLogOpen(sdLog,"/3ds/DuskLight/log.txt"); }
+// Ring bytes [from, from+n) into out; logLock held.
+void copyRing(std::size_t from,char* out,std::size_t n){
+    const auto at=from%logRingBytes,first=std::min(n,logRingBytes-at);
+    __builtin_memcpy(out,logRing+at,first);
+    __builtin_memcpy(out+first,logRing,n-first);
+} }
 void logText(const char* text) {
     const auto length=__builtin_strlen(text);
     svcOutputDebugString(text, length);
     LightLock_Lock(&logLock);
-    if(!logRing)logRing=static_cast<char*>(linearAlloc(logRingBytes));
+    if(!logRing){logRing=static_cast<char*>(linearAlloc(logRingBytes));flushChunk=static_cast<char*>(linearAlloc(flushChunkBytes));}
     if(!logRing){LightLock_Unlock(&logLock);return;}
     for(std::size_t n=0;n<length;++n)logRing[(logHead+n)%logRingBytes]=text[n];
     logHead+=length;
     LightLock_Unlock(&logLock);
 }
 void flushNativeLog(){
-    LightLock_Lock(&logLock);
+    // SD writes take tens of milliseconds each. They used to run under
+    // logLock, so every thread that logged meanwhile (loaders, the audio
+    // mixer) waited for the card; Alpha 6 saw fills of hundreds of ms right
+    // after this flush. Now the ring is copied under the lock and written
+    // outside it, in chunks of up to 32 KiB: one FS call each instead of one
+    // per 4 KiB. Each write is on the card when it returns (FS flush), even if
+    // the console has to be switched off next.
+    LightLock_Lock(&flushLock);
+    const u64 start=svcGetSystemTick();
     openSdLog();
-    if(logHead-logFlushed>logRingBytes)logFlushed=logHead-logRingBytes;
-    // Written through the FS service with a flush: it is on the card when
-    // this returns, even if the console has to be switched off next.
-    char chunk[4096];
-    while(sdLog.open&&logRing&&logFlushed<logHead){
-        std::size_t n=0;
-        while(n<sizeof(chunk)&&logFlushed+n<logHead){chunk[n]=logRing[(logFlushed+n)%logRingBytes];++n;}
-        if(!durableLogAppend(sdLog,chunk,n))break;
-        logFlushed+=n;
+    char fallback[2048];
+    char* chunk=flushChunk?flushChunk:fallback;
+    const std::size_t capacity=flushChunk?flushChunkBytes:sizeof(fallback);
+    std::size_t total=0;
+    // Up to what was waiting on entry: other threads keep logging during the
+    // SD writes, and chasing them would give the flush no fixed end.
+    LightLock_Lock(&logLock);const std::size_t target=logHead;LightLock_Unlock(&logLock);
+    while(sdLog.open){
+        LightLock_Lock(&logLock);
+        if(logHead-logFlushed>logRingBytes)logFlushed=logHead-logRingBytes;
+        const std::size_t from=logFlushed,n=logRing&&target>from?std::min(capacity,target-from):0;
+        if(n)copyRing(from,chunk,n);
+        LightLock_Unlock(&logLock);
+        if(!n||!durableLogAppend(sdLog,chunk,n))break;
+        LightLock_Lock(&logLock);logFlushed=from+n;LightLock_Unlock(&logLock);
+        total+=n;++flushStats.writes;
     }
-    LightLock_Unlock(&logLock);
+    const u64 end=svcGetSystemTick();lastFlushTick=end;
+    ++flushStats.calls;flushStats.bytes+=total;flushStats.ticks+=end-start;flushStats.longest=std::max<std::uint64_t>(flushStats.longest,end-start);
+    const auto stats=flushStats;
+    if(stats.calls>=64)flushStats={};
+    LightLock_Unlock(&flushLock);
+    // Its cost is outside the frame telemetry (the flush follows the sample).
+    if(stats.calls>=64){
+        char line[160];
+        std::snprintf(line,sizeof(line),"Native log flush: %u calls, %llu bytes in %u SD writes, %.1f ms in all, longest %.1f ms\n",stats.calls,
+            static_cast<unsigned long long>(stats.bytes),stats.writes,stats.ticks*1000.0/SYSCLOCK_ARM11,stats.longest*1000.0/SYSCLOCK_ARM11);
+        logText(line);
+    }
+}
+// The frame loop's flush: at most every 5 seconds (it was every 30 pictures),
+// or sooner once a quarter of the ring is waiting so nothing is overwritten.
+// The SD writer runs below the game on its default core. Only bounded
+// capture admissions and explicit receipt fences wait for capture I/O.
+// Fatal paths still call flushNativeLog themselves (flushLock orders the two).
+namespace { LightEvent sdWriterKick, captureProgress; Thread sdWriter{}; bool sdWriterTried{}; std::atomic<bool> sdWriterLogDue{},sdWriterStop{};
+void sdWriterMain(void*){
+    for(;;){
+        LightEvent_Wait(&sdWriterKick);
+        // If shutdown was signalled during a drain, service that final wake
+        // too. The producer has stopped before the shutdown wake is issued.
+        const bool stopping=sdWriterStop.load(std::memory_order_acquire);
+        if(sdWriterLogDue.exchange(false,std::memory_order_acq_rel))flushNativeLog();
+        gpuCanaryWriteSessionRecord();
+#ifdef DUSK_GAME_STARTUP
+        if (!writePendingZoneFrameCsv()) logText("Native story frame CSV write failed\n");
+        writeBenchmarkCapturePending();
+#endif
+        if(stopping)return;
+    }
+}
+bool sdWriterReady(){
+    if(!sdWriterTried){
+        sdWriterTried=true;LightEvent_Init(&sdWriterKick,RESET_ONESHOT);
+        LightEvent_Init(&captureProgress,RESET_ONESHOT);
+        s32 priority=0x30;svcGetThreadPriority(&priority,CUR_THREAD_HANDLE);
+        // Joinable: stopNativeSdWriter ends and joins it before libc unmaps
+        // the heap its stack is in.
+        sdWriter=threadCreate(sdWriterMain,nullptr,16*1024,priority+8<0x3f?priority+8:0x3f,-2,false);
+        logText(sdWriter?"Native SD writer thread started\n":"Native SD writer thread refused: log flushes stay on the game thread\n");
+    }
+    return sdWriter!=nullptr;
+}
+// Shutdown, main thread, after the game workers are joined. Its flushes and
+// session records go back to their callers (sdWriterReady is false after).
+void stopNativeSdWriter(){
+    if(!sdWriter)return;
+    // Only the stop flag below can let this worker return. Capture the
+    // handle while libctru still exposes it, even if the final wake preempts us.
+    const Handle kernel=threadGetHandle(sdWriter);
+    sdWriterStop.store(true,std::memory_order_release);LightEvent_Signal(&sdWriterKick);
+    // All producers have stopped. A healthy SD card took over seven seconds
+    // for individual visual pairs in Alpha19. Keep the heap and FS alive for
+    // the complete final drain. The kernel handle signals actual thread exit.
+    const Result joined=svcWaitSynchronization(kernel,U64_MAX);
+    if(joined!=0)containShutdownFailure("SD writer wait handle=%08lx result=%08lx",
+        static_cast<unsigned long>(kernel),static_cast<unsigned long>(joined));
+    threadFree(sdWriter);sdWriter=nullptr;
+    logText("Native shutdown phase=SD writer stop: joined\n");
+}}
+void containShutdownFailure(const char* format,...){
+    char reason[176],line[256];
+    std::va_list args;
+    va_start(args,format);
+    std::vsnprintf(reason,sizeof(reason),format,args);
+    va_end(args);
+    std::snprintf(line,sizeof(line),"Native shutdown failure: %s; kernel process exit\n",reason);
+    // An unjoined worker may own the ordinary log's locks. Issue the debug
+    // string and a separate FS_WRITE_FLUSH receipt without acquiring either.
+    svcOutputDebugString(line,std::strlen(line));
+    durableAppendText("/3ds/DuskLight/shutdown-errors.txt",line);
+    gpuCanarySessionFatal(reason);
+    svcExitProcess();
+}
+bool kickNativeSdWriterAsync(){
+    if(!sdWriterReady())return false;
+    LightEvent_Signal(&sdWriterKick);
+    return true;
+}
+void waitForNativeCaptureProgress(){LightEvent_Wait(&captureProgress);}
+void signalNativeCaptureProgress(){LightEvent_Signal(&captureProgress);}
+void kickNativeSdWriter(){if(!kickNativeSdWriterAsync())gpuCanaryWriteSessionRecord();}
+void flushNativeLogPeriodic(){
+    std::size_t pending;
+    LightLock_Lock(&logLock);pending=logHead-logFlushed;LightLock_Unlock(&logLock);
+    if(svcGetSystemTick()-lastFlushTick<5*SYSCLOCK_ARM11&&pending<logRingBytes/4)return;
+    if(!sdWriterReady()){flushNativeLog();return;}
+    // Due again only after this flush ends (lastFlushTick), not every picture.
+    if(!sdWriterLogDue.exchange(true,std::memory_order_acq_rel))LightEvent_Signal(&sdWriterKick);
 }
 std::size_t nativeLogPosition(){return logHead;}
 void writeNativeLogSince(std::size_t mark,std::FILE* file){
@@ -233,13 +359,26 @@ void logException(ERRF_ExceptionInfo* sdkInfo,CpuRegisters* regs){
             logFlushed+=n;
         }
     }
+    // Last, after the log is on the card: the GPU guard's session record, so
+    // the next start does not report a power-off or freeze. Once only, in
+    // case the handler itself faults.
+    static bool sessionRecorded;
+    if(!sessionRecorded){
+        sessionRecorded=true;char note[64];
+        std::snprintf(note,sizeof(note),"CPU exception pc=%08lx",static_cast<unsigned long>(regs->pc));
+        gpuCanarySessionFatal(note);
+    }
     svcExitProcess();
 }
 void installExceptionLogger(){threadOnException(logException,RUN_HANDLER_ON_FAULTING_STACK,WRITE_DATA_TO_HANDLER_STACK);}
 namespace { bool fatalUnattended; }
 void setFatalUnattended(bool unattended){fatalUnattended=unattended;}
 [[noreturn]] void fatal(const char* text) {
+    if(const auto relay=fatalRelayHook;relay&&relay(text))for(;;)svcSleepThread(1000000000LL);
     logText("Native fatal: ");logText(text);logText("\n");flushNativeLog();
+    // The GPU guard's session record would otherwise still say "running",
+    // and the next start would report a power-off or freeze (Alpha 6 zone 84).
+    gpuCanarySessionFatal(text);
     // A worker thread cannot own the console (the main loop redraws it) and
     // would hang silently: keep the log and terminate the whole process.
     if (threadGetCurrent() != nullptr) { logText("Native fatal on a worker thread: process exit\n"); flushNativeLog(); svcExitProcess(); }
@@ -254,7 +393,11 @@ void setFatalUnattended(bool unattended){fatalUnattended=unattended;}
     if (graphicsReady && !platformGpuFailurePending()) {
         std::printf("\x1b[2JNative fatal error\n%.200s\nSTART: exit\n", text);
         while (aptMainLoop()) {
+#ifdef DUSK_GAME_STARTUP
+            scanNativeGameInput(); if(nativeGameInput().down&KEY_START)break;
+#else
             hidScanInput(); if (hidKeysDown() & KEY_START) break;
+#endif
             gfxFlushBuffers(); gspWaitForVBlank();
         }
     }
@@ -264,10 +407,38 @@ void setFatalUnattended(bool unattended){fatalUnattended=unattended;}
     logText("Native fatal containment: kernel process exit; normal shutdown incomplete\n");
     svcExitProcess();
 }
+// newlib's abort, exit and _exit end the process without a word: operator
+// new out of memory, a pure virtual call or std::terminate (Azahar showed the
+// game simply vanishing in the first test zone). Linked with --wrap
+// (CMakeLists.txt), each now leaves its caller in the log first; abort and a
+// nonzero exit also close the GPU session record as a fatal, so the next
+// start does not report a power-off or a GPU stop.
+namespace {
+void reportProcessEnd(const char* what,int code,void* caller){
+    static std::atomic<bool> reported{};
+    if(reported.exchange(true))return; // exit calls _exit: one line
+    char line[128];
+    std::snprintf(line,sizeof(line),"Native process end: %s(%d) called from %p\n",what,code,caller);
+    logText(line);flushNativeLog();
+    if(code||std::strcmp(what,"abort")==0){
+        char note[64];std::snprintf(note,sizeof(note),"%s(%d) from %p",what,code,caller);
+        gpuCanarySessionFatal(note);
+    }
+}
+}
+extern "C" {
+[[noreturn]] void __real_abort();
+[[noreturn]] void __real_exit(int);
+[[noreturn]] void __real__exit(int);
+[[noreturn]] void __wrap_abort(){reportProcessEnd("abort",0,__builtin_return_address(0));__real_abort();}
+[[noreturn]] void __wrap_exit(int code){reportProcessEnd("exit",code,__builtin_return_address(0));__real_exit(code);}
+[[noreturn]] void __wrap__exit(int code){reportProcessEnd("_exit",code,__builtin_return_address(0));__real__exit(code);}
+}
 // Console GPU guard: the PICA stopped on a draw. The evidence is on the SD;
 // with `restart` the system is asked to start the game again (the guard leaves
 // that draw out), otherwise the message stays until START.
 [[noreturn]] void restartAfterGpuHang(const char* text,bool restart) {
+    if(const auto relay=gpuHangRelayHook;relay&&relay(text,restart))for(;;)svcSleepThread(1000000000LL);
     logText("Native GPU guard: ");logText(text);logText("\n");flushNativeLog();
     if (graphicsReady) {
         // Restarting the title does not reset a stopped PICA (CIA g: the next
@@ -281,7 +452,19 @@ void setFatalUnattended(bool unattended){fatalUnattended=unattended;}
     svcExitProcess();
 }
 void waitForRetrace() { waitVideoRetrace(); }
+namespace { std::atomic<std::uintptr_t> ignoredBegin{},ignoredEnd{}; std::atomic<std::uint32_t> ignoredCount{}; }
+void ignoreCacheInvalidation(const void* memory,std::uint32_t bytes){
+    const auto begin=reinterpret_cast<std::uintptr_t>(memory);
+    ignoredEnd.store(0,std::memory_order_relaxed);ignoredBegin.store(begin,std::memory_order_relaxed);ignoredEnd.store(begin+bytes,std::memory_order_relaxed);
+}
+std::uint32_t ignoredCacheInvalidations(){return ignoredCount.load(std::memory_order_relaxed);}
 void invalidateCache(void* memory, std::uint32_t size) {
+    // A range only this process's CPU threads use (ignoreCacheInvalidation):
+    // the cores' data caches are coherent, so the kernel call buys nothing.
+    const auto at=reinterpret_cast<std::uintptr_t>(memory);
+    if(at>=ignoredBegin.load(std::memory_order_relaxed)&&at+size<=ignoredEnd.load(std::memory_order_relaxed)){
+        ignoredCount.fetch_add(1,std::memory_order_relaxed);return;
+    }
     auto& profile=cacheMaintenanceProfile;
     const auto start=profile.active?svcGetSystemTick():0;
     // Game DCInvalidateRange on ordinary process memory. GSP rejects such ranges
@@ -317,17 +500,35 @@ int main() {
     installExceptionLogger();
     logText("Native entry: main\n");
     gfxInitDefault(); gfxSet3D(false); consoleInit(GFX_BOTTOM, nullptr); graphicsReady = true;
+#ifdef DUSK_GAME_STARTUP
+    startBetaScreen();
+#endif
     logText("Native entry: LCD console ready\n");
     bool new3ds = false;
     if (R_FAILED(APT_CheckNew3DS(&new3ds)) || !new3ds) fatal("New Nintendo 3DS is required");
     osSetSpeedupEnable(true); // libctru requests New3DS speed/L2; not a measured clock claim.
     logText("Native entry: Citro3D initialization\n");
-#if defined(DUSK_PICA_GAME_DRAW)
-    constexpr unsigned commandBytes=512*1024; // Native renderer admission contract.
+#if defined(DUSK_GAME_STARTUP)
+    // The game's PICA command arena. A dungeon frame emits more than 256 KiB of
+    // commands, and each time the arena runs out platformPrepareGpuDraw drains
+    // the whole GPU to reuse it (Alpha 6 console: 0.5 drains per frame, about
+    // 1.25 ms of waiting per frame). The earlier 512 KiB request depended on
+    // DUSK_PICA_GAME_DRAW, which the hardware build sets OFF, so the console
+    // ran Citro3D's 256 KiB default (the log's "65536 words"). 1 MiB of the
+    // 20 MiB linear heap; the least free linear memory seen in Alpha 6 was
+    // 5.9 MiB. SD switch gpu-arena-256k.txt restores the old size for an A/B.
+    unsigned commandBytes=1024*1024;
+    if(auto* small=std::fopen("sdmc:/3ds/DuskLight/gpu-arena-256k.txt","rb")){std::fclose(small);commandBytes=C3D_DEFAULT_CMDBUF_SIZE;}
 #else
     constexpr unsigned commandBytes=C3D_DEFAULT_CMDBUF_SIZE;
 #endif
     if (!C3D_Init(commandBytes)) fatal("Citro3D initialization failed");
+    {
+        char arena[128];
+        std::snprintf(arena,sizeof(arena),"Native GPU command arena: %u KiB (%u words); linear free %lu KiB\n",commandBytes/1024,commandBytes/4,
+            static_cast<unsigned long>(linearSpaceFree()/1024));
+        logText(arena);
+    }
     logText("Native entry: Citro3D ready; waiting for real VI IRQ\n");
     const auto retraceBefore = platformVideoRetraceCount();
     waitVideoRetrace();
@@ -354,21 +555,23 @@ int main() {
     const int gameResult=runOriginalGame();
     // runOriginalGame has joined audio and every managed game worker. Targets
     // and GPU/service workers must also be stopped before libc unmaps heaps.
+    stopNativeSdWriter();
     const auto remaining=threadStats();
-    if(remaining.workers||remaining.stackBytes||remaining.waitingQueues||!alphaIntervalCopySafe()){
-        logText("Native shutdown failure: retained workers or unsafe framebuffer; kernel process exit\n");
-        svcExitProcess();
+    if(remaining.workers||remaining.stackBytes||remaining.waitingQueues||sdWriter||!alphaIntervalCopySafe()){
+        containShutdownFailure("retained workers or unsafe framebuffer");
     }
     logText("Native shutdown phase=graphics stop\n");
     releaseCopyImages();
     C3D_Fini();
 #if defined(DUSK_PICA_GAME_DRAW)
-    if(!dusk::pica::game::releaseAfterContextDestroyed())svcExitProcess();
+    if(!dusk::pica::game::releaseAfterContextDestroyed())containShutdownFailure("graphics resource release failed");
 #endif
     releaseFramebufferReadback(); releaseFramebufferRecords();
     destroyPreview(); destroyGxPica(); destroyJ2dPictureProbe(); destroyCommandProbe();
     copyprobe::writeReport(true); // After all copy/cache destruction; outside game timing.
     gfxExit(); graphicsReady=false;
+    // No heartbeat writer, GPU work or graphics owner can still race the final record.
+    gpuCanarySessionEnd();
     logText("Native shutdown complete: workers=0 stackBytes=0 waitingQueues=0 graphics=stopped\n");
     return gameResult;
 #endif

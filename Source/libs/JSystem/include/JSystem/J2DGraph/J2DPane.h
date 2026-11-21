@@ -203,6 +203,26 @@ public:
 
     static DUSK_GAME_DATA JGeometry::TBox2<f32> static_mBounds;
 
+#if defined(DUSK_TARGET_3DS)
+    // Retained 2D screens (platforms/3ds/runtime/screen_tape.hpp, J2DScreen.cpp).
+    // While a screen is drawn with hooks set, draw() calls them:
+    //  - measure (measuring pass only): draw() computes what it always
+    //    computes (bounds, matrix, clip rectangle, alpha) and hands the pane
+    //    over instead of setting GX state and drawing it. `drawn`: the pane
+    //    would have been drawn.
+    //  - split: the children of this pane are separate recordings. Each child
+    //    subtree is then bracketed by childBegin (2: replayed, do not draw
+    //    it) and childEnd (given what childBegin returned).
+    struct NativeScreenHooks {
+        void (*measure)(J2DPane* pane, bool drawn, void* context);
+        bool (*split)(J2DPane* pane, void* context);
+        int (*childBegin)(J2DPane* child, void* context);
+        void (*childEnd)(J2DPane* child, int begun, void* context);
+        void* context;
+    };
+    static const NativeScreenHooks* sNativeHooks;
+#endif
+
 public:
     /* 0x04 */ u16 field_0x4;
     /* 0x08 */ int mKind;

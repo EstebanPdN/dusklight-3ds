@@ -8,6 +8,9 @@
 #include "f_pc/f_pc_create_iter.h"
 #include "f_pc/f_pc_create_req.h"
 #include "f_pc/f_pc_layer.h"
+#if defined(DUSK_TARGET_3DS)
+#include "d/d_native_logic.h"
+#endif
 
 int fpcCtIt_Method(fpcCtIt_MethodFunc i_method, void* i_data) {
     node_method_data iter;
@@ -20,6 +23,9 @@ void* fpcCtIt_Judge(fpcCtIt_JudgeFunc i_judge, void* i_data) {
     node_judge_data iter;
     iter.method = i_judge;
     iter.data = i_data;
+#if defined(DUSK_TARGET_3DS)
+    dNativeLogic::census.createListJudge++;
+#endif
     return cLsIt_Judge(&g_fpcCtTg_Queue, (cNdIt_JudgeFunc)cTgIt_JudgeFilter, &iter);
 }
 

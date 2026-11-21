@@ -15,6 +15,9 @@
 #if defined(DUSK_TARGET_3DS)
 #include "../../platforms/3ds/runtime/gx_copy_images.hpp"
 #endif
+#if defined(DUSK_TARGET_3DS) && !DEBUG
+void invalidateNativeAreaBase();
+#endif
 
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
 #include "dusk/interp/samples.h"
@@ -584,6 +587,9 @@ void dMpath_c::create() {
 static u8 data_80450636 = 0x01;
 
 void dMpath_c::reset() {
+#if defined(DUSK_TARGET_3DS) && !DEBUG
+    invalidateNativeAreaBase();
+#endif
     if (data_80450636) {
         for (int i = 0; i < 0x40; i++) {
             for (int j = 0; j < 2; j++) {
@@ -603,6 +609,9 @@ void dMpath_c::reset() {
 }
 
 void dMpath_c::remove() {
+#if defined(DUSK_TARGET_3DS) && !DEBUG
+    invalidateNativeAreaBase();
+#endif
     data_80450636 = 1;
     dMpath_n::m_texObjAgg.remove();
     dMapInfo_c::remove();

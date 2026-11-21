@@ -138,6 +138,60 @@ int main(){
     assert(inspectNativeTexture(texture.bti,plan));pixels.resize(plan.outputBytes);assert(decodeNativeTexture(texture.bti,plan,pixels));
     for(unsigned n=0;n<3;++n)releaseTextureResources(&owners[n]);assert(collectTextureResources()&&textureResourceBytes()==0);
     std::puts("Explicit bare GX RGB5A3/CMPR arrays: real bytes, alias sharing, bounded metadata, conversion and owner retirement passed");
+    {
+        int capeOwner{};
+        std::array<unsigned char,128*128> front{},underside{};
+        std::array<unsigned char,48*2> palette{};
+        half(palette.data(),0x0111);       // Original tear index: alpha zero.
+        half(palette.data()+6*2,0x8842);  // Original underside fill index.
+        half(palette.data()+22*2,0xa906); // An original opaque front color.
+        front.fill(22);
+        underside.fill(6);
+        assert(!retainRawCi8TextureResource(&capeOwner,std::span(front).first(front.size()-1),128,128,palette,2));
+        assert(!retainRawCi8TextureResource(&capeOwner,front,128,128,std::span(palette).first(95),2));
+        assert(!retainRawCi8TextureResource(&capeOwner,front,128,128,palette,3));
+        front.back()=48;
+        assert(!retainRawCi8TextureResource(&capeOwner,front,128,128,palette,2));
+        front.back()=22;
+        assert(textureResourceBytes()==0&&!gx::paletteCommandToken(palette.data(),token));
+
+        std::array<unsigned char,64> backObject{};
+        std::array<unsigned char,40> capeTlut{};
+        gx::initTextureObject(object.data(),front.data(),128,128,9,0,0,0,true,0);
+        gx::initTextureObject(backObject.data(),underside.data(),128,128,9,0,0,0,true,0);
+        gx::initTlutObject(capeTlut.data(),palette.data(),2,48);
+        const auto retainCape=[&]{
+            assert(retainRawCi8TextureResource(&capeOwner,front,128,128,palette,2));
+            assert(retainRawCi8TextureResource(&capeOwner,underside,128,128,palette,2));
+            assert(textureResourceBytes()==2*(32+front.size()+palette.size()));
+        };
+        const auto readPixel=[&](void* textureObject){
+            gx::loadTlutObject(capeTlut.data(),0);
+            gx::loadTextureObject(textureObject,0);
+            assert(gx::textureBinding(0,texture)&&texture.immutablePixels);
+            assert(inspectNativeTexture(texture.bti,plan)&&plan.paletteEntries==48);
+            pixels.resize(plan.outputBytes);
+            assert(decodeNativeTexture(texture.bti,plan,pixels));
+            return std::array<unsigned char,4>{pixels[0],pixels[1],pixels[2],pixels[3]};
+        };
+        retainCape();
+        assert((readPixel(object.data())==std::array<unsigned char,4>{255,49,66,82}));
+        assert(gx::textureCommandToken(front.data(),token));
+        const auto oldToken=token;
+        assert((readPixel(backObject.data())==std::array<unsigned char,4>{255,16,16,16}));
+        front.front()=underside.front()=0;
+        assert((readPixel(backObject.data())==std::array<unsigned char,4>{255,16,16,16}));
+        releaseTextureResources(&capeOwner);
+        assert(collectTextureResources()&&!gx::textureFromCommandToken(oldToken,texture));
+        retainCape();
+        assert((readPixel(object.data())==std::array<unsigned char,4>{0,17,17,17}));
+        assert((readPixel(backObject.data())==std::array<unsigned char,4>{0,17,17,17}));
+        releaseTextureResources(&capeOwner);
+        assert(collectTextureResources()&&textureResourceBytes()==0);
+        gx::destroyTextureObject(backObject.data());
+        gx::destroyTlutObject(capeTlut.data());
+    }
+    std::puts("Two raw CI8 images: bounded shared RGB5A3 colors, immutable snapshots, cut refresh and stale token retirement passed");
     std::vector<unsigned char> ci(96);ci[0]=8;ci[3]=ci[5]=8;ci[8]=1;ci[9]=2;ci[11]=16;
     ci[15]=64;ci[20]=ci[21]=ci[24]=1;ci[31]=32;
     for(unsigned n=32;n<96;++n)ci[n]=n*73;
@@ -180,6 +234,23 @@ int main(){
     assert(!collectTextureResources()&&textureResourceBytes()==2080&&gx::textureFromCommandToken(retryToken,texture));
     refuseDeletion=false;assert(collectTextureResources()&&textureResourceBytes()==0&&!gx::textureFromCommandToken(retryToken,texture));
     std::puts("Embedded CI/TLUT ownership: real retained indices/palette, typed selection, actual colors after source free, stale token retirement passed");
+    // Owner index (Alpha 13): a release walks only its owner's chain, and an
+    // owner without a live record leaves every memo entry usable.
+    {
+        gx::resetState();auto source=archive();int holder{},stranger{};
+        assert(registerTextureArchive(&archiveOwner,*source));
+        assert(retainArchiveTexture(&holder,source->data()+192));
+        const auto hits=textureResourceStatistics().memoHits;const auto fences=completions;
+        assert(retainArchiveTexture(&holder,source->data()+192)&&textureResourceStatistics().memoHits==hits+1);
+        releaseTextureResources(&stranger);releaseTextureResources(nullptr);
+        assert(retainArchiveTexture(&holder,source->data()+192)&&textureResourceStatistics().memoHits==hits+2&&completions==fences);
+        releaseTextureResources(&holder);
+        assert(retainArchiveTexture(&holder,source->data()+192)&&textureResourceStatistics().memoHits==hits+2&&completions==fences+1);
+        releaseTextureResources(&holder);releaseTextureResources(&holder);
+        unregisterTextureArchive(&archiveOwner);
+        assert(collectTextureResources()&&textureResourceBytes()==0&&textureResourceStatistics().owners==0);
+    }
+    std::puts("Owner index: unrelated releases keep memo answers and fences, own releases retire exactly once");
     // Weather GX objects share the owning archive's lifetime, including cached
     // object reuse after a different archive reoccupies exactly the same bytes.
     gx::resetState();auto weather=archive();unsigned previousToken{};
@@ -206,5 +277,58 @@ int main(){
     assert(retainArchiveTextureForLifetime(reinterpret_cast<void*>(1),copyHandle));
     assert(gx::unregisterTexture(copyHandle));
     std::puts("Archive-lifetime weather textures: 1200 mount/reuse/unmount cycles, exact pixels, worker retirement, no cache-hit fence and valid external captures passed");
+    // A scene heap destroyed wholesale (dPa_control_c::removeRoomScene): its
+    // JUTTexture owners never run their destructors. Alpha 6 zone 72: the next
+    // scene's I8 32x32 particle texture at the old IA8 32x32 image address was
+    // refused every frame. Releasing by the heap's address range ends that,
+    // keeps owners outside the range and unregisters archives owned inside.
+    {
+        gx::resetState();
+        const auto before=textureResourceStatistics();
+        std::array<unsigned char,512> sceneHeap{};                  // owner objects live here
+        std::array<unsigned char,2048> particleData{};               // image bytes, reused by the next scene
+        std::fill(particleData.begin(),particleData.end(),0x5a);
+        void* const deadOwner=sceneHeap.data()+64;void* const deadOwner2=sceneHeap.data()+128;
+        int survivor{};
+        assert(retainRawTextureResource(deadOwner,particleData,32,32,3));   // IA8 32x32 (2048 bytes)
+        assert(retainRawTextureResource(deadOwner2,particleData,32,32,3));  // a second owner of the same image
+        assert(retainRawTextureResource(&survivor,grass,32,32,5));          // outside the heap
+        auto archiveBytes=archive();void* const archiveOwner2=sceneHeap.data()+256;
+        assert(registerTextureArchive(archiveOwner2,*archiveBytes));
+        assert(retainArchiveTextureForLifetime(archiveBytes->data()+192));  // owner = the archive object
+        const auto retainedBytes=textureResourceBytes();
+        assert(retainedBytes==2080+2080+64);
+        // Heap destroyed without destructors; the next scene loads I8 at the same address.
+        std::fill(particleData.begin(),particleData.begin()+1024,0x33);
+        int nextOwner{};
+        const auto deletionsBefore=deletions;
+        assert(!retainRawTextureResource(&nextOwner,std::span(particleData).first(1024),32,32,1));
+        assert(!std::strcmp(textureResourceFailure(),"texture identity reused while retained"));
+        assert(textureResourceStatistics().conflicts==before.conflicts+1);
+        // Empty and reversed ranges release nothing.
+        assert(releaseTextureResourcesInRange(nullptr,sceneHeap.data()+sceneHeap.size())==0);
+        assert(releaseTextureResourcesInRange(sceneHeap.data()+8,sceneHeap.data()+8)==0);
+        assert(releaseTextureResourcesInRange(sceneHeap.data()+sceneHeap.size(),sceneHeap.data())==0);
+        // The end is exclusive: an owner right after the heap is not released.
+        assert(releaseTextureResourcesInRange(sceneHeap.data(),sceneHeap.data()+64)==0);
+        assert(releaseTextureResourcesInRange(sceneHeap.data(),sceneHeap.data()+sceneHeap.size())==3);
+        assert(releaseTextureResourcesInRange(sceneHeap.data(),sceneHeap.data()+sceneHeap.size())==0); // already released
+        const auto stats=textureResourceStatistics();
+        assert(stats.rangeReleases==before.rangeReleases+3&&stats.rangeOwners==before.rangeOwners+3); // invalid ranges are not counted
+        // The archive owned inside the heap is gone: no lease through it any more.
+        assert(!retainArchiveTextureForLifetime(archiveBytes->data()+192));
+        // The next scene's texture now retains (the dead image is retired first).
+        assert(retainRawTextureResource(&nextOwner,std::span(particleData).first(1024),32,32,1));
+        assert(deletions==deletionsBefore+2&&textureResourceBytes()==2080+32+1024);
+        assert(gx::textureCommandToken(particleData.data(),token)&&gx::textureFromCommandToken(token,texture));
+        assert(texture.format==1&&texture.image.front()==0x33);
+        // The survivor outside the heap still has its image.
+        assert(gx::textureCommandToken(grass.data(),token)&&gx::textureFromCommandToken(token,texture)&&texture.format==5);
+        releaseTextureResources(&nextOwner);releaseTextureResources(&survivor);
+        assert(collectTextureResources()&&textureResourceBytes()==0);
+        const auto after=textureResourceStatistics();
+        assert(after.images==0&&after.owners==0&&after.bytes==0);
+    }
+    std::puts("Scene heap destroyed wholesale: range release ends the reused-address conflict, keeps outside owners, unregisters archives owned inside, exclusive end, idempotent passed");
     std::printf("Validated archive extents, owned pixel lifetime after archive free, shared owners, worker retirement, stale identity rejection and sampler reattachment (%u completions)\n",completions);
 }

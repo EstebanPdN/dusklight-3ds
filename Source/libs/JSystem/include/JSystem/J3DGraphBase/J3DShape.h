@@ -148,6 +148,32 @@ public:
     virtual void simpleDrawCache() const;
 
     void loadCurrentMtx() const;
+#if defined(DUSK_TARGET_3DS)
+    // Native packets, direct records (platforms/3ds/runtime/native_packets.hpp):
+    // the record operations loadPreDrawSetting and drawFast make, entered
+    // without GX calls where the code is known (lists, current matrix, matrix
+    // arrays, indexed loads, shapes), the rest (vertex arrays, the shape
+    // matrix loads of every other type) through the original code into the
+    // open capture.
+    // Null: eligible; else the reason (the direct-record fallback cause).
+    const char* nativeDirectEligible() const;
+    bool nativeDirectPreDraw() const;
+    enum NativeDirect { nativeRefused, nativeDirect, nativeEnded };
+    // nativeRefused: nothing of the shape ran (the packet falls back to the
+    // original code); nativeEnded: a GX call of the original code ended the
+    // capture (what it held ran on the original path) and the shape was
+    // finished on the original path.
+    NativeDirect nativeDirectDrawFast() const;
+    // drawFast in parts, for nativeEnded (and drawFast itself).
+    void bindMtxArrays() const;
+    u32 nativeGeneration() const;
+    void drawMtxGroups(u16 first, bool firstLoaded, u32 generation) const;
+    // Levels of detail of the shape the packet draws now (J3DPacket.cpp):
+    // its level data (platforms/3ds/runtime/model_lod.hpp) and the levels
+    // for the scene and the shadow caster; null shape: drawn whole.
+    struct NativeLod { const void* shape; u8 scene, shadow; };
+    static NativeLod sNativeLod;
+#endif
 
     void onFlag(u32 flag) { mFlags |= flag; }
     void offFlag(u32 flag) { mFlags &= ~flag; }

@@ -12,10 +12,23 @@ struct AudioRuntimeStatus {
     std::uint32_t submitted{},completed{}; // queue calls / observed NDSP DONE transitions
 };
 AudioRuntimeStatus nativeAudioStatus();
+// The core the audio mixer was made on (audio-core.txt): 1, 2 or 3; -2 the
+// title's core; -3 before Initialize or after Shutdown.
+int nativeAudioWorkerCore();
 
-// Exactly the mixer's saturating/truncating signed16 conversion; caller rejects nonfinite input.
+// The mixer's saturating/truncating signed16 conversion; caller rejects nonfinite input.
 inline std::int16_t nativePcm16(float value) {
     return static_cast<std::int16_t>(std::clamp(value,-1.0f,32767.0f/32768)*32768);
+}
+// nativePcm16(value) given value*32768 (exact: a power-of-two scale): the
+// truncation first, then the saturation in integers. ARM VFP conversion
+// truncates and saturates beyond the int range; other hosts clamp first.
+inline std::int16_t nativePcm16Scaled(float scaled) {
+#if !defined(__arm__)
+    scaled=std::clamp(scaled,-65536.0f,65536.0f);
+#endif
+    const int value=static_cast<int>(scaled);
+    return static_cast<std::int16_t>(value<-32768?-32768:value>32767?32767:value);
 }
 inline constexpr char audioPcmConfigPath[]="sdmc:/3ds/dusklight/audio-pcm.txt";
 inline constexpr char audioPcmWavePath[]="sdmc:/3ds/dusklight/audio-pcm.wav";

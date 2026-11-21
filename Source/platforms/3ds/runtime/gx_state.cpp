@@ -1,7 +1,10 @@
 #include "gx_state.hpp"
+#include "gx_worker_sync.hpp"
 #include "resource_archive.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <new>
@@ -50,18 +53,143 @@ unsigned textureObjectSoftLimit{};
 constexpr TextureHandle maxTextureTokenId = 0x7fffff;
 TextureHandle nextTextureId = 1;
 std::uint64_t nextObjectGeneration = 1;
-std::array<std::uint16_t,512> imageHints{};
-std::array<std::uint16_t,512> tokenHints{};
+// Two places per key (twoPlaces below): with one place in 512, the 600
+// images of a menu sent every displaced lookup to a walk of all the
+// registrations (Alpha 8 file select profile).
+std::array<std::uint16_t,2048> imageHints{};
+// Exact index from a key (an address, a handle) to the slot of a table (or
+// another small value that names it): open addressing, value+1 stored
+// (0 empty, 0xffff removed). The lookups it serves
+// run for every texture a material loads; with hints alone each one that
+// missed walked its whole table (4,096 texture objects, 1,024 registrations:
+// 2 ms a picture in the Alpha 9 profile of Ordon Village).
+// insert() and erase() change one 16-bit place each: a find() on another
+// thread sees the table before or after it, never in between. clear() is
+// the exception (the texture registry: compactTextureRegistry()).
+template<std::size_t Slots> struct SlotIndex {
+    std::array<std::uint16_t,Slots> places{};unsigned removed{};
+    static std::size_t home(std::uintptr_t key){
+        std::uint32_t h=std::uint32_t(key);h^=h>>15;h*=0x9e3779b1u;
+        return h>>(32-std::countr_zero(Slots));
+    }
+    // The slot under `key` for which same(slot) holds, or -1.
+    template<class Same> int find(std::uintptr_t key,Same&& same)const{
+        for(std::size_t i=home(key),n=0;n<Slots;i=(i+1)&(Slots-1),++n){
+            const auto value=places[i];
+            if(!value)return -1;
+            if(value!=0xffff&&same(unsigned(value-1)))return value-1;
+        }
+        return -1;
+    }
+    void insert(std::uintptr_t key,unsigned slot){
+        for(std::size_t i=home(key);;i=(i+1)&(Slots-1)){
+            auto& value=places[i];
+            if(!value||value==0xffff){if(value)--removed;value=std::uint16_t(slot+1);return;}
+        }
+    }
+    void erase(std::uintptr_t key,unsigned slot){
+        for(std::size_t i=home(key),n=0;n<Slots;i=(i+1)&(Slots-1),++n){
+            auto& value=places[i];
+            if(!value)return;
+            if(value==slot+1){value=0xffff;++removed;return;}
+        }
+    }
+    void clear(){places.fill(0);removed=0;}
+};
+// The two hint places of a key in a table of 2^n entries.
+template<std::size_t N>
+std::array<std::uint16_t*,2> twoPlaces(std::array<std::uint16_t,N>& table,std::uint32_t key){
+    return {&table[key&(N-1)],&table[(key*0x9e3779b1u>>16)&(N-1)]};
+}
 // Lookups that found nothing, valid until the registrations change. The game
 // initialises texture objects every frame for images that are registered only
 // when first loaded; each of those misses walked the whole table.
 struct ImageMiss {const void* image{};unsigned width{},height{},format{};std::uint32_t epoch{};};
 std::array<ImageMiss,256> imageMisses{};
 std::uint32_t registrationEpoch{1};
-void clearImageHints(){imageHints.fill(0);tokenHints.fill(0);++registrationEpoch;}
+void clearImageHints(){imageHints.fill(0);++registrationEpoch;}
 // textureObjects[n].address, packed: the lookups that miss their hint and the
 // search for a free record read 16 KiB instead of striding the whole table.
 std::array<void*,std::tuple_size<decltype(textureObjects)>::value> objectAddresses{};
+// Address -> record, kept with objectAddresses (setObjectAddress), and the
+// lowest record that may be free.
+SlotIndex<2*std::tuple_size<decltype(textureObjects)>::value> objectIndex;
+std::size_t lowestFreeObject{};
+void setObjectAddress(std::size_t slot,void* address){
+    auto& place=objectAddresses[slot];
+    if(place==address)return;
+    if(place){objectIndex.erase(reinterpret_cast<std::uintptr_t>(place),unsigned(slot));lowestFreeObject=std::min(lowestFreeObject,slot);}
+    place=address;
+    if(address)objectIndex.insert(reinterpret_cast<std::uintptr_t>(address),unsigned(slot));
+    // Removed places lengthen every search: start over once they add up.
+    if(objectIndex.removed>objectAddresses.size()/2){
+        objectIndex.clear();
+        for(std::size_t n=0;n<objectAddresses.size();++n)if(objectAddresses[n])objectIndex.insert(reinterpret_cast<std::uintptr_t>(objectAddresses[n]),unsigned(n));
+    }
+}
+// The first free record, as a walk from the start finds it.
+TextureObject* freeTextureObject();
+// Handle -> registration, and image identity (pixels or alias) -> the first
+// registration in table order that has it.
+//
+// Two threads read the registrations: the game thread while it issues a
+// picture (texture objects, tokens for the register bank) and the thread
+// that draws what the second-core worker has queued (gx_worker.hpp), which
+// may be the worker. So the lookups change nothing (the indexes are kept up
+// to date by every change, not rebuilt by the next lookup), and the changes
+// keep to this:
+// - unregisterTexture and the alias calls draw what is queued first
+//   (syncGxWorker): on the game thread nobody else reads while they work;
+// - registerTexture also runs on the worker (a fog ramp or a baked image is
+//   registered by the first draw that needs it). It writes a free
+//   registration and makes its handle visible last, then adds single index
+//   places: a reader on the game thread finds the table as it was or
+//   complete. Nobody can ask for the new handle or image before the call
+//   returns them.
+SlotIndex<2*std::tuple_size<decltype(registrations)>::value> handleIndex;
+// A registration has up to two identities, so this index stores
+// 2*registration+which (which: 0 its pixels, 1 its alias): erase() names one
+// place exactly.
+SlotIndex<4*std::tuple_size<decltype(registrations)>::value> identityIndex;
+enum : unsigned {pixelsIdentity,aliasIdentity};
+bool hasIdentity(const Registration& entry,const void* image){return entry.texture.handle&&(entry.texture.image.data()==image||entry.alias==image);}
+int identityPlace(const void* identity){
+    return identityIndex.find(reinterpret_cast<std::uintptr_t>(identity),[&](unsigned value){return hasIdentity(registrations[value/2],identity);});
+}
+// The first registration in table order that has `identity`, or -1.
+int identitySlot(const void* identity){const int place=identityPlace(identity);return place<0?-1:place/2;}
+// Registration `slot` has `identity` from now on.
+void indexIdentity(const void* identity,unsigned slot,unsigned which){
+    if(!identity)return;
+    const auto key=reinterpret_cast<std::uintptr_t>(identity);
+    const int other=identityPlace(identity);
+    if(other<0)identityIndex.insert(key,2*slot+which);
+    else if(unsigned(other)/2>slot){identityIndex.insert(key,2*slot+which);identityIndex.erase(key,unsigned(other));}
+}
+// Registration `slot` no longer has `identity` (the caller has already taken
+// it from the registration): the next one in table order that has it, if
+// any, answers for it.
+void unindexIdentity(const void* identity,unsigned slot,unsigned which){
+    if(!identity)return;
+    const auto key=reinterpret_cast<std::uintptr_t>(identity);
+    identityIndex.erase(key,2*slot+which);
+    if(identityPlace(identity)>=0)return;
+    for(std::size_t n=0;n<registrations.size();++n)if(hasIdentity(registrations[n],identity)){
+        identityIndex.insert(key,2*unsigned(n)+(registrations[n].texture.image.data()==identity?pixelsIdentity:aliasIdentity));return;
+    }
+}
+void rebuildRegistrationIndex(){
+    handleIndex.clear();identityIndex.clear();
+    for(std::size_t n=0;n<registrations.size();++n){
+        const auto& entry=registrations[n];
+        if(!entry.texture.handle)continue;
+        handleIndex.insert(std::uintptr_t(entry.texture.handle),unsigned(n));
+        // The first registration in table order keeps an identity two of them share.
+        const void* const pixels=entry.texture.image.data();
+        if(pixels&&identityPlace(pixels)<0)identityIndex.insert(reinterpret_cast<std::uintptr_t>(pixels),2*unsigned(n)+pixelsIdentity);
+        if(entry.alias&&identityPlace(entry.alias)<0)identityIndex.insert(reinterpret_cast<std::uintptr_t>(entry.alias),2*unsigned(n)+aliasIdentity);
+    }
+}
 struct State {
     DrawSink sink = nullptr;
     void* sinkUser = nullptr;
@@ -113,41 +241,34 @@ bool finite(const float* input, std::size_t count) {
 }
 Registration* registration(TextureHandle handle) {
     if(!handle)return nullptr;
-    // Hints point only into our fixed table. Validate the complete live handle
-    // before using a hit: retirement/reuse never dereferences an old resource.
-    static std::array<std::uint16_t,512> hints{};
-    auto& hint=hints[(handle^(handle>>32))&(hints.size()-1)];
-    if(hint&&registrations[hint-1].texture.handle==handle)return &registrations[hint-1];
-    for (auto& entry:registrations) if (entry.texture.handle==handle) {
-        hint=std::uint16_t(&entry-registrations.data()+1);return &entry;
-    }
-    return nullptr;
+    // The index points only into our fixed table and every hit is checked
+    // against the live handle: retirement/reuse never dereferences an old
+    // resource.
+    const int slot=handleIndex.find(std::uintptr_t(handle),[&](unsigned n){return registrations[n].texture.handle==handle;});
+    return slot<0?nullptr:&registrations[slot];
 }
 TextureObject* textureObject(void* address) {
     if(!address)return nullptr;
-    static std::array<std::uint16_t,1024> hints{};
-    auto key=reinterpret_cast<std::uintptr_t>(address);
-    // GX objects are commonly aligned and embedded at regular model offsets.
-    // Fold higher address bits before indexing to avoid discarding those bits.
-    key^=key>>11;key^=key>>21;
-    auto& hint=hints[(key>>2)&(hints.size()-1)];
-    if(hint&&textureObjects[hint-1].address==address)return &textureObjects[hint-1];
-    for (std::size_t n=0;n<objectAddresses.size();++n) if (objectAddresses[n]==address) {
-        hint=std::uint16_t(n+1);return &textureObjects[n];
-    }
-    return nullptr;
+    const int slot=objectIndex.find(reinterpret_cast<std::uintptr_t>(address),[&](unsigned n){return objectAddresses[n]==address;});
+    return slot<0?nullptr:&textureObjects[slot];
+}
+TextureObject* freeTextureObject(){
+    while(lowestFreeObject<objectAddresses.size()&&objectAddresses[lowestFreeObject])++lowestFreeObject;
+    return lowestFreeObject<objectAddresses.size()?&textureObjects[lowestFreeObject]:nullptr;
 }
 const Registration* imageRegistration(const void* image,unsigned width,unsigned height,unsigned format){
     auto key=reinterpret_cast<std::uintptr_t>(image);
     key^=key>>11;key^=key>>21;
-    auto& hint=imageHints[((key>>2)^width^(height<<3)^format)&(imageHints.size()-1)];
+    const auto places=twoPlaces(imageHints,std::uint32_t((key>>2)^width^(height<<3)^format));
     auto matches=[&](const Registration& entry){const auto& t=entry.texture;
         return t.handle&&(t.image.data()==image||entry.alias==image)&&
             t.width==width&&t.height==height&&t.format==format;
     };
     // Mutations clear these hints to preserve the original first-match order,
     // including an alias which overlaps a subsequently registered identity.
-    if(hint&&matches(registrations[hint-1]))return &registrations[hint-1];
+    for(auto* hint:places)if(*hint&&matches(registrations[*hint-1]))return &registrations[*hint-1];
+    static bool imageTurn;
+    auto& hint=!*places[0]?*places[0]:!*places[1]?*places[1]:*places[(imageTurn=!imageTurn)];
     auto& miss=imageMisses[((((key>>2)^width^(height<<3)^format)*2654435761u)>>24)&(imageMisses.size()-1)];
     if(miss.epoch==registrationEpoch&&miss.image==image&&miss.width==width&&miss.height==height&&miss.format==format)return nullptr;
     for(const auto& entry:registrations)if(matches(entry)){
@@ -268,6 +389,10 @@ bool advanceTextureIdentityCountersForTest(TextureHandle imageId,std::uint64_t g
 #endif
 bool registerTexture(std::span<const std::uint8_t> bti, TextureHandle& handle,bool immutablePixels) {
     handle=0;
+    // One thread registers at a time: the game thread only with nothing
+    // queued for the worker (this call is a no-op on the thread that is
+    // drawing what was queued).
+    dusk::native::syncGxWorker();
     if (!setter("registerTexture")) return false;
     BtiInfo info{};
     if (inspectBti({bti.data(),bti.size()},1024,info)!=ResourceStatus::ready || info.image.size>4*1024*1024) {
@@ -303,17 +428,34 @@ bool registerTexture(std::span<const std::uint8_t> bti, TextureHandle& handle,bo
     if (!available) { error(Error::unsupportedState,"registerTexture/capacity"); return false; }
     if (!nextTextureId || nextTextureId>maxTextureTokenId) { error(Error::unsupportedState,"registerTexture/token-exhausted"); return false; }
     handle=nextTextureId++;
-    available->texture={handle,bti,{info.image.data,info.image.size},info.width,info.height,
+    // Everything but the handle first: a registration without a handle is a
+    // free one to every reader (see the note at handleIndex).
+    available->alias=nullptr;
+    available->texture={0,bti,{info.image.data,info.image.size},info.width,info.height,
                         info.format,bti[6],bti[7],bti[20],bti[21],info.mipCount,static_cast<std::uint8_t>(bti[22]/8),static_cast<std::uint8_t>(bti[23]/8),static_cast<std::int16_t>((unsigned(bti[26])<<8)|bti[27])/100.f};
     available->texture.immutablePixels=immutablePixels;
+    std::atomic_thread_fence(std::memory_order_release);
+    available->texture.handle=handle;
+    std::atomic_thread_fence(std::memory_order_release);
+    const auto slot=unsigned(available-registrations.data());
+    handleIndex.insert(std::uintptr_t(handle),slot);
+    indexIdentity(info.image.data,slot,pixelsIdentity);
     clearImageHints();
     return true;
 }
 bool unregisterTexture(TextureHandle handle) {
+    // What is queued for the second-core worker was issued with this image
+    // registered, and nobody else may read the tables while they change.
+    dusk::native::syncGxWorker();
     if (!setter("unregisterTexture")) return false;
     auto* entry=registration(handle);
     if (!entry) { error(Error::invalidParameter,"unregisterTexture/handle"); return false; }
+    const auto slot=unsigned(entry-registrations.data());
+    const void* const pixels=entry->texture.image.data();const void* const alias=entry->alias;
     *entry={};
+    handleIndex.erase(std::uintptr_t(handle),slot);
+    unindexIdentity(pixels,slot,pixelsIdentity);
+    if(alias!=pixels)unindexIdentity(alias,slot,aliasIdentity);
     clearImageHints();
     for(auto& alias:paletteAliases)if(alias.handle==handle)alias={};
     for(auto& palette:loadedTluts)if(palette==handle)palette=0;
@@ -341,29 +483,26 @@ bool registeredTextureAt(std::size_t slot,Texture& output){
 }
 bool textureCommandToken(const void* image,std::uint32_t& token){
     token=0;
-    auto key=reinterpret_cast<std::uintptr_t>(image);
-    key^=key>>11;key^=key>>21;
-    auto& hint=tokenHints[(key>>2)&(tokenHints.size()-1)];
-    if(hint){const auto& entry=registrations[hint-1];
-        if(entry.texture.handle&&(entry.texture.image.data()==image||entry.alias==image)){
-            if(entry.texture.handle>0x7fffff)return false;
-            token=0x800000u|static_cast<std::uint32_t>(entry.texture.handle);return true;
-        }
-    }
-    for(const auto& entry:registrations)if(entry.texture.handle&&(entry.texture.image.data()==image||entry.alias==image)){
-        if(entry.texture.handle>0x7fffff)return false;
-        hint=std::uint16_t(&entry-registrations.data()+1);
-        token=0x800000u|static_cast<std::uint32_t>(entry.texture.handle);return true;
-    }
-    return false;
+    if(!image)return false;
+    const int slot=identitySlot(image);
+    if(slot<0||registrations[slot].texture.handle>0x7fffff)return false;
+    token=0x800000u|static_cast<std::uint32_t>(registrations[slot].texture.handle);
+    return true;
 }
 const void* textureAliasImage(TextureHandle handle){auto* entry=registration(handle);return entry?entry->alias:nullptr;}
 bool aliasTextureImage(TextureHandle handle,const void* identity){
+    dusk::native::syncGxWorker(); // as unregisterTexture
     if(!identity||!setter("aliasTextureImage"))return false;
     auto* entry=registration(handle);if(!entry)return false;
     for(const auto& other:registrations)if(other.texture.handle&&other.texture.handle!=handle&&
         (other.alias==identity||other.texture.image.data()==identity))return false;
+    const auto slot=unsigned(entry-registrations.data());
+    const void* const previous=entry->alias;const void* const pixels=entry->texture.image.data();
     entry->alias=identity;
+    if(previous!=identity){
+        if(previous!=pixels)unindexIdentity(previous,slot,aliasIdentity);
+        if(identity!=pixels)indexIdentity(identity,slot,aliasIdentity);
+    }
     clearImageHints();
     for(auto& object:textureObjects)if(object.imageIdentity==identity&&object.metadataValid&&
         object.texture.width==entry->texture.width&&object.texture.height==entry->texture.height&&object.texture.format==entry->texture.format){
@@ -378,6 +517,7 @@ bool aliasTextureImage(TextureHandle handle,const void* identity){
     return true;
 }
 bool aliasTexturePalette(TextureHandle handle,const void* identity){
+    dusk::native::syncGxWorker(); // as unregisterTexture
     if(!identity||!setter("aliasTexturePalette"))return false;
     auto* entry=registration(handle);if(!entry||!entry->texture.bti[8])return false;
     PaletteAlias* available=nullptr;
@@ -481,6 +621,10 @@ bool releaseTextureBlock(TextureBlockResources& block){
     }
     for(unsigned i=0;i<block.count;++i)unregisterTexture(block.handles[i]);
     block={};return true;
+}
+void compactTextureRegistry(){
+    // Removed places lengthen every search (SlotIndex).
+    if(handleIndex.removed>handleIndex.places.size()/8||identityIndex.removed>identityIndex.places.size()/8)rebuildRegistrationIndex();
 }
 Statistics statistics() { return state.stats; }
 bool queryViewport(Viewport& output) {
@@ -687,12 +831,15 @@ bool textureObjectTagged(const TextureObject& object){
 void tagTextureObject(const TextureObject&){}
 bool textureObjectTagged(const TextureObject&){return true;}
 #endif
+// Texture object initialisations dropped because a primitive was open
+// (GXBegin without its GXEnd yet): the last few addresses, for reports.
+std::array<const void*,16> droppedInits{};unsigned droppedInitCount{};
 void initTextureObject(void* address, const void* image, std::uint16_t width, std::uint16_t height,
                         unsigned format, unsigned wrapS, unsigned wrapT, unsigned mipmap, bool palette,unsigned tlut) {
-    if (!setter("GXInitTexObj")) return;
+    if (!setter("GXInitTexObj")) { droppedInits[droppedInitCount++%droppedInits.size()]=address; return; }
     if (!address) { invalid("GXInitTexObj/null"); return; }
     auto* object=textureObject(address);
-    if (!object) for (std::size_t n=0;n<objectAddresses.size();++n) if (!objectAddresses[n]) { object=&textureObjects[n]; break; }
+    if (!object) object=freeTextureObject();
     static unsigned sweepHoldoff;
     bool pressure=!object;
     if (object && textureObjectSoftLimit) {
@@ -710,7 +857,7 @@ void initTextureObject(void* address, const void* image, std::uint16_t width, st
         for (auto& entry:textureObjects) if (entry.address && (!textureObjectTagged(entry) || !textureObjectStorageLive(entry.address))) {
             for (auto& bound:state.bindings) if (bound.address==entry.address) bound={};
             if (textureObjectReclaimed) textureObjectReclaimed(entry.address);
-            entry={};objectAddresses[&entry-textureObjects.data()]=nullptr;++textureObjectReclaims;++reclaimed;
+            entry={};setObjectAddress(&entry-textureObjects.data(),nullptr);++textureObjectReclaims;++reclaimed;
             if (!object) object=&entry;
         }
         // A sweep walks the heap for every record; do not repeat one that
@@ -722,9 +869,9 @@ void initTextureObject(void* address, const void* image, std::uint16_t width, st
         // Exhaustion must not leave a previous descriptor/binding looking like
         // the successful result of this reinitialization. Never wrap/recycle.
         for(auto& bound:state.bindings)if(bound.address==address)bound={};
-        *object={};objectAddresses[object-textureObjects.data()]=nullptr;invalid("GXInitTexObj/generation-exhausted");return;
+        *object={};setObjectAddress(object-textureObjects.data(),nullptr);invalid("GXInitTexObj/generation-exhausted");return;
     }
-    *object={}; object->address=address; objectAddresses[object-textureObjects.data()]=address;
+    *object={}; object->address=address; setObjectAddress(object-textureObjects.data(),address);
     object->generation=nextObjectGeneration++;object->imageIdentity=image;
     tagTextureObject(*object);
     object->metadataValid=width>0&&width<=1024&&height>0&&height<=1024&&
@@ -765,6 +912,13 @@ bool queryTextureObject(const void* address,Texture& output) {
     if(!object||!object->metadataValid)return false;
     output=object->texture;return true;
 }
+const char* textureObjectProblem(const void* address) {
+    const auto* object=textureObject(const_cast<void*>(address));
+    if(object&&object->metadataValid)return nullptr;
+    if(state.active)return "inside a primitive";
+    if(!object)for(const auto* dropped:droppedInits)if(dropped==address)return "init dropped inside a primitive";
+    return object?"invalid metadata":"no object";
+}
 void setTextureObjectLod(void* address, unsigned minFilter, unsigned magFilter, float minLod, float maxLod,
                          float lodBias, unsigned biasClamp, unsigned edgeLod, unsigned anisotropy) {
     if (!setter("GXInitTexObjLOD")) return;
@@ -798,7 +952,9 @@ void destroyTextureObject(void* address) {
     auto* object=textureObject(address);
     if (!object) return; // Original RAII reset/destroy of an empty object is valid.
     for (auto& bound:state.bindings) if (bound.address==address) bound={};
-    *object={};
+    // The packed address must go with the record: a slot is free only when it
+    // is null, and a stale one stays taken until the same address returns.
+    *object={};setObjectAddress(object-textureObjects.data(),nullptr);
 }
 void setTextureObjectTlut(void* address,unsigned tlut){
     if(!setter("GXInitTexObjTlut"))return;

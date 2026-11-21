@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdio>
 #include <aurora/dl.hpp>
 #include <array>
 #include <cstdint>
@@ -23,6 +24,16 @@ struct CommandRegisters;
 class CompactVertexCache;
 struct VertexDecodePlan {
     unsigned packedStride() const { return stride; }
+    // Diagnostics: the layout as " attribute:descriptor:type:components" items.
+    int describe(char* out,std::size_t size) const {
+        int used=0;
+        if(size)out[0]=0;
+        for(unsigned i=0;i<count&&i<attributes.size()&&std::size_t(used)+20<size;++i){
+            const auto& a=attributes[i];
+            used+=std::snprintf(out+used,size-used," %u:%u:%u:%u",unsigned(a.attribute),unsigned(a.descriptor),unsigned(a.type),unsigned(a.components));
+        }
+        return used;
+    }
 private:
     friend bool planVertexDecode(const aurora::gx::dl::VtxLayout&, std::span<const GXVtxAttrFmtList>,
                                  VertexDecodePlan&, VertexDecodeError*);

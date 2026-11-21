@@ -25,6 +25,8 @@ extern thread_local GDLObj* __GDCurrentDL;
 extern _Thread_local GDLObj* __GDCurrentDL;
 #endif
 void GDNativeCheck(u32 size);
+// logic.txt gdwrite=0: every byte through __GDWrite, as before Alpha 21 (A/B).
+extern unsigned char dusk_native_gd_bytewise;
 u32 GDNativeGetOffset(const GDLObj* dl);
 void GDNativeSetOffset(u32 offset);
 void GDSetCurrent(GDLObj* dl);
@@ -65,13 +67,32 @@ inline static void __GDWrite(u8 data) {
 #endif
 }
 
+#if defined(DUSK_TARGET_3DS)
+// The bytes of one command with one read of the thread's current list and one
+// bound test. The list is thread-local: on the ARM11 every read of it is a
+// call to __aeabi_read_tp and three loads, and __GDWrite pays that per byte
+// (17 instructions a byte; a material diff writes hundreds of bytes). When the
+// bytes do not all fit, each one takes __GDWrite's checked path as before, so
+// the overflow callback and its failures see the same calls.
+inline static void __GDWriteBytes(const u8* data, u32 count) {
+    GDLObj* const dl = __GDCurrentDL;
+    if (!dusk_native_gd_bytewise && dl && dl->ptr < dl->top && (u32)(dl->top - dl->ptr) >= count) {
+        u8* const at = dl->ptr;
+        for (u32 i = 0; i < count; i++) at[i] = data[i];
+        dl->ptr = at + count;
+        return;
+    }
+    for (u32 i = 0; i < count; i++) __GDWrite(data[i]);
+}
+#else
+inline static void __GDWriteBytes(const u8* data, u32 count) {
+    for (u32 i = 0; i < count; i++) __GDWrite(data[i]);
+}
+#endif
+
 inline static void GDWrite_data(const void* data, u32 length) {
     GDOverflowCheck(length);
-    // The compiler realizes this is memcpy, trust.
-    const u8* dataPtr = static_cast<const u8*>(data);
-    for (u32 i = 0; i < length; i++) {
-        __GDWrite(dataPtr[i]);
-    }
+    __GDWriteBytes(static_cast<const u8*>(data), length);
 }
 
 inline static void GDWrite_u8(u8 data) {
@@ -81,23 +102,20 @@ inline static void GDWrite_u8(u8 data) {
 
 inline static void GDWrite_u16(u16 data) {
     GDOverflowCheck(sizeof(u16));
-    __GDWrite((u8)((data >> 8)));
-    __GDWrite((u8)((data >> 0) & 0xFF));
+    const u8 bytes[2] = {(u8)(data >> 8), (u8)data};
+    __GDWriteBytes(bytes, 2);
 }
 
 inline static void GDWrite_u24(u32 data) {
     GDOverflowCheck(3);
-    __GDWrite((u8)((data >> 16) & 0xFF));
-    __GDWrite((u8)((data >> 8) & 0xFF));
-    __GDWrite((u8)((data >> 0) & 0xFF));
+    const u8 bytes[3] = {(u8)(data >> 16), (u8)(data >> 8), (u8)data};
+    __GDWriteBytes(bytes, 3);
 }
 
 inline static void GDWrite_u32(u32 data) {
     GDOverflowCheck(sizeof(u32));
-    __GDWrite((u8)((data >> 24) & 0xFF));
-    __GDWrite((u8)((data >> 16) & 0xFF));
-    __GDWrite((u8)((data >> 8) & 0xFF));
-    __GDWrite((u8)((data >> 0) & 0xFF));
+    const u8 bytes[4] = {(u8)(data >> 24), (u8)(data >> 16), (u8)(data >> 8), (u8)data};
+    __GDWriteBytes(bytes, 4);
 }
 
 inline static void GDWrite_u64(u64 data) {

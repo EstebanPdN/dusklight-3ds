@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Generate the developer-console zone table from start-point metadata.
 
-Input is the JSON written by list_stage_spawns.py (stage/room names and start
-point numbers only). Output is a C++ include with one entry per stage and one
-per room; labels are this project's own English descriptions. No game data.
+Input is the JSON written by list_stage_spawns.py (stage/room names, start
+point numbers, start modes and arrival events). Output is a C++ include with
+one entry per stage and one per room; labels are this project's own English
+descriptions. No game data.
 """
 import argparse
 import json
@@ -47,15 +48,32 @@ STAGES = [
 PRIMARY = {'F_SP103': 1, 'R_SP01': 4}
 
 
-# Starts that wait for an actor an empty save does not have: the game would never begin.
-SPECIAL_STARTS = {('F_SP118', 3, 0), ('F_SP115', 0, 2)}  # boar, canoe
+# Starts the test must not use. Boar and canoe: they wait for an actor an
+# empty save does not have, so the game would never begin. F_SP118 room 3
+# point 4: Link spawns 1,500 units straight above the exit to Arbiter's
+# Grounds and falls into it during the load (Alpha 6 zone 92: 59 s load,
+# ended in D_MN10).
+SPECIAL_STARTS = {('F_SP118', 3, 0), ('F_SP115', 0, 2), ('F_SP118', 3, 4)}  # boar, canoe, falls into an exit
+
+# Event byte of a start point (top byte of the PLYR parameters) meaning "no
+# room event on arrival". Older spawn lists without the field count as none.
+NO_EVENT = 0xff
 
 
 def start_point(stage, room, points):
-    """Lowest start point on foot: mode 0 first, never the horse (mode 2)."""
+    """Lowest start point on foot without an arrival event: mode 0 first,
+    never the horse (mode 2).
+
+    A start point with an event byte starts a room map event on arrival (a
+    cutscene, or a camera event whose exit takes Link elsewhere). In Alpha 6,
+    9 of 94 zones began inside one, and three of them (14, 35, 74) left their
+    stage through the event's exit. Event points are used only when a room
+    has nothing else."""
     usable = [p for p in points if p.get('mode') != 2 and (stage, room, p['point']) not in SPECIAL_STARTS]
-    plain = [p for p in usable if p.get('mode') == 0]
-    chosen = plain or usable or points
+    quiet = [p for p in usable if p.get('event', NO_EVENT) == NO_EVENT]
+    candidates = quiet or usable
+    plain = [p for p in candidates if p.get('mode') == 0]
+    chosen = plain or candidates or points
     return min(p['point'] for p in chosen)
 
 
@@ -68,9 +86,13 @@ def main():
     missing = sorted(set(spawns) - {name for name, _, _ in STAGES})
     if missing:
         raise SystemExit(f'stages without a label: {missing}')
-    rooms, stages = [], []
+    rooms, stages, eventful = [], [], []
     for name, label, main_tour in STAGES:
         entries = sorted((int(room), start_point(name, int(room), points)) for room, points in spawns[name].items())
+        for room, point in entries:
+            event = next(p.get('event', NO_EVENT) for p in spawns[name][str(room)] if p['point'] == point)
+            if event != NO_EVENT:
+                eventful.append(f'{name} r{room} p{point} event {event}')
         if not entries:
             raise SystemExit(f'{name}: no start points')
         if len(name) > 8 or len(label) > 22:
@@ -88,6 +110,9 @@ def main():
     lines.append('};')
     args.output.write_text('\n'.join(lines) + '\n')
     print(f'{len(stages)} stages, {len(rooms)} rooms -> {args.output}')
+    if eventful:
+        # Rooms whose every usable start point begins an arrival event.
+        print(f'{len(eventful)} rooms start inside an event (no other point): ' + ', '.join(eventful))
 
 
 if __name__ == '__main__':

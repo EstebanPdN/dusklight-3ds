@@ -68,7 +68,11 @@ static void carrierAdapterCases(const CommandDraw& original){
  make(6);bytes[5*plan.packedStride()+25]^=1;context=fresh();
  const std::array<u16,6> reuse{0,1,2,3,4,5};const auto submits=submissions;
  assert(!draw(context,GX_TRIANGLES,{reinterpret_cast<const u8*>(reuse.data()),sizeof(reuse)})&&context.rasterCarrierFirstVertex==5&&submissions==submits);
- make(3,false);context=fresh();reject(context,"GX raster vertex color missing");
+ // No CLR1: raster1 reads Dolphin's missing colour, opaque white
+ // (rasterVertexColor; before 2026-11-16 "GX raster vertex color missing").
+ make(3,false);context=fresh();assert(draw(context)&&context.rasterCarrierDraws==1&&!context.rejected);
+ for(unsigned i=0;i<3;++i){const auto& c=carrierVertices[i].color;assert(c[0]==1&&c[1]==1&&c[2]==1&&c[3]==float(u8(i))/255);}
+ reset();
  make(3);auto validRegs=regs;
  regs.xfValid.reset(0x100f);context=fresh();reject(context,"GX raster color state missing");regs=validRegs;
  // Four selected lights force a normal matrix dependency on the actual adapter.
@@ -78,7 +82,11 @@ static void carrierAdapterCases(const CommandDraw& original){
  for(unsigned row=0;row<3;++row)for(unsigned c=0;c<3;++c)scalar(0x400+row*3+c,row==c?1:0);
  const auto beforeLit=gxProfileTotals.litVertices;context=fresh();assert(draw(context)&&context.rasterCarrierDraws==1&&gxProfileTotals.litVertices==beforeLit+count());reset();
  auto litRegs=regs;
- make(3,false);context=fresh();reject(context,"GX raster vertex color missing");make(3);
+ // Lit raster1 with its ambient from the absent CLR1: white ambient, so the
+ // clamped sum and the white register material give white.
+ make(3,false);context=fresh();assert(draw(context)&&context.rasterCarrierDraws==1&&!context.rejected);
+ for(unsigned i=0;i<3;++i){const auto& c=carrierVertices[i].color;assert(c[0]==1&&c[1]==1&&c[2]==1&&c[3]==float(u8(i))/255);}
+ reset();make(3);
  regs.xfValid.reset(0x400);context=fresh();reject(context,"XF transform state missing");regs=litRegs;
  regs.xfValid.reset(0x643);context=fresh();reject(context,"GX raster color state missing");regs=litRegs;
  scalar(0x61f,std::numeric_limits<float>::quiet_NaN());context=fresh();reject(context,"GX raster vertex color invalid");regs=litRegs;
@@ -267,9 +275,13 @@ static void carrierAdapterCases(const CommandDraw& original){
   for(unsigned unit=0;unit<3;++unit){carrierFailBind=unit;context=automaticContext();reject(context,"test texture failure");assert(context.failureKind==DrawFailureKind::resource);}
   carrierFailBind=UINT32_MAX;
   scopeFailure=true;context=automaticContext();reject(context,"test texture failure");assert(context.failureKind==DrawFailureKind::resource);scopeFailure=false;
-  automaticVertices(false);context=automaticContext();reject(context,"GX raster vertex color missing");
+  // No CLR1: the secondary colour is Dolphin's missing colour, opaque white.
+  automaticVertices(false);context=automaticContext();
+  assert(draw(context)&&context.rasterCarrierDraws==1&&!context.rejected&&!context.skippedDraws&&!context.simplifiedDraws);
+  for(const auto& vertex:carrierVertices)for(unsigned unit=0;unit<2;++unit)assert(vertex.texcoord[unit]==dusk::pica::colorLookupUv(1,1));
+  reset();
   automaticVertices();context=automaticContext();assert(draw(context)&&context.rasterCarrierDraws==1&&context.vertexFogDraws==1&&!context.rejected&&!context.skippedDraws&&!context.simplifiedDraws);reset();
-  std::puts("PASS automatic full RGBA2 fog adapter: independent primary/secondary RGBA, lookup units 0/1 + fog unit/UV2, real helper bytes, perspective transform, bind/scope/missing CLR1 rejection");
+  std::puts("PASS automatic full RGBA2 fog adapter: independent primary/secondary RGBA, lookup units 0/1 + fog unit/UV2, real helper bytes, perspective transform, bind/scope rejection, missing CLR1 read as white");
  }
  // Only TEV alpha reads Ras1. The same two-texture RGB draw must use ordinary
  // planning before considering lookup, without losing either original UV.
@@ -394,5 +406,5 @@ static void carrierAdapterCases(const CommandDraw& original){
  ordinary={};ordinary.diagnosticRasterCarrier=true;assert(drawGxCommand(original,&ordinary));assert(rigidExpected.size()==ordinaryVertices.size());
  assert(!std::memcmp(rigidExpected.data(),ordinaryVertices.data(),rigidExpected.size()*sizeof(GpuVertex))&&!ordinary.rasterCarrierAttempts);
  rigidTestMode=false;arena=oldArena;submissions=oldSubmissions;binds=oldBinds;
- std::puts("PASS private carrier adapter: exact RGBA8 component transport, 3447th/indexed last-vertex zero-submit rejection, bounded telemetry, missing CLR1/light/matrix/normal/NaN, unsupported interactions, CPU/cache isolation, alpha/depth/clipping state, resource/submit failures and following ordinary bytes");
+ std::puts("PASS private carrier adapter: exact RGBA8 component transport, 3447th/indexed last-vertex zero-submit rejection, bounded telemetry, missing CLR1 read as white, missing light/matrix/normal/NaN, unsupported interactions, CPU/cache isolation, alpha/depth/clipping state, resource/submit failures and following ordinary bytes");
 }

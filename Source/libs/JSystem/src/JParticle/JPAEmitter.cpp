@@ -143,6 +143,23 @@ u8 JPABaseEmitter::getDrawCount() const {
 
 bool JPABaseEmitter::loadTexture(u8 no, GXTexMapID texMapID) {
     JUT_ASSERT(286, pRes->texNum > no);
+#if defined(DUSK_TARGET_3DS)
+    // The original only asserts this in debug builds. A texture number past
+    // the emitter's list reads the following words as an index into the
+    // manager's texture table; the random test met a null entry there (a
+    // pot-break effect, dPa_selectTexEcallBack) and JUTTexture::load read
+    // address 0x48, which faults on the console (Azahar reads zero). Such a
+    // load is skipped and reported; the unit keeps its previous image.
+    const JPAResourceManager* manager = mpEmtrMgr->pWd->mpResMgr;
+    const u16 index = no < pRes->texNum ? u16(pRes->getTexIdx(no)) : u16(0xFFFF);
+    if (index >= manager->texRegNum || !manager->pTexAry[index]) {
+        static unsigned reported;
+        if (reported < 8 && ++reported)
+            OSReport("Native particle texture out of range: resource user=%u texture %u of %u, table index %u of %u; load skipped\n",
+                unsigned(pRes->getUsrIdx()), unsigned(no), unsigned(pRes->texNum), unsigned(index), unsigned(manager->texRegNum));
+        return false;
+    }
+#endif
     mpEmtrMgr->pWd->mpResMgr->load(pRes->getTexIdx(no), texMapID);
     return true;
 }

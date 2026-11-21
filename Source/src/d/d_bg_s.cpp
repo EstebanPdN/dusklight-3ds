@@ -3,7 +3,9 @@
  * Background (Map) Collision main handler
  */
 
+#include <cstdio>
 #include "d/dolzel.h" // IWYU pragma: keep
+#include "d/d_tick_profile.h"
 
 #include "d/d_bg_s.h"
 #include "d/d_bg_s_sph_chk.h"
@@ -19,6 +21,9 @@
 #if TARGET_PC
 #if !defined(DUSK_TARGET_3DS)
 #include "dusk/settings.h"
+#else
+#include "SSystem/SComponent/c_bg_s_shdw_draw.h"
+#include "d/d_bg_s_capt_poly.h"
 #endif
 #include "helpers/offset_ptr.h"
 #endif
@@ -151,6 +156,285 @@ void cBgS_ChkElm::Release() {
 
 static int l_SetCounter;
 
+#if defined(DUSK_TARGET_3DS)
+#include "d/d_native_logic.h"
+// Logic census: slots each walk visits (one add per walk, no cost per slot).
+#define DUSK_BG_CENSUS(kind) (dNativeLogic::census.bgScanned[kind] += DUSK_BG_SCAN_END, dNativeLogic::census.bgWalks[kind]++)
+#else
+#define DUSK_BG_CENSUS(kind)
+#endif
+
+#if defined(DUSK_TARGET_3DS)
+// One past the highest slot in use (the game has one cBgS, in dComIfG play).
+// Every collision query walked all 256 slots, 6-8 walks per check, several
+// checks per actor per logic tick; the slots in use are packed at the start.
+// The walks keep their order, so every result is the same.
+static int l_ChkEnd = 0x100;
+#define DUSK_BG_SCAN_END l_ChkEnd
+static void duskBgShrinkEnd(const cBgS_ChkElm* elm) {
+    while (l_ChkEnd > 0 && !elm[l_ChkEnd - 1].ChkUsed()) {
+        l_ChkEnd--;
+    }
+}
+
+// Each priority pass visits slots in ascending order. Extend the range on
+// registration or a priority change, including changes during a wall query.
+// Released slots and slots of a previous priority are harmless inside a range.
+struct WallSlotRange {
+    unsigned begin, end;
+};
+static WallSlotRange l_wallRange[3];
+
+void dBgW_Base::includeWallPriority() const {
+    const unsigned slot = DuskGetId();
+    if (slot < 0x100 && m_priority < 3) {
+        auto& range = l_wallRange[m_priority];
+        if (range.begin == range.end || slot < range.begin) {
+            range.begin = slot;
+        }
+        if (slot >= range.end) {
+            range.end = slot + 1;
+        }
+    }
+}
+
+static void trimWallRanges(const cBgS_ChkElm* slots) {
+    for (int priority = 0; priority < 3; ++priority) {
+        auto& range = l_wallRange[priority];
+        auto matches = [&](unsigned i) {
+            return slots[i].ChkUsed() && slots[i].m_bgw_base_ptr->ChkPriority(priority);
+        };
+        while (range.begin < range.end && !matches(range.begin)) {
+            ++range.begin;
+        }
+        while (range.begin < range.end && !matches(range.end - 1)) {
+            --range.end;
+        }
+        if (range.begin == range.end) {
+            range = {};
+        }
+    }
+}
+
+// Broad phase. Every dzb query (dBgW/cBgW: LineCheckGrpRp, GroundCrossGrpRp,
+// WallCorrectGrpRp(Sort), RoofChkGrpRp, SplGrpChkGrpRp, SphChkGrpRp,
+// ShdwDrawGrpRp, CaptPolyGrpRp) starts at its root group with one box test
+// against pm_grp[m_rootGrpIdx].m_aab, which cBgW::Set/Move keep in world space
+// (moving BG included), and returns having changed nothing when that test
+// fails. The walks below run the same test, with the same functions, on the
+// same live box and the query's state of that moment, before the virtual call;
+// an object it rejects is one the call would have left untouched. So results,
+// visit order and every side effect stay the same, and the ~11 doors and signs
+// around an actor cost a few loads instead of a virtual call, a profile scope
+// and a recursive walk each, 4-6 times per CrrPos. Slots of KCol rooms are NULL
+// and keep the plain call.
+static cBgW* l_ChkDzb[0x100];
+
+static inline const cM3dGAab& duskDzbRootBnd(const cBgW* dzb) {
+    return dzb->pm_grp[dzb->m_rootGrpIdx].m_aab;
+}
+
+// cBgW::ChkNotReady() without the virtual call (dBgW and its subclasses keep it).
+static inline bool duskBgNotReady(int i, dBgW_Base* pbgw) {
+    const cBgW* dzb = l_ChkDzb[i];
+    return dzb != NULL ? dzb->pm_vtx_tbl == NULL : pbgw->ChkNotReady();
+}
+
+// cBgW::LineCheckGrpRp
+static inline bool duskBgMayLine(int i, cBgS_LinChk* plinchk) {
+    const cBgW* dzb = l_ChkDzb[i];
+    return dzb == NULL || duskDzbRootBnd(dzb).Cross(plinchk->GetLinP());
+}
+
+// cBgW::GroundCrossGrpRp
+static inline bool duskBgMayGround(int i, cBgS_GndChk* pgndchk) {
+    const cBgW* dzb = l_ChkDzb[i];
+    if (dzb == NULL) {
+        return true;
+    }
+    const cM3dGAab& aab = duskDzbRootBnd(dzb);
+    return aab.CrossY(&pgndchk->GetPointP()) && aab.UnderPlaneYUnder(pgndchk->GetPointP().y) &&
+           !aab.TopPlaneYUnder(pgndchk->GetNowY());
+}
+
+// dBgW::WallCorrectGrpRp, dBgW::WallCorrectGrpRpSort (WallCorrectSort's list stays
+// empty and its statics are reset by the next call before any use)
+static inline bool duskBgMayWall(int i, dBgS_Acch* pacch) {
+    const cBgW* dzb = l_ChkDzb[i];
+    return dzb == NULL || duskDzbRootBnd(dzb).Cross(pacch->GetWallBmdCylP());
+}
+
+// dBgW::RoofChkGrpRp
+static inline bool duskBgMayRoof(int i, dBgS_RoofChk* proof) {
+    const cBgW* dzb = l_ChkDzb[i];
+    if (dzb == NULL) {
+        return true;
+    }
+    const cM3dGAab& aab = duskDzbRootBnd(dzb);
+    return aab.CrossY(proof->GetPosP()) && aab.UnderPlaneYUnder(proof->GetNowY()) &&
+           !aab.TopPlaneYUnder(proof->GetPosP()->y);
+}
+
+// dBgW::SplGrpChkGrpRp
+static inline bool duskBgMaySpl(int i, dBgS_SplGrpChk* pspl) {
+    const cBgW* dzb = l_ChkDzb[i];
+    if (dzb == NULL) {
+        return true;
+    }
+    const cM3dGAab& aab = duskDzbRootBnd(dzb);
+    return aab.CrossY(&pspl->GetPosP()) && aab.UnderPlaneYUnder(pspl->GetRoof()) &&
+           !aab.TopPlaneYUnder(pspl->GetHeight());
+}
+
+// dBgW::SphChkGrpRp
+static inline bool duskBgMaySph(int i, dBgS_SphChk* psphchk) {
+    const cBgW* dzb = l_ChkDzb[i];
+    return dzb == NULL || duskDzbRootBnd(dzb).Cross(psphchk);
+}
+
+// cBgW::ShdwDrawGrpRp, dBgW::CaptPolyGrpRp (these walks never asked ChkNotReady;
+// the call reads the same box, so the order of the tests is the call's)
+static inline bool duskBgMayBox(int i, const cM3dGAab* pbnd) {
+    const cBgW* dzb = l_ChkDzb[i];
+    return dzb == NULL || duskDzbRootBnd(dzb).Cross(pbnd);
+}
+
+// Native New 3DS (logic.txt crrskip): a version per slot, taken from one
+// clock every time the object in it changes in any way a query could see
+// (registration, release, Move, flags, lock, priority, callbacks, vertices;
+// the setters and methods call dBgS_NativeNoteChange), so a dBgS_Acch::CrrPos
+// whose inputs are byte-identical to its last call can tell whether any
+// object its queries could reach has changed since.
+static u32 l_bgSlotVersion[0x100];
+static u32 l_bgClock = 1;
+
+// Census of one window: changes by slot and by kind of change.
+static u32 l_bgSlotChanges[0x100];
+struct DuskBgSite {
+    const char* site;
+    u32 count;
+};
+static DuskBgSite l_bgSites[32];
+
+static void duskBgBump(int slot, const char* site) {
+    l_bgSlotVersion[slot] = ++l_bgClock;
+    dNativeLogic::census.bgChanges++;
+    l_bgSlotChanges[slot]++;
+    for (DuskBgSite& s : l_bgSites) {
+        if (s.site == site || s.site == NULL) {
+            s.site = site;
+            s.count++;
+            break;
+        }
+    }
+}
+
+void dBgS_NativeNoteChange(const cBgW_BgId* i_id, const char* i_site) {
+    if (i_id != NULL && i_id->ChkUsed()) {
+        duskBgBump(i_id->DuskGetId(), i_site);
+    }
+}
+
+// One census line pair (f_pc_executor.cpp endPicture): the slots and the
+// kinds of change that moved the versions most, per picture; then a reset.
+void dBgS_NativeReportChanges(f32 perPicture) {
+    char line[320];
+    int at = std::snprintf(line, sizeof(line), "Native logic collision changes by slot (slot:profname=per picture):");
+    for (int rank = 0; rank < 8 && at < (int)sizeof(line) - 32; rank++) {
+        int best = -1;
+        for (int i = 0; i < 0x100; i++) {
+            if (l_bgSlotChanges[i] != 0 && (best < 0 || l_bgSlotChanges[i] > l_bgSlotChanges[best])) {
+                best = i;
+            }
+        }
+        if (best < 0) {
+            break;
+        }
+        const cBgS_ChkElm& elm = dComIfG_Bgsp().m_chk_element[best];
+        const int prof = elm.ChkUsed() && elm.m_actor_ptr != NULL
+                             ? (int)fopAcM_GetProfName((fopAc_ac_c*)elm.m_actor_ptr)
+                             : -1;
+        at += std::snprintf(line + at, sizeof(line) - at, " %d:%d=%.1f", best, prof,
+                            l_bgSlotChanges[best] * perPicture);
+        l_bgSlotChanges[best] = 0;
+    }
+    OSReport("%s\n", line);
+    at = std::snprintf(line, sizeof(line), "Native logic collision changes by kind (per picture):");
+    for (DuskBgSite& s : l_bgSites) {
+        if (s.site != NULL && at < (int)sizeof(line) - 40) {
+            at += std::snprintf(line + at, sizeof(line) - at, " %s=%.1f", s.site, s.count * perPicture);
+        }
+    }
+    OSReport("%s\n", line);
+    for (int i = 0; i < 0x100; i++) {
+        l_bgSlotChanges[i] = 0;
+    }
+    for (DuskBgSite& s : l_bgSites) {
+        s.site = NULL;
+        s.count = 0;
+    }
+}
+
+u32 dBgS_NativeClock() {
+    return l_bgClock;
+}
+
+// Could the object in slot i answer a query inside the XZ column? Every dzb
+// query starts with its root box (the broad phase above); a slot without one
+// (KCol rooms, objects that override a query) always could.
+static bool duskBgTouchesColumn(int i, const dBgS_NativeColumn& c) {
+    const cBgW* dzb = l_ChkDzb[i];
+    if (dzb == NULL) {
+        return true;
+    }
+    const cM3dGAab& aab = duskDzbRootBnd(dzb);
+    return !(aab.mMax.x < c.minX || aab.mMin.x > c.maxX || aab.mMax.z < c.minZ || aab.mMin.z > c.maxZ);
+}
+
+void dBgS_NativeTouchMask(const cBgS& bgs, const dBgS_NativeColumn& c, u32 o_mask[8], int* o_end) {
+    for (int k = 0; k < 8; k++) {
+        o_mask[k] = 0;
+    }
+    for (int i = 0; i < l_ChkEnd; i++) {
+        if (bgs.m_chk_element[i].ChkUsed() && duskBgTouchesColumn(i, c)) {
+            o_mask[i >> 5] |= 1u << (i & 31);
+        }
+    }
+    *o_end = l_ChkEnd;
+}
+
+// True when no slot that touched the column at the stored call (mask) and no
+// slot that touches it now has changed since the stored clock; otherwise the
+// first such slot in o_slot.
+bool dBgS_NativeUnchanged(const cBgS& bgs, u32 i_clock, const u32 i_mask[8], int i_end,
+                          const dBgS_NativeColumn& c, int* o_slot) {
+    *o_slot = -1;
+    if (l_bgClock == i_clock) {
+        return true;
+    }
+    const int end = i_end > l_ChkEnd ? i_end : l_ChkEnd;
+    for (int i = 0; i < end; i++) {
+        if (l_bgSlotVersion[i] <= i_clock) {
+            continue;
+        }
+        if ((i_mask[i >> 5] & (1u << (i & 31))) ||
+            (bgs.m_chk_element[i].ChkUsed() && duskBgTouchesColumn(i, c)))
+        {
+            *o_slot = i;
+            return false;
+        }
+    }
+    return true;
+}
+
+#define DUSK_BG_NOT_READY(i, pbgw) duskBgNotReady(i, pbgw)
+#define DUSK_BG_MAY(kind, i, chk) duskBgMay##kind(i, chk)
+#else
+#define DUSK_BG_SCAN_END 0x100
+#define DUSK_BG_NOT_READY(i, pbgw) (pbgw)->ChkNotReady()
+#define DUSK_BG_MAY(kind, i, chk) true
+#endif
+
 bool cBgS::Regist(dBgW_Base* pbgw, fpc_ProcID actor_id, void* pactor) {
     if (pbgw == NULL) {
         // "cBgS::Regist() data is Null"
@@ -183,6 +467,14 @@ bool cBgS::Regist(dBgW_Base* pbgw, fpc_ProcID actor_id, void* pactor) {
         if (!m_chk_element[i].ChkUsed()) {
             m_chk_element[i].Regist2(pbgw, actor_id, pactor);
             pbgw->Regist(i);
+#if defined(DUSK_TARGET_3DS)
+            l_ChkDzb[i] = pbgw->DuskBroadPhaseDzb();
+            pbgw->includeWallPriority();
+            if (i + 1 > l_ChkEnd) {
+                l_ChkEnd = i + 1;
+            }
+            duskBgBump(i, "Regist");
+#endif
 
             l_SetCounter = i + 1;
             if (l_SetCounter >= 0x100) {
@@ -218,8 +510,16 @@ bool cBgS::Release(dBgW_Base* pbgw) {
         }
         #endif
 
+#if defined(DUSK_TARGET_3DS)
+        duskBgBump(id, "Release");
+#endif
         m_chk_element[id].Release();
         pbgw->Release();
+#if defined(DUSK_TARGET_3DS)
+        l_ChkDzb[id] = NULL;
+        duskBgShrinkEnd(m_chk_element);
+        trimWallRanges(m_chk_element);
+#endif
 
     } else {
         #if DEBUG
@@ -255,8 +555,17 @@ static u8 lbl_8074C7F8;
 
 void cBgS::Ct() {
     l_SetCounter = 0;
+#if defined(DUSK_TARGET_3DS)
+    l_ChkEnd = 0;
+    for (auto& range : l_wallRange) {
+        range = {};
+    }
+#endif
     for (int i = 0; i < 0x100; i++) {
         m_chk_element[i].Init();
+#if defined(DUSK_TARGET_3DS)
+        l_ChkDzb[i] = NULL;
+#endif
     }
 
     #if DEBUG
@@ -277,7 +586,16 @@ void cBgS::Dt() {
 
     for (int i = 0; i < 0x100; i++) {
         m_chk_element[i].Init();
+#if defined(DUSK_TARGET_3DS)
+        l_ChkDzb[i] = NULL;
+#endif
     }
+#if defined(DUSK_TARGET_3DS)
+    l_ChkEnd = 0;
+    for (auto& range : l_wallRange) {
+        range = {};
+    }
+#endif
 }
 
 bool cBgS::LineCross(cBgS_LinChk* plinchk) {
@@ -286,9 +604,11 @@ bool cBgS::LineCross(cBgS_LinChk* plinchk) {
     plinchk->PreCalc();
 
     cBgS_ChkElm* elm = m_chk_element;
-    for (int i = 0; i < 0x100; i++) {
-        if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady() &&
-            !plinchk->ChkSameActorPid(elm->m_actor_id) && elm->m_bgw_base_ptr->LineCheck(plinchk))
+    DUSK_BG_CENSUS(0);
+    for (int i = 0; i < DUSK_BG_SCAN_END; i++) {
+        if (elm->ChkUsed() && !DUSK_BG_NOT_READY(i, elm->m_bgw_base_ptr) &&
+            !plinchk->ChkSameActorPid(elm->m_actor_id) && DUSK_BG_MAY(Line, i, plinchk) &&
+            elm->m_bgw_base_ptr->LineCheck(plinchk))
         {
             plinchk->SetActorInfo(i, elm->m_bgw_base_ptr, elm->m_actor_id);
             plinchk->SetHit();
@@ -305,9 +625,11 @@ f32 cBgS::GroundCross(cBgS_GndChk* pgndchk) {
     pgndchk->PreCheck();
 
     cBgS_ChkElm* elm = m_chk_element;
-    for (int i = 0; i < 0x100; i++) {
-        if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady() &&
-            !pgndchk->ChkSameActorPid(elm->m_actor_id) && elm->m_bgw_base_ptr->GroundCross(pgndchk))
+    DUSK_BG_CENSUS(1);
+    for (int i = 0; i < DUSK_BG_SCAN_END; i++) {
+        if (elm->ChkUsed() && !DUSK_BG_NOT_READY(i, elm->m_bgw_base_ptr) &&
+            !pgndchk->ChkSameActorPid(elm->m_actor_id) && DUSK_BG_MAY(Ground, i, pgndchk) &&
+            elm->m_bgw_base_ptr->GroundCross(pgndchk))
         {
             pgndchk->SetActorInfo(i, elm->m_bgw_base_ptr, elm->m_actor_id);
         }
@@ -437,8 +759,8 @@ void cBgS::Draw() {}
 
 void cBgS::ShdwDraw(cBgS_ShdwDraw* pshdw) {
     cBgS_ChkElm* elm = m_chk_element;
-    for (int i = 0; i < 0x100; i++) {
-        if (elm->ChkUsed()) {
+    for (int i = 0; i < DUSK_BG_SCAN_END; i++) {
+        if (elm->ChkUsed() && DUSK_BG_MAY(Box, i, pshdw->GetBndP())) {
             elm->m_bgw_base_ptr->ShdwDraw(pshdw);
         }
         elm++;
@@ -521,7 +843,7 @@ void dBgS::Dt() {
 }
 
 void dBgS::ClrMoveFlag() {
-    for (int i = 0; i < 0x100; i++) {
+    for (int i = 0; i < DUSK_BG_SCAN_END; i++) {
         if (m_chk_element[i].ChkUsed()) {
             dBgW_Base* bgw_base = m_chk_element[i].m_bgw_base_ptr;
             bgw_base->OffMoveFlag();
@@ -531,7 +853,7 @@ void dBgS::ClrMoveFlag() {
 
 void dBgS::Move() {
     cBgS_ChkElm* elm = m_chk_element;
-    for (int i = 0; i < 0x100; i++) {
+    for (int i = 0; i < DUSK_BG_SCAN_END; i++) {
         if (elm->ChkUsed()) {
             fopAc_ac_c* bgw_actor = elm->m_actor_ptr;
             elm->m_bgw_base_ptr->CalcDiffShapeAngleY(bgw_actor->shape_angle.y);
@@ -809,8 +1131,8 @@ void dBgS::CaptPoly(dBgS_CaptPoly& capt) {
         #endif
 
         cBgS_ChkElm* elm = m_chk_element;
-        for (int i = 0; i < 0x100; i++) {
-            if (elm->ChkUsed()) {
+        for (int i = 0; i < DUSK_BG_SCAN_END; i++) {
+            if (elm->ChkUsed() && DUSK_BG_MAY(Box, i, capt.GetBndP())) {
                 elm->m_bgw_base_ptr->CaptPoly(capt);
             }
             elm++;
@@ -849,7 +1171,7 @@ bool dBgS::Regist(dBgW_Base* pbgw, fopAc_ac_c* pactor) {
 }
 
 void dBgW_Base::SetOldShapeAngleY(s16 shape_angle) {
-    m_old_ShapeAngleY = shape_angle;
+    DUSK_BG_SET(m_old_ShapeAngleY, shape_angle, "SetOldShapeAngleY");
 }
 
 bool dBgS::ChkMoveBG(const cBgS_PolyInfo& polyinfo) {
@@ -1154,6 +1476,7 @@ bool dBgS::LineCross(cBgS_LinChk* plinchk) {
 }
 
 void dBgS::ShdwDraw(cBgS_ShdwDraw* pshdwDraw) {
+    DUSK_TICK_PROFILE(tick_profile, "bg.shdwDraw");
     if (!m_hio.ChkShdwDrawOff()) {
         if (m_hio.ChkCheckCounter()) {
             g_shdw_counter++;
@@ -1191,16 +1514,26 @@ void dBgS::WallCorrect(dBgS_Acch* pacch) {
     pacch->CalcMovePosWork();
 
     for (int i = 0; i < 3; i++) {
+#if defined(DUSK_TARGET_3DS)
+        const auto& range = l_wallRange[i];
+        cBgS_ChkElm* elm = m_chk_element + range.begin;
+        dNativeLogic::census.bgWalks[2]++;
+        dNativeLogic::census.bgScanned[2] += range.end - range.begin;
+        for (unsigned j = range.begin; j < range.end; ++j) {
+#else
         cBgS_ChkElm* elm = m_chk_element;
-
-        for (int j = 0; j < 0x100; j++) {
-            if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady()) {
+        for (int j = 0; j < DUSK_BG_SCAN_END; ++j) {
+#endif
+            if (elm->ChkUsed() && elm->m_bgw_base_ptr->ChkPriority(i) &&
+                !DUSK_BG_NOT_READY(j, elm->m_bgw_base_ptr)) {
                 dBgW_Base* pbgw = elm->m_bgw_base_ptr;
 
-                if (pbgw->ChkPriority(i) && !pacch->ChkSameActorPid(elm->m_actor_id)) {
+                if (!pacch->ChkSameActorPid(elm->m_actor_id)) {
                     if (!pacch->ChkMoveBGOnly() || (pbgw->ChkMoveBg() && !pbgw->ChkLock())) {
                         pacch->SetNowActorInfo(j, elm->m_bgw_base_ptr, elm->m_actor_id);
-                        pbgw->WallCorrect(pacch);
+                        if (DUSK_BG_MAY(Wall, j, pacch)) {
+                            pbgw->WallCorrect(pacch);
+                        }
                     }
                 }
             }
@@ -1235,16 +1568,26 @@ void dBgS::WallCorrectSort(dBgS_Acch* pacch) {
     pacch->CalcMovePosWork();
 
     for (int i = 0; i < 3; i++) {
+#if defined(DUSK_TARGET_3DS)
+        const auto& range = l_wallRange[i];
+        cBgS_ChkElm* elm = m_chk_element + range.begin;
+        dNativeLogic::census.bgWalks[2]++;
+        dNativeLogic::census.bgScanned[2] += range.end - range.begin;
+        for (unsigned j = range.begin; j < range.end; ++j) {
+#else
         cBgS_ChkElm* elm = m_chk_element;
-
-        for (int j = 0; j < 0x100; j++) {
-            if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady()) {
+        for (int j = 0; j < DUSK_BG_SCAN_END; ++j) {
+#endif
+            if (elm->ChkUsed() && elm->m_bgw_base_ptr->ChkPriority(i) &&
+                !DUSK_BG_NOT_READY(j, elm->m_bgw_base_ptr)) {
                 dBgW_Base* pbgw = elm->m_bgw_base_ptr;
 
-                if (pbgw->ChkPriority(i) && !pacch->ChkSameActorPid(elm->m_actor_id)) {
+                if (!pacch->ChkSameActorPid(elm->m_actor_id)) {
                     if (!pacch->ChkMoveBGOnly() || (pbgw->ChkMoveBg() && !pbgw->ChkLock())) {
                         pacch->SetNowActorInfo(j, elm->m_bgw_base_ptr, elm->m_actor_id);
-                        pbgw->WallCorrectSort(pacch);
+                        if (DUSK_BG_MAY(Wall, j, pacch)) {
+                            pbgw->WallCorrectSort(pacch);
+                        }
                     }
                 }
             }
@@ -1278,12 +1621,13 @@ f32 dBgS::RoofChk(dBgS_RoofChk* proof) {
     proof->Init();
 
     cBgS_ChkElm* elm = m_chk_element;
-    for (int i = 0; i < 0x100; i++) {
-        if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady()) {
+    DUSK_BG_CENSUS(3);
+    for (int i = 0; i < DUSK_BG_SCAN_END; i++) {
+        if (elm->ChkUsed() && !DUSK_BG_NOT_READY(i, elm->m_bgw_base_ptr)) {
             if (!proof->ChkSameActorPid(elm->m_actor_id)) {
                 dBgW_Base* pbgw = elm->m_bgw_base_ptr;
 
-                if (pbgw->RoofChk(proof)) {
+                if (DUSK_BG_MAY(Roof, i, proof) && pbgw->RoofChk(proof)) {
                     proof->SetActorInfo(i, elm->m_bgw_base_ptr, elm->m_actor_id);
                 }
             }
@@ -1320,13 +1664,14 @@ bool dBgS::SplGrpChk(dBgS_SplGrpChk* pspl) {
     pspl->Init();
 
     cBgS_ChkElm* elm = m_chk_element;
-    for (int i = 0; i < 0x100; i++) {
-        if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady()) {
+    DUSK_BG_CENSUS(4);
+    for (int i = 0; i < DUSK_BG_SCAN_END; i++) {
+        if (elm->ChkUsed() && !DUSK_BG_NOT_READY(i, elm->m_bgw_base_ptr)) {
             if (!pspl->ChkSameActorPid(elm->m_actor_id)) {
                 dBgW_Base* pbgw = elm->m_bgw_base_ptr;
 
                 if (!pspl->ChkMoveBGOnly() || (pbgw->ChkMoveBg() && !pbgw->ChkLock())) {
-                    if (pbgw->SplGrpChk(pspl)) {
+                    if (DUSK_BG_MAY(Spl, i, pspl) && pbgw->SplGrpChk(pspl)) {
                         ret = true;
                         pspl->SetActorInfo(i, elm->m_bgw_base_ptr, elm->m_actor_id);
                         pspl->OnFind();
@@ -1370,12 +1715,12 @@ bool dBgS::SphChk(dBgS_SphChk* psphchk, void* param_1) {
     psphchk->Init();
 
     cBgS_ChkElm* elm = m_chk_element;
-    for (int i = 0; i < 0x100; i++) {
-        if (elm->ChkUsed() && !elm->m_bgw_base_ptr->ChkNotReady()) {
+    for (int i = 0; i < DUSK_BG_SCAN_END; i++) {
+        if (elm->ChkUsed() && !DUSK_BG_NOT_READY(i, elm->m_bgw_base_ptr)) {
             if (!psphchk->ChkSameActorPid(elm->m_actor_id)) {
                 dBgW_Base* pbgw = elm->m_bgw_base_ptr;
 
-                if (pbgw->SphChk(psphchk, param_1)) {
+                if (DUSK_BG_MAY(Sph, i, psphchk) && pbgw->SphChk(psphchk, param_1)) {
                     psphchk->SetActorInfo(i, elm->m_bgw_base_ptr, elm->m_actor_id);
                     ret = true;
                 }

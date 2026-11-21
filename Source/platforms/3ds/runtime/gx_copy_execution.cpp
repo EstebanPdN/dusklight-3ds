@@ -6,6 +6,7 @@
 #include "resource_archive.hpp"
 #include "gx_framebuffer.hpp"
 #include "gx_stream.hpp"
+#include "gx_worker_sync.hpp"
 #include "gpu_sync.hpp"
 #include "gpu_canary.hpp"
 #include "gx_profile.hpp"
@@ -68,6 +69,30 @@ void clear(const gx::CommandRegisters& r){
 }
 void releaseCopyImages(){for(auto& image:images)if(image.handle)discard(image);}
 std::size_t copyImageBytes(){return used;}
+
+bool copyAreaMapBase(unsigned side, gx::TextureHandle previous, std::span<std::uint8_t> destination) {
+    syncGxWorker();
+    ColorCopyPlan plan;
+    std::span<const std::byte> pixels;
+    if (!planColorCopy(gx::currentTargetExtent, 0, 0, side, side, side, side, GX_CTF_R8, plan) ||
+        plan.bytes != destination.size() || !platformReadFramebufferColor(activeFramebuffer(), pixels))
+        return false;
+    if (previous && !invalidateGxTexture(previous))
+        return false;
+    return encodeColorCopy(plan, pixels, destination);
+}
+
+bool bindAreaMapBase(const gx::Texture& texture) {
+    syncGxWorker();
+    float scaleU, scaleV;
+    return bindGxTexture(texture, scaleU, scaleV);
+}
+
+bool releaseAreaMapBase(gx::TextureHandle handle) {
+    syncGxWorker();
+    return releaseGxTexture(handle) && gx::unregisterTexture(handle);
+}
+
 bool registerIndexedCopyImage(std::span<const std::uint8_t> header,const void* identity,
                               std::size_t imageBytes,std::span<const std::uint8_t> palette){
     if(header.size()!=32||!identity||reinterpret_cast<std::uintptr_t>(identity)%32||
@@ -94,7 +119,29 @@ bool registerIndexedCopyImage(std::span<const std::uint8_t> header,const void* i
     OSReport("Native indexed capture registered: %ux%u palette=%u bytes=%lu\n",width,height,unsigned(palette.size()/2),static_cast<unsigned long>(bytes));
     return true;
 }
+namespace {bool paletteFastPath{true};}
+void setCopyPaletteFastPath(bool on){paletteFastPath=on;}
+// Every JUTTexture::load asks; nearly all name no indexed copy image (the
+// minimap's is the only one). Those are answered from the image table alone:
+// asking for the GPU owner first meant a sync with the second-core worker
+// (Alpha 13, Azahar village: 140 such syncs and 6,389 shapes handed back to
+// the game thread in 300 pictures). Identity and palette of an image change
+// only in the registration calls, which own the GPU (nothing is queued then).
 bool refreshCopyImagePalette(const void* identity){
+    if(paletteFastPath){
+        // Alpha 15: the image's palette bytes are written only by
+        // refreshCopyImagePaletteOwned on this thread, so comparing them needs
+        // no render owner; only a changed palette asks for it (with the
+        // second-core worker on, asking meant drawing everything queued:
+        // 1.8 times a picture for the minimap in the village, gx-overlap o1).
+        bool changed=false;
+        for(const auto& image:images)if(image.identity==identity&&!image.palette.empty())
+            changed|=std::memcmp(image.bti+32+image.pixelBytes,image.palette.data(),image.palette.size())!=0;
+        if(!changed)return true;
+    }
+    return refreshCopyImagePaletteOwned(identity);
+}
+bool refreshCopyImagePaletteOwned(const void* identity){
     if(!platformGpuOwner()||platformGpuOwner()!=OSGetCurrentThread())return false;
     for(auto& image:images)if(image.identity==identity&&!image.palette.empty()){
         auto* target=image.bti+32+image.pixelBytes;
@@ -292,15 +339,17 @@ extern "C" void GXNativeOptionalCopy(){optionalNextCopy=true;}
 namespace dusk::native {
 void optionalCopyStatistics(std::uint64_t& skipped,std::uint64_t& done,std::uint64_t& materialized){skipped=optionalCopiesSkipped;done=optionalCopiesDone;materialized=deferredMaterialized;}
 }
-extern "C" void GXCopyTex(void* identity,GXBool doClear){
-    ++dusk::native::gxPicaStateSerial; // a copy can change or defer texture contents
-    using namespace dusk::native;
-    const bool optional=optionalNextCopy;optionalNextCopy=false;
+namespace dusk::native {
+namespace {
+// GXCopyTex on the thread that draws, under the register bank the copy was
+// issued with: every draw issued before it has been drawn, none after it.
+void copyTexture(void* identity,bool doClear,bool optional,const gx::CommandRegisters& r,const void* caller){
+    ++gxPicaStateSerial;++gxCopySerial; // a copy can change or defer texture contents
     GxProfileScope profile(GxProfilePart::copy);
-    const auto& r=registers();const auto& s=r.copy.texture;
+    const auto& s=r.copy.texture;
     if(gxSparseVertexProfiling){
         static unsigned reports{};
-        if(reports<24){++reports;OSReport("Native EFB copy caller=%p dst=%ux%u fmt=%u depth=%u\n",__builtin_return_address(0),
+        if(reports<24){++reports;OSReport("Native EFB copy caller=%p dst=%ux%u fmt=%u depth=%u\n",caller,
             unsigned(s.width),unsigned(s.height),unsigned(s.format),unsigned(s.depth));}
     }
     if(!identity||reinterpret_cast<std::uintptr_t>(identity)%32||!s.sourceReady||!s.destinationReady)fail("texture descriptor");
@@ -340,10 +389,60 @@ extern "C" void GXCopyTex(void* identity,GXBool doClear){
         pendingCapture.active=false;
         ++optionalCopiesDone;
     }
-    executeTextureCopy(identity,doClear,s,&r,activeFramebuffer(),__builtin_extract_return_addr(__builtin_return_address(0)));
+    executeTextureCopy(identity,doClear,s,&r,activeFramebuffer(),caller);
+}
+// May the copy wait in the worker's queue behind the shapes issued so far
+// (gx_worker_sync.hpp, a job)? Only a refresh of an image that already
+// exists with this layout: the game goes on at once and may load the image
+// for its next draw, so the image's registration (its token) must not change
+// while the copy waits. A first copy, a changed layout and every descriptor
+// the copy would refuse stay with the game thread. Read on the game thread:
+// identity, handle and layout of a copy image change only in a copy that did
+// not wait and in the registration calls, all with nothing queued.
+bool copyCanWait(void* identity,const gx::CommandRegisters& r){
+    const auto& s=r.copy.texture;
+    if(!identity||reinterpret_cast<std::uintptr_t>(identity)%32||!s.sourceReady||!s.destinationReady)return false;
+    ColorCopyPlan plan;
+    const auto planner=s.depth?planDepthCopy:planColorCopy;
+    if(!planner(gx::currentTargetExtent,s.source[0],s.source[1],s.source[2],s.source[3],s.width,s.height,unsigned(s.format),plan))return false;
+    for(const auto& value:images)if(value.identity==identity){
+        const bool indexed=!value.palette.empty();
+        return value.handle&&value.bytes==plan.bytes+32+value.palette.size()&&(indexed?plan.redChannel&&value.pixelBytes==plan.bytes:value.bti[0]==plan.format)&&
+            (unsigned(value.bti[2])<<8|value.bti[3])==plan.width&&(unsigned(value.bti[4])<<8|value.bti[5])==plan.height;
+    }
+    return false;
+}
+struct CopyJob {void* identity{};const void* caller{};std::uint8_t doClear{},optional{};};
+std::uint64_t copiesQueued{};
+}
+void runGxCopyTexJob(const void* arguments,std::size_t bytes,const gx::CommandRegisters& bank){
+    CopyJob job;
+    if(bytes!=sizeof(job))return;
+    std::memcpy(&job,arguments,sizeof(job));
+    copyTexture(job.identity,job.doClear!=0,job.optional!=0,bank,job.caller);
+}
+std::uint64_t queuedCopyTextures(){return copiesQueued;}
+}
+extern "C" void GXCopyTex(void* identity,GXBool doClear){
+    using namespace dusk::native;
+    const bool optional=optionalNextCopy;optionalNextCopy=false;
+    const void* const caller=__builtin_extract_return_addr(__builtin_return_address(0));
+    const auto& r=registers();
+    // The copy belongs behind every shape issued so far: in the queue behind
+    // them, or here once they are drawn. They are drawn under the capture
+    // state and the copy serial that stood when they were issued (a capture
+    // can be deferred to its first consumer, and that consumer must be one
+    // issued after it).
+    if(copyCanWait(identity,r)){
+        const CopyJob job{identity,caller,std::uint8_t(doClear!=0),std::uint8_t(optional)};
+        if(queueGxJob(gxJobCopyTex,&job,sizeof(job))){++copiesQueued;return;}
+    }
+    syncGxWorker();
+    copyTexture(identity,doClear!=0,optional,r,caller);
 }
 extern "C" void GXDestroyCopyTex(void* identity){
-    ++dusk::native::gxPicaStateSerial; // a copy can change or defer texture contents
+    dusk::native::syncGxWorker();
+    ++dusk::native::gxPicaStateSerial;++dusk::native::gxCopySerial; // a copy can change or defer texture contents
     using namespace dusk::native;
     if(!identity)return;
     (void)registers();
@@ -351,7 +450,8 @@ extern "C" void GXDestroyCopyTex(void* identity){
     for(auto& image:images)if(image.identity==identity){discard(image);return;}
 }
 extern "C" void GXCopyDisp(void* identity,GXBool doClear){
-    ++dusk::native::gxPicaStateSerial; // a copy can change or defer texture contents
+    dusk::native::syncGxWorker();
+    ++dusk::native::gxPicaStateSerial;++dusk::native::gxCopySerial; // a copy can change or defer texture contents
     using namespace dusk::native;
     const auto& r=registers();const auto& s=r.copy.display;
     if(!identity||!s.sourceReady||!s.destinationReady||!activeFramebuffer())fail("display descriptor");

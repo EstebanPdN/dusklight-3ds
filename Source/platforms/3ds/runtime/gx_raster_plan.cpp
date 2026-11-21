@@ -35,7 +35,12 @@ bool planRaster(const CommandRegisters& r,RasterPlan& out,RasterError* error,Fog
     p.writeRgb=blend&8;p.writeAlpha=p.storesAlpha&&(blend&16);
     const AlphaCompare compare{std::uint8_t((alpha>>16)&7),std::uint8_t(alpha),std::uint8_t((alpha>>22)&3),
                                std::uint8_t((alpha>>19)&7),std::uint8_t(alpha>>8)};
-    if(!reduceAlpha(compare,p.alpha)){
+    // In a GX early-Z pass the alpha test runs after depth has been
+    // compared and updated. With every color channel masked it has no
+    // remaining output to suppress. Preserve the actual Z test and write.
+    if((r.bp[0x43]&64) && !p.writeRgb && !p.writeAlpha){
+        p.alpha={7,0};
+    }else if(!reduceAlpha(compare,p.alpha)){
         std::array<AlphaPlan,2> pair;
         if(allowAlphaUnion&&splitAlphaUnion(compare,pair)){
             p.alpha=pair[0];p.alphaSecond=pair[1];p.alphaUnion=true;

@@ -9,6 +9,17 @@
 #include "JSystem/J3DGraphBase/J3DSys.h"
 #include "JSystem/JKernel/JKRHeap.h"
 
+#if defined(DUSK_TARGET_3DS)
+// Per-tick model timers on profiled pictures (include/d/d_tick_profile.h).
+#include "../../../../platforms/3ds/runtime/gx_profile.hpp"
+#define J3D_TICK_PROFILE(var, name)                                                                \
+    static const unsigned var##_profile = dusk::native::registerGxNamedProfile(name);              \
+    dusk::native::GxTickProfileScope var(var##_profile)
+#include "d/d_tick_profile.h"
+#else
+#define J3D_TICK_PROFILE(var, name)
+#endif
+
 #if TARGET_PC
 #include "dusk/interp/frame_interpolation.h"
 #include "dusk/interp/material.h"
@@ -17,6 +28,11 @@
 
 #define J3D_ASSERTMSG(LINE, COND, MSG) JUT_ASSERT_MSG(LINE, (COND) != 0, MSG)
 #define J3D_WARN1(LINE, MSG, ARG1) JUT_WARN(LINE, MSG, ARG1)
+
+#if defined(DUSK_TARGET_3DS)
+// The second-core worker's overlap hook (null in host builds and until set).
+#include "../../../../platforms/3ds/runtime/gx_worker_sync.hpp"
+#endif
 
 #if defined(DUSK_PICA_GAME_DRAW)
 bool J3DModel::copyNativePalette(const dusk::pica::UniformBinding& binding, dusk::pica::Palette& out) {
@@ -55,6 +71,9 @@ void J3DModel::initialize() {
     mUserArea = 0;
 #if defined(DUSK_TARGET_3DS)
     mNativeShadowSlot = 0;
+    mNativeEnvelopePending = 0;
+    mNativeOwner = 0;
+    mNativeShadowUnitPixels = 0.0f;
 #endif
 
     mBaseScale.x = 1.0f;
@@ -328,6 +347,7 @@ void J3DModel::makeDL() {
 }
 
 void J3DModel::calcMaterial() {
+    J3D_TICK_PROFILE(tick_profile, "j3d.calcMaterial");
     j3dSys.setModel(this);
 
     if (checkFlag(J3DMdlFlag_SkinPosCpu)) {
@@ -393,6 +413,7 @@ void J3DModel::calcDiffTexMtx() {
 }
 
 void J3DModel::diff() {
+    J3D_TICK_PROFILE(tick_profile, "j3d.diff");
     u16 matNum = mModelData->getMaterialNum();
     for (u16 i = 0; i < matNum; i++) {
         j3dSys.setMatPacket(&mMatPacket[i]);
@@ -474,10 +495,21 @@ void J3DModel::calcAnmMtx() {
     }
 }
 
+#if defined(DUSK_TARGET_3DS)
+bool J3DModel::sNativeDeferEnvelope;
+u32 J3DModel::sNativeEnvelopeCount[3];
+#endif
+
 void J3DModel::calcWeightEnvelopeMtx() {
+#if defined(DUSK_TARGET_3DS)
+    mNativeEnvelopePending = 0;
+#endif
     if (getModelData()->getWEvlpMtxNum() != 0 && !checkFlag(J3DMdlFlag_EnableLOD)) {
         if (!getModelData()->checkFlag(0x100)) {
             mMtxBuffer->calcWeightEnvelopeMtx();
+#if defined(DUSK_TARGET_3DS)
+            sNativeEnvelopeCount[0]++;
+#endif
         }
     }
 }
@@ -488,6 +520,7 @@ void J3DModel::update() {
 }
 
 void J3DModel::calc() {
+    J3D_TICK_PROFILE(tick_profile, "j3d.calc");
     j3dSys.setModel(this);
 
     if (checkFlag(J3DMdlFlag_SkinPosCpu)) {
@@ -503,6 +536,14 @@ void J3DModel::calc() {
     }
 
     mModelData->syncJ3DSysFlags();
+#if defined(DUSK_TARGET_3DS)
+    // The second-core worker may still draw this model's last picture from the
+    // arrays rewritten below (CPU skinning, deformers, vertex colours; their
+    // double buffers cover one calc, not two in one picture): it draws them
+    // first (4, only while it still draws the last picture).
+    if (mDeformData || mSkinDeform || mVtxColorCalc || mUnkCalc1 || mUnkCalc2)
+        dusk::native::syncGxOverlap(4);
+#endif
     mVertexBuffer.frameInit();
 
     if (mUnkCalc2 != NULL) {
@@ -521,8 +562,28 @@ void J3DModel::calc() {
         mUnkCalc1->calc(this);
     }
 
-    calcAnmMtx();
-    calcWeightEnvelopeMtx();
+    {
+        J3D_TICK_PROFILE(anm_profile, "j3d.calc.anmMtx");
+        calcAnmMtx();
+    }
+    {
+        J3D_TICK_PROFILE(envelope_profile, "j3d.calc.envelope");
+#if defined(DUSK_TARGET_3DS)
+        // A logic tick whose picture is not drawn: nothing reads the skin
+        // matrices before the next calc(), which makes them again. A model
+        // calculated on such a tick and drawn without a calc on the drawing
+        // tick gets them from viewCalc() instead, from its joint matrices as
+        // they are then. Made here as before for models whose calc reads them
+        // (CPU skinning, deformers, a calc callback).
+        if (sNativeDeferEnvelope && mSkinDeform == NULL && mUnkCalc1 == NULL && mUnkCalc2 == NULL &&
+            mCalcCallBack == NULL && getModelData()->getWEvlpMtxNum() != 0)
+        {
+            mNativeEnvelopePending = 1;
+            sNativeEnvelopeCount[1]++;
+        } else
+#endif
+        calcWeightEnvelopeMtx();
+    }
 
     if (mSkinDeform != NULL) {
         mSkinDeform->deform(this);
@@ -546,7 +607,11 @@ void J3DModel::calc() {
 }
 
 void J3DModel::entry() {
+    DUSK_TICK_PROFILE(tick_profile, "j3d.entry");
     j3dSys.setModel(this);
+#if defined(DUSK_TARGET_3DS)
+    mNativeOwner = dusk::native::gxEntryOwner;
+#endif
 
     if (checkFlag(J3DMdlFlag_SkinPosCpu)) {
         j3dSys.onFlag(J3DSysFlag_SkinPosCpu);
@@ -578,6 +643,13 @@ void J3DModel::entry() {
 }
 
 void J3DModel::viewCalc() {
+    J3D_TICK_PROFILE(tick_profile, "j3d.viewCalc");
+#if defined(DUSK_TARGET_3DS)
+    if (mNativeEnvelopePending) {
+        sNativeEnvelopeCount[2]++;
+        calcWeightEnvelopeMtx();
+    }
+#endif
     mMtxBuffer->swapDrawMtx();
     mMtxBuffer->swapNrmMtx();
 
@@ -610,8 +682,14 @@ void J3DModel::viewCalc() {
         calcBBoardMtx();
         DCStoreRange(getDrawMtxPtr(), mModelData->getDrawMtxNum() * sizeof(Mtx));
     } else {
-        mMtxBuffer->calcDrawMtx(getMtxCalcMode(), mBaseScale, mBaseTransformMtx);
-        calcNrmMtx();
+        {
+            J3D_TICK_PROFILE(draw_profile, "j3d.viewCalc.drawMtx");
+            mMtxBuffer->calcDrawMtx(getMtxCalcMode(), mBaseScale, mBaseTransformMtx);
+        }
+        {
+            J3D_TICK_PROFILE(nrm_profile, "j3d.viewCalc.nrmMtx");
+            calcNrmMtx();
+        }
         calcBBoardMtx();
         calcBumpMtx();
         DCStoreRangeNoSync(getDrawMtxPtr(), mModelData->getDrawMtxNum() * sizeof(Mtx));

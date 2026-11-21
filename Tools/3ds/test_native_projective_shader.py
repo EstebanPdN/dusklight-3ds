@@ -42,9 +42,9 @@ def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--build-dir',type=Path,required=True);p.add_argument('--output',type=Path,required=True);args=p.parse_args()
     out=args.output.resolve();out.mkdir(parents=True,exist_ok=True);general=(NATIVE/'scene_projective.v.pica').read_text();rigid=(NATIVE/'scene_rigid_projective.v.pica').read_text()
     full,signs=algebra(general);special,_=algebra(rigid,True);detected=[]
-    for name,old,new in [('projective-q','dp4 outtex0.z, u[66], r14','mov outtex0.z, k.y'),
+    for name,old,new in [('projective-q','dp4 r5.z, u[66], r14','mov r5.z, k.y'),
         ('position-source','cmp u[67].x, gt, gt','cmp u[67].x, lt, lt'),('affine-w','mov r14.w, k.y','mov r14.w, k.x'),
-        ('projective-t','dp4 outtex0.y, u[65]','dp4 outtex0.y, u[64]')]:
+        ('projective-t','dp4 r5.y, u[65]','dp4 r5.y, u[64]')]:
         assert old in general
         try:algebra(general.replace(old,new))
         except AssertionError:detected.append(name)

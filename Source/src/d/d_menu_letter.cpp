@@ -529,7 +529,7 @@ void dMenu_Letter_c::slide_right_init() {
 #endif
 
     field_0x358 = -field_0x1ec->getWidth() * mDoGph_gInf_c::getInvScale();
-    field_0x35c = field_0x1ec->getWidth() IF_NOT_DUSK(* mDoGph_gInf_c::getInvScale());
+    field_0x35c = field_0x1ec->getWidth() DUSK_ORIGINAL_ONLY(* mDoGph_gInf_c::getInvScale());
     changePageLight();
     copyDMYMenu();
     setAButtonString(0);
@@ -537,7 +537,7 @@ void dMenu_Letter_c::slide_right_init() {
 }
 
 void dMenu_Letter_c::slide_right_move() {
-    IF_NOT_DUSK(cLib_addCalc2(&field_0x358, 0.0f, 0.5f, 50.0f));
+    DUSK_ORIGINAL_ONLY(cLib_addCalc2(&field_0x358, 0.0f, 0.5f, 50.0f));
     if (fabsf(field_0x358) < 0.1f) {
         field_0x358 = 0.0f;
         mProcess = 0;
@@ -550,7 +550,7 @@ void dMenu_Letter_c::slide_left_init() {
 #endif
 
     field_0x358 = field_0x1ec->getWidth() * mDoGph_gInf_c::getInvScale();
-    field_0x35c = -field_0x1ec->getWidth() IF_NOT_DUSK(* mDoGph_gInf_c::getInvScale());
+    field_0x35c = -field_0x1ec->getWidth() DUSK_ORIGINAL_ONLY(* mDoGph_gInf_c::getInvScale());
     changePageLight();
     copyDMYMenu();
     setAButtonString(0);
@@ -558,7 +558,7 @@ void dMenu_Letter_c::slide_left_init() {
 }
 
 void dMenu_Letter_c::slide_left_move() {
-    IF_NOT_DUSK(cLib_addCalc2(&field_0x358, 0.0f, 0.5f, 50.0f));
+    DUSK_ORIGINAL_ONLY(cLib_addCalc2(&field_0x358, 0.0f, 0.5f, 50.0f));
     if (fabsf(field_0x358) < 0.1f) {
         field_0x358 = 0.0f;
         mProcess = 0;
@@ -613,7 +613,7 @@ void dMenu_Letter_c::read_open_init() {
 void dMenu_Letter_c::read_open_move() {
     s16 openLetterFrame =
         g_drawHIO.mLetterSelectScreen.mOpenFrame[dMeter_drawLetterHIO_c::LETTER_FRAME];
-    IF_NOT_DUSK(field_0x36a++);
+    DUSK_ORIGINAL_ONLY(field_0x36a++);
     if (field_0x36a >= openLetterFrame) {
         mProcess = 4;
         for (int i = 0; i < 2; i++) {
@@ -701,7 +701,7 @@ void dMenu_Letter_c::read_next_fadeout_init() {
 void dMenu_Letter_c::read_next_fadeout_move() {
     s16 closeWindowFrame =
         g_drawHIO.mLetterSelectScreen.mCloseFrame[dMeter_drawLetterHIO_c::WINDOW_FRAME];
-    IF_NOT_DUSK(field_0x36a--);
+    DUSK_ORIGINAL_ONLY(field_0x36a--);
     if (field_0x36a <= 0) {
         mProcess = 6;
         for (int i = 0; i < 2; i++) {
@@ -750,7 +750,7 @@ void dMenu_Letter_c::read_next_fadein_init() {
 void dMenu_Letter_c::read_next_fadein_move() {
     s16 openLetterFrame =
         g_drawHIO.mLetterSelectScreen.mOpenFrame[dMeter_drawLetterHIO_c::LETTER_FRAME];
-    IF_NOT_DUSK(field_0x36a++);
+    DUSK_ORIGINAL_ONLY(field_0x36a++);
     if (field_0x36a >= openLetterFrame) {
         mProcess = 4;
         for (int i = 0; i < 2; i++) {
@@ -779,7 +779,7 @@ void dMenu_Letter_c::read_close_init() {
 void dMenu_Letter_c::read_close_move() {
     s16 closeLetterFrame =
         g_drawHIO.mLetterSelectScreen.mCloseFrame[dMeter_drawLetterHIO_c::LETTER_FRAME];
-    IF_NOT_DUSK(field_0x36a--);
+    DUSK_ORIGINAL_ONLY(field_0x36a--);
     if (field_0x36a <= 0) {
         mProcess = 0;
         for (int i = 0; i < 2; i++) {

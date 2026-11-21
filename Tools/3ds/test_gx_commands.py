@@ -28,12 +28,17 @@ def main():
                aurora/'include/dolphin/gd/GDBase.h', aurora/'include/dolphin/gx/GXAurora.h']
     inputs = [*sources, *headers, Path(__file__).resolve()]
     hashes = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
+    # devkitARM: $DEVKITARM, /opt/devkitpro or ~/devkitpro (this Mac).
+    candidates = [Path(os.environ['DEVKITARM'])/'bin/arm-none-eabi-g++'] if os.environ.get('DEVKITARM') else []
+    candidates += [Path('/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++'),
+                   Path.home()/'devkitpro/devkitARM/bin/arm-none-eabi-g++']
+    arm = str(next((c for c in candidates if c.exists()), candidates[0]))
     common = ['-std=c++20', '-DTARGET_PC=1', '-DDUSK_TARGET_3DS=1',
               '-I'+str(aurora/'include'), '-Wall', '-Wextra', '-Werror']
     commands = [['clang++', *common, '-Wno-switch', '-O1', '-g',
                  '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
                  *map(str,sources), '-o', str(out/'test')],
-                ['/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++', *common,
+                [arm, *common,
                  '-O2', '-g', '-march=armv6k', '-mtune=mpcore', '-mfloat-abi=hard',
                  '-mfpu=vfp', '-mtp=soft', '-D__3DS__', '-fstack-usage', '-c',
                  str(native/'runtime/gx_commands.cpp'), '-o', str(out/'commands-arm.o')]]

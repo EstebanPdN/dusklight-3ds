@@ -69,7 +69,7 @@ class Disc {
         std::array<unsigned char, 256> name{};
     };
     DiscFileStatus readEntry(std::uint32_t index, Entry& output);
-    DiscFileStatus findEntry(const char* path, std::uint32_t& index);
+    DiscFileStatus findEntry(const char* path, std::uint32_t& index) const;
 public:
     Disc() = default;
     Disc(const Disc&) = delete;
@@ -103,4 +103,9 @@ public:
     std::size_t bundleIndexBytes() const { return std::size_t(bundleCount) * sizeof(BundleRange); }
     bool isBundle() const { return bundleCount != 0; }
 };
+#if defined(__3DS__)
+// Disc reads since the last call, game thread against loader threads, as one
+// log line (gpu_sync_ctru.cpp, with the GPU completes report).
+void reportDiscReads(unsigned pictures);
+#endif
 }

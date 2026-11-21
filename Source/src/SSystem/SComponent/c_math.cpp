@@ -190,6 +190,35 @@ void cM_initRnd(int s0, int s1, int s2) {
     r2 = s2;
 }
 
+#if defined(DUSK_TARGET_3DS)
+#include "d/d_native_logic.h"
+#include <dolphin/ppc_math.h>
+#include <cstring>
+
+// Native New 3DS (logic.txt math): fabsf(fmodf(x, 1.0)) without the libm
+// call. x is a sum of three fractions (|x| < 3); a float's fractional part
+// is representable, so x - trunc(x) is exact, as fmodf is by definition (sign
+// and zeros differ only before fabsf). Proven on every float with |x| < 2^31
+// (native_logic_test).
+static f32 cM_rndFraction(f32 x) {
+    dNativeLogic::census.rndCalls++;
+    f32 fast = fabsf(x - (f32)(s32)x);
+    if (dusk_native_rnd_mode == 2) {
+        const f32 original = fabsf(fmodf(x, 1.0));
+        dusk_native_math_checks++;
+        if (std::memcmp(&fast, &original, sizeof(f32)) != 0) {
+            dusk_native_math_mismatches++;
+            fast = original;
+        }
+    }
+    return fast;
+}
+// rnd=0: the original expression, untouched.
+#define DUSK_RND_FRACTION(x) (dusk_native_rnd_mode != 0 ? cM_rndFraction(x) : fabsf(fmodf(x, 1.0)))
+#else
+#define DUSK_RND_FRACTION(x) fabsf(fmodf(x, 1.0))
+#endif
+
 /**
  * Gets a random value
  * @return a random value
@@ -200,7 +229,7 @@ f32 cM_rnd() {
     r2 = (r2 * 170) % 30323;
 
     f32 var_f31 = r0 / 30269.0f + r1 / 30307.0f + r2 / 30323.0f;
-    return fabsf(fmodf(var_f31, 1.0));
+    return DUSK_RND_FRACTION(var_f31);
 }
 
 /**
@@ -239,8 +268,19 @@ f32 cM_rnd2() {
     r22 = (r22 * 170) % 30323;
 
     f32 var_f31 = r02 / 30269.0f + r12 / 30307.0f + r22 / 30323.0f;
-    return fabsf(fmodf(var_f31, 1.0));
+    return DUSK_RND_FRACTION(var_f31);
 }
+
+#if defined(DUSK_TARGET_3DS)
+void cM_rndState(int o_state[6]) {
+    o_state[0] = r0;
+    o_state[1] = r1;
+    o_state[2] = r2;
+    o_state[3] = r02;
+    o_state[4] = r12;
+    o_state[5] = r22;
+}
+#endif
 
 f32 cM_rndF2(f32 max) {
     return cM_rnd2() * max;

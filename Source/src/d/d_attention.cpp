@@ -1,4 +1,5 @@
 #include "d/dolzel.h" // IWYU pragma: keep
+#include "d/d_tick_profile.h"
 
 #include "d/d_attention.h"
 #include "JSystem/JKernel/JKRSolidHeap.h"
@@ -1333,6 +1334,7 @@ void dAttention_c::judgementStatus4Switch() {
 }
 
 int dAttention_c::Run() {
+    DUSK_TICK_PROFILE(tick_profile, "logic.attention");
     clrFlag(0x3FFFFF);
 
     bool usingHold = dComIfGs_getOptAttentionType() == 0;

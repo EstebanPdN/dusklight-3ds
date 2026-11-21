@@ -507,13 +507,16 @@ void J3DAnmKeyLoader_v15::setAnmTransform(J3DAnmTransformKey* param_1,
     param_1->mDecShift = param_2->mRotationDecimal;
     param_1->mFrame = 0.0f;
     param_1->mAnmTable =
-        JSUConvertOffsetToPtr<J3DAnmTransformKeyTable>(param_2, param_2->mJointAnimationTableOffs);
+        JSUConvertOffsetToPtr<J3DAnmTransformKey::JointTable>(param_2, param_2->mJointAnimationTableOffs);
     param_1->mScaleData = JSUConvertOffsetToPtr<f32>(param_2, param_2->mSTableOffs);
     param_1->mRotData = JSUConvertOffsetToPtr<s16>(param_2, param_2->mRTableOffs);
     param_1->mTransData = JSUConvertOffsetToPtr<f32>(param_2, param_2->mTTableOffs);
 
 #if TARGET_LITTLE_ENDIAN
     ByteSwapTransformKeyData(*param_1, *param_2);
+#endif
+#if defined(DUSK_TARGET_3DS)
+    param_1->prepareNativeTracks();
 #endif
 }
 

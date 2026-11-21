@@ -13,6 +13,7 @@ compile the native executable. Running original game code needs local data.
 | libctru | 3DS services and linker specs | `$DEVKITPRO/libctru/include/3ds.h` |
 | Citro3D | PICA200 submission | `$DEVKITPRO/libctru/lib/libcitro3d.a` |
 | picasso, smdhtool, 3dsxtool | Shader and homebrew packaging | `$DEVKITPRO/tools/bin/` |
+| zstd (3DS portlibs) | Packed application dumps and the Public Beta screen art (game startup builds) | `$DEVKITPRO/portlibs/3ds/include/zstd.h` |
 | Host C++20 compiler | Synthetic checks only | `c++ --version` |
 
 Use an existing devkitPro installation. The maintained source was developed with
@@ -53,12 +54,30 @@ at draw time. To compile only the new renderer, use
 [the native library instructions](NATIVE_RENDERER.md#build-and-test).
 
 Outputs are `Build/public-game/dusklight-native.elf`, `.3dsx`, `.smdh` and `.map`.
-The generated SMDH still uses the historical diagnostic description; it does not
-identify a supported consumer build. ELF and map files are for local debugging.
+With game startup the SMDH names the build flavour below; it does not identify
+a supported consumer release. ELF and map files are for local debugging.
 A successful link does not establish full-game or physical hardware behavior.
 The October 25 full-link result in the historical status predates the new
 renderer. See [current verification](STATUS.md) before attributing that result
 to this checkpoint.
+
+## Two build flavours
+
+`DUSK_GAME_DIAGNOSTICS` (default `OFF`, used only with game startup) selects
+what the lower screen of the game build shows:
+
+| Option | Build | Lower screen |
+| --- | --- | --- |
+| `OFF` (default) | **Public Beta 01** | Frame rate, game speed, frame time and a touch bar that writes a full dump (`runtime/beta_screen.cpp`). No automatic test. |
+| `ON` | The test build (**Alpha 21** in this source) | The developer console with the automatic test (START+SELECT) and its pages (`runtime/dev_console.cpp`). |
+
+```sh
+python3 Tools/3ds/build_public.py --profile game \
+  --build-dir Build/test-game --cmake-option=-DDUSK_GAME_DIAGNOSTICS=ON
+```
+
+The release name comes from `runtime/release.hpp` and is written into every
+dump; [Diagnostics](DIAGNOSTICS.md#two-build-flavours) describes both screens.
 
 ## Retained GX compatibility renderer
 

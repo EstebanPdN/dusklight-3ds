@@ -1,0 +1,49 @@
+; Variant of gx_rigid_mt.v.pica (runtime/gx_vertex_variant.hpp): lit, unit 0
+; a texture coordinate (role 1), units 1 and 2 unused, linear fog with the
+; range adjustment carried in the primary alpha (u[12].xyz = 1, 1, 1). The
+; plans of the room and object models drawn with fog. The colour tests of the
+; material stay; gx_rigid_mt_parts.v.pica holds the shared steps.
+.fvec u[94]
+.ivec lightLoop
+.constf k(0.0,1.0,0.5,9.0)
+.constf epsilon(0.0000000001,0.000001,0.99609375,0.001953125)
+.out outpos position
+.out outcolor color
+.out outtex texcoord0.st
+.out - texcoord0w outtex.p
+.out outtex1 texcoord1
+.out outtex2 texcoord2
+.entry texFog
+.proc texFog
+    mov r15, k.xxxx
+    mov r14, v0
+    mov r14.w, k.y
+    mova a0.xy, v4.xy
+    dp4 r0.x, u[a0.x+0], r14
+    dp4 r0.y, u[a0.x+1], r14
+    dp4 r0.z, u[a0.x+2], r14
+    mov r0.w, k.y
+    dp4 r2.x, u[6], r0
+    dp4 r2.y, u[7], r0
+    dp4 r2.z, u[8], r0
+    dp4 r2.w, u[9], r0
+    call litColour
+    mov r12.xy, v2.xy
+    mov r12.zw, k.yy
+    mov r13, v5
+    dp4 r4.x, u[89], r12
+    dp4 r4.y, u[90], r13
+    add r5.x, r4.x, r4.y
+    dp4 r4.x, u[91], r12
+    dp4 r4.y, u[92], r13
+    add r5.y, r4.x, r4.y
+    mov r5.zw, k.xxyx
+    call fogRange
+    mov r3.w, r9.y
+    mov outpos, r2
+    mov outcolor, r3
+    mov outtex, r5
+    mov outtex1, k.xxxx
+    mov outtex2, k.xxxx
+    end
+.end

@@ -149,6 +149,20 @@ public:
 #if defined(DUSK_TARGET_3DS)
     // Native model shadows: caster slot of this frame (0 = casts no shadow).
     u8 mNativeShadowSlot;
+    // Native level of detail, rule "skin" (include/d/d_native_lod.h): calc()
+    // left the skin (envelope) matrices to viewCalc(), the only reader.
+    u8 mNativeEnvelopePending;
+    // Measured dump: the process whose draw method entered the model this
+    // picture (profile name + 1, 0 none; platforms/3ds/runtime/gx_profile.hpp).
+    u16 mNativeOwner;
+    // Native model shadows: pixels of the caster's tile of the shadow image
+    // per world unit (d_drawlist.cpp imageDraw), for the shadow's level of
+    // detail; 0 when the model casts no shadow this frame.
+    f32 mNativeShadowUnitPixels;
+    // Set by the game loop while a logic tick whose picture is not drawn runs.
+    static bool sNativeDeferEnvelope;
+    // Skin matrix sets made, left by calc(), made late by viewCalc().
+    static u32 sNativeEnvelopeCount[3];
 #endif
 #if TARGET_PC
     Mtx mPresentationBase;

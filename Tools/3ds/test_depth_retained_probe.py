@@ -49,6 +49,8 @@ void GPUCMD_GetBuffer(u32**,u32*,u32*);
     tail = script[script.index('bool developerDepthAuditRequested('):]
     extracted = out / 'developer_probe.cpp'
     extracted.write_text('''#include "developer_script.hpp"
+#include "boot_options.hpp"
+#include "screen_tape.hpp"
 #include "gx_framebuffer.hpp"
 #include "gx_profile.hpp"
 #include "dump_io.hpp"
@@ -61,15 +63,26 @@ void GPUCMD_GetBuffer(u32**,u32*,u32*);
 extern "C" void OSReport(const char*,...);
 extern "C" void OSPanic(const char*,int,const char*,...);
 #include "helpers/native_effects.h"
+// Defined in JPAResource.cpp in the game; read by the particle switches.
+namespace dusk::native_effects {int refraction=2;int particleMask=1;int particleRuns=2;float particleCullPixels=0;}
 // Development switches set by loadDeveloperScripts; this fixture checks the
 // depth probe only, so the switches have no effect here.
 namespace dusk::native {
-namespace gx {void setCompiledLists(bool,bool){}void setTextureObjectSoftLimit(unsigned){}}
+static auto tapeMode = ScreenTapeMode::on;
+void setScreenTapeMode(ScreenTapeMode mode){tapeMode=mode;}
+ScreenTapeMode screenTapeMode(){return tapeMode;}
+namespace gx {void setCompiledLists(bool,bool){}void setMaterialMemo(bool,bool){}void setTextureObjectSoftLimit(unsigned){}
+void setMaterialSumRules(bool){}void setStateHash(bool,bool){}
+float indirectConstantLimit=0;void setIndirectConstantLimit(float limit){indirectConstantLimit=limit;}}
 void setTriangleFogMeshPass(bool){}void setRigidTriangleFog(bool){}void setImmediateDrawRecords(bool){}
+void setAlphaUnionPasses(bool,bool){}void setImmediateDrawShortcuts(bool){}void setNativeLeanReplay(bool){}
+void setNativeFallbackRecords(bool){}void setPaletteSplit(bool){}void setCompactSingleAttribute(bool){}
+unsigned hudTapeFixturePictures=2;
+void setHudTapePictures(unsigned pictures){hudTapeFixturePictures=pictures;}unsigned hudTapePictures(){return hudTapeFixturePictures;}
 }
 ''' + initial + '\n' + function(script, 'void setDeveloperFrame(') + '\n' +
                          function(script, 'bool developerCaptureRequested(') + '\n' + tail)
-    inputs = [RUNTIME / x for x in ('gx_framebuffer_ctru.cpp', 'gx_framebuffer.hpp', 'developer_script.cpp', 'developer_script.hpp', 'game_startup.cpp', 'dump_io.cpp', 'dump_io.hpp')]
+    inputs = [RUNTIME / x for x in ('gx_framebuffer_ctru.cpp', 'gx_framebuffer.hpp', 'developer_script.cpp', 'developer_script.hpp', 'boot_options.hpp', 'game_startup.cpp', 'dump_io.cpp', 'dump_io.hpp')]
     inputs += [Path(__file__).resolve(), Path(__file__).with_name('depth_retained_probe_host.cpp')]
     hashes = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     cmd = ['clang++', '-std=c++20', '-O1', '-g', '-Wall', '-Wextra', '-Werror',

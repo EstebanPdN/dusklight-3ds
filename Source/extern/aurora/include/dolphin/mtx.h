@@ -293,6 +293,83 @@ f32 PSVECDistance(const Vec* a, const Vec* b);
 #define VECReflect C_VECReflect
 #define VECHalfAngle C_VECHalfAngle
 
+#if defined(DUSK_TARGET_3DS) && defined(MTX_USE_PS)
+/*
+ * New 3DS: the small vector helpers and MTXMultVec of the game sources are
+ * inlined (collision and actor code call them in their inner loops). Each
+ * body is the expression of vec.c / mtxvec.c in the same order, without the
+ * NULL asserts. The ARM11 VFPv2 (-mfpu=vfp) has no fused multiply-add: its
+ * multiply-accumulate rounds the product first, so every result is the same
+ * bit pattern as the out-of-line call. The C_ functions stay for direct
+ * callers.
+ */
+static inline void dusk_VECAdd(const Vec* a, const Vec* b, Vec* ab) {
+  ab->x = a->x + b->x;
+  ab->y = a->y + b->y;
+  ab->z = a->z + b->z;
+}
+
+static inline void dusk_VECSubtract(const Vec* a, const Vec* b, Vec* a_b) {
+  a_b->x = a->x - b->x;
+  a_b->y = a->y - b->y;
+  a_b->z = a->z - b->z;
+}
+
+static inline void dusk_VECScale(const Vec* src, Vec* dst, f32 scale) {
+  dst->x = (src->x * scale);
+  dst->y = (src->y * scale);
+  dst->z = (src->z * scale);
+}
+
+static inline f32 dusk_VECDotProduct(const Vec* a, const Vec* b) {
+  f32 dot;
+  dot = (a->z * b->z) + ((a->x * b->x) + (a->y * b->y));
+  return dot;
+}
+
+static inline void dusk_VECCrossProduct(const Vec* a, const Vec* b, Vec* axb) {
+  Vec vTmp;
+  vTmp.x = (a->y * b->z) - (a->z * b->y);
+  vTmp.y = (a->z * b->x) - (a->x * b->z);
+  vTmp.z = (a->x * b->y) - (a->y * b->x);
+  axb->x = vTmp.x;
+  axb->y = vTmp.y;
+  axb->z = vTmp.z;
+}
+
+static inline f32 dusk_VECSquareDistance(const Vec* a, const Vec* b) {
+  f32 dx = a->x - b->x;
+  f32 dy = a->y - b->y;
+  f32 dz = a->z - b->z;
+  return (dx * dx + dy * dy) + dz * dz;
+}
+
+static inline void dusk_MTXMultVec(const Mtx m, const Vec* src, Vec* dst) {
+  Vec vTmp;
+  vTmp.x = m[0][3] + ((m[0][2] * src->z) + ((m[0][0] * src->x) + (m[0][1] * src->y)));
+  vTmp.y = m[1][3] + ((m[1][2] * src->z) + ((m[1][0] * src->x) + (m[1][1] * src->y)));
+  vTmp.z = m[2][3] + ((m[2][2] * src->z) + ((m[2][0] * src->x) + (m[2][1] * src->y)));
+  dst->x = vTmp.x;
+  dst->y = vTmp.y;
+  dst->z = vTmp.z;
+}
+
+#undef VECAdd
+#undef VECSubtract
+#undef VECScale
+#undef VECDotProduct
+#undef VECCrossProduct
+#undef VECSquareDistance
+#undef MTXMultVec
+#define VECAdd dusk_VECAdd
+#define VECSubtract dusk_VECSubtract
+#define VECScale dusk_VECScale
+#define VECDotProduct dusk_VECDotProduct
+#define VECCrossProduct dusk_VECCrossProduct
+#define VECSquareDistance dusk_VECSquareDistance
+#define MTXMultVec dusk_MTXMultVec
+#endif
+
 void C_QUATAdd(const Quaternion* p, const Quaternion* q, Quaternion* r);
 void C_QUATSubtract(const Quaternion* p, const Quaternion* q, Quaternion* r);
 void C_QUATMultiply(const Quaternion* p, const Quaternion* q, Quaternion* pq);

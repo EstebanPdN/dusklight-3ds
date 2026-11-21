@@ -27,6 +27,7 @@ are passed last and override an individual profile setting.
 | `DUSK_SCENE_ENVIRONMENT_STARTUP` | OFF | Link original scene/environment owners. |
 | `DUSK_GAMEPLAY_LINK_GATE` | OFF | Require original player, camera, play-scene and process roots. |
 | `DUSK_GAME_STARTUP` | OFF | Run original machine/process startup and the game loop. |
+| `DUSK_GAME_DIAGNOSTICS` | OFF | With game startup: `OFF` builds Public Beta 01 (lower screen with frame rate, game speed, frame time and a dump button); `ON` builds the test build with the developer console and the automatic test ([Building](BUILDING.md#two-build-flavours)). |
 | `DUSK_COMMAND_PROBE_STARTUP` | OFF | Start the synthetic command/GPU diagnostic. |
 | `DUSK_SCENE_FOG_INSPECTION` | OFF | Inspection path with fog omitted; changes the rendered workload. |
 | `DUSK_SCENE_MATERIAL_INSPECTION` | OFF | Inspection path omitting unsupported materials; not normal gameplay. |
@@ -40,9 +41,14 @@ gameplay link gate and game startup. `diagnostic` explicitly disables those four
 paths. Both profiles disable the CMake inspection paths unless overridden.
 Neither profile creates a tag, release or network upload.
 
-Developer controls that change runtime behavior for comparison are empty files
-in `/3ds/DuskLight/` on the SD card; [Diagnostics](DIAGNOSTICS.md#sd-switches)
-lists them. They are not a supported end-user settings interface.
+Developer controls that change runtime behavior for comparison are files in
+`/3ds/DuskLight/` on the SD card; [Diagnostics](DIAGNOSTICS.md#sd-switches)
+lists them. They are not a supported end-user settings interface. Since
+Alpha 21 one file, `features.txt`, chooses the performance improvements of a
+session (`runtime/perf_features.hpp`: `lod shadow skin vertex mips logic
+paint`; all on except `mips` without the file), and the optional `zelda.lod`
+store feeds the `lod` and `shadow` improvements
+([Game data](GAME_DATA.md#optional-levels-of-detail)).
 
 The full startup gate refuses a partial original-profile selection. This prevents
 a diagnostic link configuration from masquerading as complete engine linkage.

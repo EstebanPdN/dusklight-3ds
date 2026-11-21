@@ -4,6 +4,8 @@
 #include "host_fused_copy_off.hpp"
 #include "../runtime/texture_gx.hpp"
 #include "../runtime/gpu_sync.hpp"
+#include "../runtime/gx_texture_commands.hpp"
+#include "../runtime/perf_features.hpp"
 #include <3ds/types.h>
 #include <3ds/gpu/enums.h>
 extern "C" {
@@ -17,19 +19,51 @@ extern "C" {
 #include <map>
 #include <cmath>
 #include <algorithm>
+#include <cstdarg>
+#include <string>
 using namespace dusk::native;
 static std::map<void*,std::size_t> allocations;
 static std::array<C3D_Tex*,3> bindings{};
 static unsigned creates,flushes,deletes,binds;
 static bool refuseAllocation;
+static unsigned refuseCount; // refuse only the next allocations (linear heap full)
 static bool inFlight{};
 static unsigned completions{};
 static GpuCompletion completion=GpuCompletion::complete;
+// Precise queue model for the ping-pong cases: each storage a queued draw
+// reads, with the pixels it was queued with. Completion clears it, and so
+// does a frame begin (platformBeginGpuFrame completes the queue).
+static bool storageModel{};
+static std::map<const void*,std::vector<u8>> queuedReaders;
 namespace dusk::native {
-GpuCompletion platformCompleteGpu(std::uint64_t timeout){assert(timeout==500000000);++completions;if(completion==GpuCompletion::complete)inFlight=false;return completion;}
+GpuCompletion platformCompleteGpu(std::uint64_t timeout){
+    assert(timeout==500000000);++completions;
+    if(completion==GpuCompletion::complete){inFlight=false;queuedReaders.clear();}
+    return completion;
 }
+}
+static std::string reportText;
+// The console OSReport formats into 256 bytes (runtime/bootstrap.cpp): a longer
+// line loses its end and newline, and the next line is glued onto it.
+// Retained 2D screens: no recording runs in this test.
+extern "C" void duskScreenTapeVolatileTexture(unsigned long long){}
+extern "C" void OSReport(const char* format,...){
+    char line[256];va_list args;va_start(args,format);const int n=std::vsnprintf(line,sizeof line,format,args);va_end(args);
+    assert(n>0&&n<int(sizeof line)&&line[n-1]=='\n');reportText+=line;
+}
+// Platform services the backend links but these cases never reach in a way
+// that matters: decode timing, the scenery alias registry (empty policy) and
+// the diagnostic capture readback's cache invalidation (host memory is coherent).
+namespace dusk::native {
+std::uint64_t gxProfileTick(){return 0;}
+namespace gx {const void* textureAliasImage(TextureHandle){return nullptr;}}
+}
+extern "C" Result GSPGPU_InvalidateDataCache(const void*,u32){return 0;}
+static u32 linearFree=64u<<20;
+extern "C" u32 linearSpaceFree(void){return linearFree;}
 bool C3D_TexInitWithParams(C3D_Tex* tex,C3D_TexCube* cube,C3D_TexInitParams p){
     if(refuseAllocation)return false;
+    if(refuseCount){--refuseCount;return false;}
     assert(!cube&&p.type==GPU_TEX_2D&&!p.onVram);
     unsigned bpp=0;switch(p.format){case GPU_RGBA8:bpp=4;break;case GPU_RGB565:case GPU_LA8:bpp=2;break;case GPU_LA4:bpp=1;break;default:assert(false);}
     *tex={};tex->width=p.width;tex->height=p.height;tex->fmt=p.format;tex->size=p.width*p.height*bpp;
@@ -37,7 +71,7 @@ bool C3D_TexInitWithParams(C3D_Tex* tex,C3D_TexCube* cube,C3D_TexInitParams p){
     tex->data=std::calloc(bytes,1);assert(tex->data);allocations[tex->data]=bytes;++creates;return true;
 }
 void C3D_TexDelete(C3D_Tex* tex){
-    assert(!inFlight);for(const auto* binding:bindings)if(binding)assert(binding->data!=tex->data);
+    assert(storageModel?!queuedReaders.contains(tex->data):!inFlight);for(const auto* binding:bindings)if(binding)assert(binding->data!=tex->data);
     assert(allocations.erase(tex->data)==1);std::free(tex->data);*tex={};++deletes;
 }
 void C3D_TexFlush(C3D_Tex* tex){assert(allocations.contains(tex->data));++flushes;}
@@ -108,7 +142,284 @@ static void rgba565Reference(){
     destroyGxTextures();assert(configureGxTextureCache(4*1024*1024,64));
     std::puts("PASS immutable A/B cache policy, RGBA8 reference upload/refresh and packed reconfiguration");
 }
+// A changed dynamic image (the minimap's indexed capture) is re-decoded without
+// a GPU wait while one of its two storages has no queued reader. Frame model:
+// platformBeginGpuFrame completes the queue, then beginGxGeometryFrame
+// advances textureFrameCounter. Every case checks that no CPU write reached
+// storage a queued draw still reads.
+static void pingPong(){
+    storageModel=true;queuedReaders.clear();
+    const auto frameBegin=[]{queuedReaders.clear();++gx::textureFrameCounter;};
+    const auto draw=[](unsigned unit){const auto* p=static_cast<const u8*>(bindings[unit]->data);
+        queuedReaders[p]=std::vector<u8>(p,p+allocations.at(bindings[unit]->data));};
+    const auto queuedIntact=[]{
+        for(const auto& [p,bytes]:queuedReaders)if(!std::equal(bytes.begin(),bytes.end(),static_cast<const u8*>(p)))return false;
+        return true;
+    };
+    const auto decoded=[](const std::vector<u8>& source,const void* data){
+        NativeTexturePlan p;assert(inspectNativeTexture(source,p));std::vector<u8> e(p.outputBytes);
+        assert(decodeNativeTexture(source,p,e));return std::equal(e.begin(),e.end(),static_cast<const u8*>(data));};
+    auto source=bti(4);auto t=texture(70000,source);float u{},v{};
+    frameBegin();
+    assert(bindGxTexture(t,u,v,0)&&gxTextureBytes()==128);draw(0);
+    void* const first=bindings[0]->data;const auto waits=completions,made=creates;
+    // Next frame, other draws queued: the storage was last bound before the
+    // frame began, so it is rewritten in place with no wait.
+    frameBegin();source[40]^=0xff;invalidateGxTextures();
+    assert(bindGxTexture(t,u,v,0)&&bindings[0]->data==first&&completions==waits&&creates==made&&decoded(source,first));
+    auto s=gxTextureRedecodeStatistics();assert(s.idle==1&&s.spare==0&&s.fenced==0&&s.unfenced==0&&s.alpha6Waits==1);
+    draw(0);
+    // Changed again in the same frame: no re-decode in an earlier frame yet,
+    // so no second storage; one GPU wait as before.
+    source[41]^=0xff;assert(invalidateGxTexture(t.handle));
+    assert(bindGxTexture(t,u,v,0)&&bindings[0]->data==first&&completions==waits+1&&creates==made&&decoded(source,first));
+    s=gxTextureRedecodeStatistics();assert(s.fenced==1&&s.spares==0&&s.alpha6Waits==2);
+    draw(0);
+    // Third frame: in place again; the image is now dynamic.
+    frameBegin();source[42]^=0xff;invalidateGxTextures();
+    assert(bindGxTexture(t,u,v,0)&&bindings[0]->data==first&&completions==waits+1);draw(0);
+    // Changed while a queued draw reads it: decode into a second storage.
+    source[43]^=0xff;assert(invalidateGxTexture(t.handle));
+    assert(bindGxTexture(t,u,v,1)&&completions==waits+1&&creates==made+1&&queuedIntact());
+    void* const second=bindings[1]->data;
+    assert(second!=first&&decoded(source,second)&&gxTextureBytes()==256&&bindings[0]->data==first);
+    assert(bindings[1]->fmt==bindings[0]->fmt&&bindings[1]->width==bindings[0]->width&&bindings[1]->height==bindings[0]->height);
+    s=gxTextureRedecodeStatistics();assert(s.spare==1&&s.spares==1&&s.spareBytes==128&&s.spareAllocations==1);
+    draw(1);
+    // Both storages read by queued draws: one wait, then in place.
+    source[44]^=0xff;assert(invalidateGxTexture(t.handle));
+    assert(bindGxTexture(t,u,v,1)&&completions==waits+2&&bindings[1]->data==second&&creates==made+1&&decoded(source,second));
+    draw(1);
+    // The old storage left service before that wait: ping-pong back, no wait.
+    source[45]^=0xff;assert(invalidateGxTexture(t.handle));
+    assert(bindGxTexture(t,u,v,2)&&completions==waits+2&&bindings[2]->data==first&&creates==made+1&&queuedIntact()&&decoded(source,first));
+    draw(2);
+    s=gxTextureRedecodeStatistics();assert(s.idle==2&&s.spare==2&&s.fenced==2&&s.spares==1&&gxTextureBytes()==256&&s.alpha6Waits==6);
+    reportText.clear();gxTextureDecodeReport();
+    // Every changed re-decode here followed its own invalidation: the Alpha 6
+    // rule waited six times, this file twice.
+    assert(reportText.find("Native texture re-decode GPU waits taken=2 (0.00 ms, held=0) avoided=4 of 6 by the Alpha 6 rule, per frame taken=0.67 avoided=1.33 frames=3\n")!=std::string::npos);
+    assert(reportText.find("Native texture re-decode paths idle=2 spare=2 unfenced=0 fenced=2 unchanged=0; spares=1 bytes=128, allocated=1 released=0 refused=0\n")!=std::string::npos);
+    assert(reportText.find("via=spare")!=std::string::npos&&reportText.find("via=idle")!=std::string::npos&&reportText.find("via=fenced")!=std::string::npos);
+    // Spare counters are per report too: nothing new since.
+    reportText.clear();gxTextureDecodeReport();
+    assert(reportText.find("spares=1 bytes=128, allocated=0 released=0 refused=0\n")!=std::string::npos);
+    // Next frame, inside a draw scope: in place, no wait.
+    frameBegin();source[46]^=0xff;invalidateGxTextures();
+    {GxTextureDrawScope scope({&t,1});assert(scope&&bindGxTexture(t,u,v,0)&&bindings[0]->data==first&&completions==waits+2);}
+    draw(0);
+    // An unchanged source is not decoded at all.
+    frameBegin();invalidateGxTextures();const auto flushed=flushes;const auto unchanged=gxTextureRedecodeStatistics().unchanged;
+    assert(bindGxTexture(t,u,v,0)&&flushes==flushed&&gxTextureRedecodeStatistics().unchanged==unchanged+1);draw(0);
+    // A spare unused for a while is released once idle, with no wait. Unit 1
+    // still holds it and is repaired first (the stub refuses bound storage).
+    assert(bindings[1]->data==second);
+    const auto deleted=deletes;
+    for(unsigned n=0;gxTextureRedecodeStatistics().spares;++n){
+        assert(n<200);frameBegin();source[47]^=0xff;invalidateGxTextures();
+        assert(bindGxTexture(t,u,v,0)&&bindings[0]->data==first);draw(0);
+    }
+    s=gxTextureRedecodeStatistics();
+    assert(s.spareReleases==1&&s.spareBytes==0&&deletes==deleted+1&&!allocations.contains(second)&&gxTextureBytes()==128);
+    assert(bindings[1]->data!=second&&gxTextureIdleBytes()==256&&completions==waits+2);
+    frameBegin();assert(releaseGxTexture(t.handle)&&gxTextureBytes()==0);
+    destroyGxTextures();assert(allocations.empty());
+    // Build a dynamic image with a spare; returns its storages.
+    const auto dynamicWithSpare=[&](gx::Texture& image,std::vector<u8>& bytes){
+        frameBegin();assert(bindGxTexture(image,u,v,0));draw(0);
+        frameBegin();bytes[48]^=0xff;invalidateGxTextures();assert(bindGxTexture(image,u,v,0));draw(0);
+        frameBegin();bytes[48]^=0xff;invalidateGxTextures();assert(bindGxTexture(image,u,v,0));draw(0);
+        bytes[49]^=0xff;assert(invalidateGxTexture(image.handle)&&bindGxTexture(image,u,v,1));draw(1);
+    };
+    // Memory pressure takes an idle spare before any image, with no wait and
+    // outside a draw scope; the linear-heap fallback does the same.
+    assert(configureGxTextureCache(384,64));
+    auto other=bti(4),third=bti(4);other[50]^=1;third[51]^=1;
+    auto b=texture(70001,other),c=texture(70002,third);
+    const auto pressureWaits=completions;
+    dynamicWithSpare(t,source);
+    assert(gxTextureBytes()==256&&gxTextureRedecodeStatistics().spares==1&&completions==pressureWaits);
+    assert(bindGxTexture(b,u,v,2)&&gxTextureBytes()==384);draw(2);
+    // Same frame: the spare left service in this frame, so it is not idle and
+    // an image outside a draw scope cannot take its room.
+    assert(!bindGxTexture(c,u,v,0)&&gxTextureBytes()==384);
+    frameBegin();assert(bindGxTexture(t,u,v,0));draw(0);
+    assert(bindGxTexture(c,u,v,2)&&gxTextureBytes()==384&&completions==pressureWaits&&queuedIntact());
+    assert(gxTextureRedecodeStatistics().spares==0&&gxTextureRedecodeStatistics().spareReleases==1);
+    frameBegin();destroyGxTextures();
+    assert(configureGxTextureCache(384,64));
+    dynamicWithSpare(t,source);
+    frameBegin();assert(bindGxTexture(t,u,v,0));draw(0);
+    bool fenced=false;
+    assert(releaseLeastNeededTexture(fenced)&&!fenced&&completions==pressureWaits&&gxTextureBytes()==128&&queuedIntact());
+    frameBegin();destroyGxTextures();
+    // No room in the budget for a second storage: the old single wait,
+    // counted as refused.
+    assert(configureGxTextureCache(128,64));
+    frameBegin();assert(bindGxTexture(t,u,v,0));draw(0);
+    frameBegin();source[52]^=0xff;invalidateGxTextures();assert(bindGxTexture(t,u,v,0));draw(0);
+    frameBegin();source[52]^=0xff;invalidateGxTextures();assert(bindGxTexture(t,u,v,0));draw(0);
+    const auto refusedWaits=completions;
+    source[53]^=0xff;assert(invalidateGxTexture(t.handle)&&bindGxTexture(t,u,v,0));
+    s=gxTextureRedecodeStatistics();
+    assert(completions==refusedWaits+1&&s.spareRefusals==1&&s.spares==0&&gxTextureBytes()==128&&decoded(source,bindings[0]->data));
+    // Retirement releases both storages.
+    frameBegin();destroyGxTextures();
+    assert(configureGxTextureCache(4096,64));
+    dynamicWithSpare(t,source);
+    frameBegin();assert(releaseGxTexture(t.handle)&&gxTextureBytes()==0&&gxTextureRedecodeStatistics().spares==0);
+    destroyGxTextures();assert(allocations.empty()&&creates==deletes);
+    assert(configureGxTextureCache(4*1024*1024,64));
+    // One invalidation (the per-frame GXInvalidateTexAll) and two changed
+    // images. The Alpha 6 rule waited once, at the first of them. Now b, last
+    // bound in an earlier frame, is rewritten in place with no wait.
+    {auto other=bti(4);other[60]^=1;auto b=texture(70003,other);
+     frameBegin();assert(bindGxTexture(t,u,v,0)&&bindGxTexture(b,u,v,1));draw(0);draw(1);
+     const auto before=gxTextureRedecodeStatistics();const auto quiet=completions,made2=creates;
+     frameBegin();assert(bindGxTexture(t,u,v,2));draw(2); // other work of this frame
+     source[54]^=0xff;other[61]^=0xff;invalidateGxTextures();
+     assert(bindGxTexture(b,u,v,1)&&completions==quiet&&creates==made2&&queuedIntact()&&decoded(other,bindings[1]->data));
+     s=gxTextureRedecodeStatistics();
+     assert(s.idle==before.idle+1&&s.fenced==before.fenced&&s.alpha6Waits==before.alpha6Waits+1);
+     // t was bound in this frame before the invalidation and has no changes
+     // in earlier frames (no spare): it takes the single wait instead, which
+     // the rule does not count twice. Never more waits than the rule.
+     assert(bindGxTexture(t,u,v,0)&&completions==quiet+1&&queuedIntact()&&decoded(source,bindings[0]->data));
+     s=gxTextureRedecodeStatistics();
+     assert(s.fenced==before.fenced+1&&s.alpha6Waits==before.alpha6Waits+1&&s.spares==0);
+     reportText.clear();gxTextureDecodeReport();
+     assert(reportText.find("Native texture re-decode GPU waits taken=1 (0.00 ms, held=0) avoided=0 of 1 by the Alpha 6 rule")!=std::string::npos);
+     frameBegin();destroyGxTextures();assert(allocations.empty());}
+    // A spare in service holds the room a new image needs in the same frame.
+    // Alpha 6, with no spare, had the room and waited only at the re-decode
+    // of t. Now: one eviction wait, counted as held, idles the spare, which
+    // goes before any image; that wait also ends the decode fence, so both
+    // dirty images bound in this frame are rewritten with no further wait.
+    {assert(configureGxTextureCache(384,64));
+     auto other=bti(4),third=bti(4);other[62]^=1;third[63]^=1;
+     auto b=texture(70004,other),c=texture(70005,third);
+     dynamicWithSpare(t,source);
+     assert(bindGxTexture(b,u,v,2)&&gxTextureBytes()==384);draw(2);
+     source[50]^=0xff;other[64]^=0xff;invalidateGxTextures();
+     reportText.clear();gxTextureDecodeReport();reportText.clear();
+     const auto quiet=completions;const auto before=gxTextureRedecodeStatistics();
+     {std::array<gx::Texture,3> consumed{c,t,b};GxTextureDrawScope scope(consumed);
+      assert(scope&&bindGxTexture(c,u,v,0)&&completions==quiet+1&&gxTextureBytes()==384);
+      auto s=gxTextureRedecodeStatistics();
+      assert(s.spareHeldWaits==before.spareHeldWaits+1&&s.spares==0&&s.spareReleases==before.spareReleases+1);
+      const auto made=creates;
+      assert(bindGxTexture(t,u,v,1)&&bindGxTexture(b,u,v,2)&&creates==made&&completions==quiet+1&&queuedIntact());
+      assert(decoded(source,bindings[1]->data)&&decoded(other,bindings[2]->data));
+      s=gxTextureRedecodeStatistics();
+      assert(s.unfenced==before.unfenced+2&&s.fenced==before.fenced&&s.alpha6Waits==before.alpha6Waits+1);}
+     gxTextureDecodeReport();
+     assert(reportText.find("Native texture re-decode GPU waits taken=1 (0.00 ms, held=1) avoided=0 of 1 by the Alpha 6 rule")!=std::string::npos);
+     assert(reportText.find("Native texture re-decode paths idle=0 spare=0 unfenced=2 fenced=0 unchanged=0; spares=0 bytes=0, allocated=0 released=1 refused=0\n")!=std::string::npos);
+     frameBegin();destroyGxTextures();assert(allocations.empty());}
+    // An eviction Alpha 6 took too (no spare involved) also ends the decode
+    // fence: Alpha 6 waited twice here, now once.
+    {assert(configureGxTextureCache(256,64));
+     auto other=bti(4),third=bti(4);other[66]^=1;third[67]^=1;
+     auto b=texture(70006,other),c=texture(70007,third);
+     frameBegin();assert(bindGxTexture(t,u,v,0)&&bindGxTexture(b,u,v,1));draw(0);draw(1);
+     source[55]^=0xff;other[68]^=0xff;invalidateGxTextures();
+     reportText.clear();gxTextureDecodeReport();reportText.clear();
+     const auto quiet=completions;const auto before=gxTextureRedecodeStatistics();
+     {std::array<gx::Texture,2> consumed{c,t};GxTextureDrawScope scope(consumed);
+      assert(scope&&bindGxTexture(c,u,v,2)&&completions==quiet+1&&gxTextureBytes()==256);
+      assert(bindGxTexture(t,u,v,0)&&completions==quiet+1&&queuedIntact()&&decoded(source,bindings[0]->data));}
+     const auto s=gxTextureRedecodeStatistics();
+     assert(s.unfenced==before.unfenced+1&&s.spareHeldWaits==before.spareHeldWaits&&s.alpha6Waits==before.alpha6Waits+1);
+     gxTextureDecodeReport();
+     assert(reportText.find("Native texture re-decode GPU waits taken=0 (0.00 ms, held=0) avoided=1 of 1 by the Alpha 6 rule")!=std::string::npos);
+     frameBegin();destroyGxTextures();assert(allocations.empty());}
+    // The linear heap is short while a spare is in service. The render
+    // owner's release waits once (held), frees the spare instead of an image,
+    // and only then releases images, with no second wait.
+    {assert(configureGxTextureCache(4096,64));
+     dynamicWithSpare(t,source);
+     const auto quiet=completions;const auto before=gxTextureRedecodeStatistics();const auto linear=gxTextureLinearEvictions();
+     bool fenced=false;
+     assert(releaseLeastNeededTexture(fenced)&&fenced&&completions==quiet+1&&gxTextureBytes()==128&&gxTextureLinearEvictions()==linear);
+     const auto s=gxTextureRedecodeStatistics();assert(s.spareHeldWaits==before.spareHeldWaits+1&&s.spares==0);
+     const auto made=creates;assert(bindGxTexture(t,u,v,0)&&creates==made&&completions==quiet+1);
+     assert(releaseLeastNeededTexture(fenced)&&completions==quiet+1&&gxTextureBytes()==0&&gxTextureLinearEvictions()==linear+1);
+     assert(!releaseLeastNeededTexture(fenced)&&completions==quiet+1);
+     frameBegin();destroyGxTextures();assert(allocations.empty());}
+    // The same inside a draw: a new image's allocation is refused once. One
+    // wait (held) frees the spare and the allocation succeeds; t stays.
+    {assert(configureGxTextureCache(4096,64));
+     auto other=bti(4);other[69]^=1;auto c=texture(70008,other);
+     dynamicWithSpare(t,source);
+     const auto quiet=completions;const auto before=gxTextureRedecodeStatistics();const auto linear=gxTextureLinearEvictions();
+     refuseCount=1;
+     {GxTextureDrawScope scope({&c,1});assert(scope&&bindGxTexture(c,u,v,0));}
+     assert(!refuseCount&&completions==quiet+1&&gxTextureBytes()==256&&gxTextureLinearEvictions()==linear&&queuedIntact());
+     const auto s=gxTextureRedecodeStatistics();assert(s.spareHeldWaits==before.spareHeldWaits+1&&s.spares==0);
+     const auto made=creates;assert(bindGxTexture(t,u,v,1)&&creates==made);
+     frameBegin();destroyGxTextures();assert(allocations.empty());}
+    assert(configureGxTextureCache(4*1024*1024,64));
+    storageModel=false;
+    std::puts("PASS dynamic re-decode: in place after frame begin, ping-pong spare without a wait, single fence when both storages are queued, report lines within the console limit, aging/pressure/budget/retirement of the spare, held eviction waits counted and freeing spares before images, eviction waits ending the decode fence, under a per-storage queue model");
+}
+// worldMips: storage gets levels only when the session chose the improvement,
+// for a world use of an immutable image inside the budget; the switch is asked
+// at every bind, so a reference picture samples the base level of the same
+// storage again with nothing converted.
+static void worldMipsSwitch(){
+    using namespace dusk::native::features;
+    destroyGxTextures();
+    float u{},v{};
+    const GxWorldMipUse world{true,true,0};
+    auto rgb=bti(4,64,64);auto t=texture(61000,rgb,64,64);t.immutablePixels=true;t.minFilter=t.magFilter=1;
+    chosen={};
+    assert(bindGxTexture(t,u,v,0,false,world)&&bindings[0]->maxLevel==0&&gxTextureBytes()==8192&&gxWorldMipStatistics().images==0);
+    destroyGxTextures();
+    chosen[unsigned(Id::worldMips)]=true;
+    const auto made=creates;
+    assert(bindGxTexture(t,u,v,0,false,world)&&creates==made+1);
+    const auto stats=gxWorldMipStatistics();
+    assert(stats.images==1&&stats.bytes==2048+512+128&&gxTextureBytes()==8192+2688);
+    C3D_Tex expected{};C3D_TexSetLodBias(&expected,-0.5f);
+    assert(bindings[0]->maxLevel==3&&bindings[0]->minLevel==0&&bindings[0]->lodBias==expected.lodBias);
+    assert(bindings[0]->param&GPU_TEXTURE_MIP_FILTER(GPU_LINEAR));
+    const auto data=bindings[0]->data;const auto flushCount=flushes;
+    // Level 1 of the stored chain is the box average of the base level.
+    {NativeTexturePlan plan;assert(inspectNativeTexture(rgb,plan,false,false,true)&&planGeneratedMips(plan,0));
+     std::vector<u8> want(plan.outputBytes);assert(decodeNativeTexture(rgb,plan,want));
+     assert(std::equal(want.begin(),want.end(),static_cast<u8*>(data)));}
+    setReference(true);
+    assert(bindGxTexture(t,u,v,0,false,world)&&bindings[0]->data==data&&bindings[0]->maxLevel==0&&creates==made+1&&flushes==flushCount);
+    assert(!(bindings[0]->param&GPU_TEXTURE_MIP_FILTER(GPU_LINEAR)));
+    setReference(false);
+    assert(bindGxTexture(t,u,v,0,false,world)&&bindings[0]->maxLevel==3&&creates==made+1&&flushes==flushCount);
+    assert(bindGxTexture(t,u,v,1,false,{})&&bindings[1]->data==data&&bindings[1]->maxLevel==0); // not a world use
+    assert(releaseGxTexture(t.handle)&&gxWorldMipStatistics().images==0&&gxWorldMipStatistics().bytes==0);
+    // An image the game can rewrite never gets levels.
+    auto m=texture(61001,rgb,64,64);
+    assert(bindGxTexture(m,u,v,0,false,world)&&bindings[0]->maxLevel==0&&gxWorldMipStatistics().images==0);
+    destroyGxTextures();
+    // Under the linear floor: one level, no eviction.
+    linearFree=3u<<20;
+    assert(bindGxTexture(t,u,v,0,false,world)&&bindings[0]->maxLevel==0&&gxWorldMipStatistics().refusedLinear==1);
+    linearFree=64u<<20;destroyGxTextures();
+    // Multi-bit alpha (I4 -> LA4) needs the draw's alpha test as a threshold.
+    auto i4=bti(0,64,64);auto a=texture(61002,i4,64,64);a.immutablePixels=true;
+    assert(bindGxTexture(a,u,v,0,false,{true,false,0})&&bindings[0]->maxLevel==0&&gxWorldMipStatistics().refusedAlpha==1);
+    assert(bindGxTexture(a,u,v,0,false,{true,true,128})&&bindings[0]->maxLevel==0); // resident: no conversion again
+    destroyGxTextures();
+    // The 768 KiB cap: 256x256 RGB565 images add 43,648 B each; 18 fit.
+    assert(configureGxTextureCache(12*1024*1024,64));
+    auto big=bti(4,256,256);std::vector<gx::Texture> images;
+    for(unsigned n=0;n<19;++n){images.push_back(texture(61100+n,big,256,256));images.back().immutablePixels=true;}
+    for(auto& image:images)assert(bindGxTexture(image,u,v,0,false,world));
+    assert(gxWorldMipStatistics().images==18&&gxWorldMipStatistics().bytes==18*43648&&gxWorldMipStatistics().refusedCap==1);
+    assert(gxTextureLinearEvictions()==0);
+    destroyGxTextures();chosen={};
+    std::puts("PASS world mips: levels only when chosen, for immutable world uses inside the cap and the linear floor; reference pictures sample the base level of the same storage with no conversion");
+}
 int main(){
+    worldMipsSwitch();
     rgba565Reference();
     nativeRgb565();
     creates=flushes=deletes=binds=completions=0;bindings={};
@@ -123,7 +434,10 @@ int main(){
     assert(bindGxTexture(tb,u,v,2)&&gxTextureBytes()==192&&creates==2);
     const auto third=bindings[2];const auto thirdPixels=third->data;
     assert(bindGxTexture(tb,u,v,0)&&bindings[0]->data==thirdPixels&&bindings[1]->data==pixels&&creates==2);
-    assert(bindGxTexture(tb,u,v,0,true)&&C3D_TexGetType(bindings[0])==GPU_TEX_PROJECTION&&creates==2);
+    // Bound in 2D: the CPU vertex route switches unit 0 to the per-pixel
+    // projection afterwards (setGxTextureProjection).
+    assert(bindGxTexture(tb,u,v,0,true)&&C3D_TexGetType(bindings[0])==GPU_TEX_2D&&creates==2);
+    assert(setGxTextureProjection(true)&&C3D_TexGetType(bindings[0])==GPU_TEX_PROJECTION&&creates==2);
     assert(C3D_TexGetType(bindings[1])==GPU_TEX_2D);
     const auto projectedBinds=binds;
     assert(!bindGxTexture(tb,u,v,1,true)&&binds==projectedBinds);
@@ -233,6 +547,9 @@ int main(){
     std::array<void*,64> pointers{};
     for(unsigned n=0;n<64;++n){ta.handle=1000+n;assert(bindGxTexture(ta,u,v,n%3));pointers[n]=bindings[n%3]->data;}
     std::array<gx::Texture,3> consumed{texture(2000,a),texture(1000,a),texture(1001,a)};
+    // The draw comes in the next frame: images the current frame has not used
+    // go first, oldest first (evictionCandidate).
+    ++gx::textureFrameCounter;
     inFlight=true;const auto beforeEviction=deletes;
     {GxTextureDrawScope scope(consumed);assert(scope);
      GxTextureDrawScope nested(consumed);assert(!nested);
@@ -264,8 +581,8 @@ int main(){
     for(const auto* binding:bindings)if(binding&&binding->data)assert(allocations.contains(binding->data));
     assert(releaseGxTexture(incoming.handle)&&gxTextureBytes()==0&&gxTextureIdleBytes()==256);
     destroyGxTextures();assert(gxTextureIdleBytes()==0);
-    assert(!configureGxTextureCache(10*1024*1024+1,128));
-    assert(!configureGxTextureCache(8*1024*1024,129));
+    assert(!configureGxTextureCache(12*1024*1024+1,128));
+    assert(!configureGxTextureCache(8*1024*1024,257)); // 256 slots since Alpha 12
     assert(configureGxTextureCache(8*1024*1024,128));
     auto huge2=th;huge2.handle=8000;
     assert(bindGxTexture(th,u,v,0)&&bindGxTexture(huge2,u,v,1)&&gxTextureBytes()==8*1024*1024);
@@ -283,4 +600,5 @@ int main(){
     destroyGxTextures();
     assert(allocations.empty()&&creates==deletes);
     std::printf("PASS three-unit sampler independence, shared pixels, lazy invalidation/reconversion without reallocation, mip refresh, expired unused views, descriptor rejection, exact 4 MiB budget, 64 slots, failure and teardown (%u allocations)\n",creates);
+    pingPong();
 }

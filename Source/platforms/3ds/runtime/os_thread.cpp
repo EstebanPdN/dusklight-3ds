@@ -8,6 +8,12 @@
 #include <atomic>
 #include <climits>
 #include <cstring>
+#if defined(__3DS__)
+#include "light_lock_wait.hpp"
+extern "C" {
+#include <3ds/synchronization.h>
+}
+#endif
 
 namespace native = dusk::native;
 namespace {
@@ -15,6 +21,9 @@ constexpr unsigned capacity = 24;
 constexpr std::uint32_t stackBudget = 2 * 1024 * 1024;
 constexpr std::uint64_t stopTimeout = 2000000000;
 constexpr std::int64_t waitSlice = 25000000;
+// A lock wait observes suspension/cancellation at least this often, close to
+// the 1 ms polls it replaces (OSSuspendThread waits for that acknowledgement).
+constexpr std::int64_t lockSlice = 2000000;
 struct Control {
     OSThread* record{};
     native::NativeThreadHandle handle{};
@@ -174,15 +183,62 @@ void checkpoint(bool mutexAcquisition) {
     if (current->cancelled) { current->exiting = true; throw ThreadExit{nullptr}; }
     current->record->state = OS_THREAD_STATE_RUNNING;
 }
+#if defined(__3DS__)
+// A managed worker's lock wait blocks as a counted LightLock waiter (see
+// light_lock_wait.hpp), woken by the owner's unlock, instead of the earlier
+// 1 ms sleeps between tries: the core-2 audio mixer lost up to 1 ms per
+// contended JAS subframe.
+struct CtruLockOps {
+    static std::int32_t load(std::int32_t* word) { return __ldrex(word); }
+    static bool store(std::int32_t* word, std::int32_t value) { return __strex(word, value); }
+    static void clear() { __clrex(); }
+    static void barrier() { __dmb(); }
+    static std::uint64_t now() { return platformThreadTime(); }
+    static void wait(std::int32_t* word, std::int64_t nanoseconds) {
+        syncArbitrateAddressWithTimeout(word, ARBITRATION_WAIT_IF_LESS_THAN_TIMEOUT, 0, nanoseconds);
+    }
+};
+bool lockWithin(std::int32_t* word, std::int64_t nanoseconds) { return lightLockWithin<CtruLockOps>(word, nanoseconds); }
+#else
+// Host tests keep the portable 1 ms poll; the 3DS path above blocks on the arbiter.
+bool lockWithin(std::int32_t* word, std::int64_t) {
+    platformThreadSleep(1000000);
+    return tryLock(word);
+}
+#endif
+std::atomic<const std::int32_t*> watchedLock{};
+std::atomic<std::uint64_t> watchedMainNanoseconds{}, watchedWorkerNanoseconds{};
+std::atomic<std::uint32_t> watchedMainWaits{}, watchedWorkerWaits{};
+void noteWatchedWait(bool worker, std::uint64_t nanoseconds) {
+    (worker ? watchedWorkerNanoseconds : watchedMainNanoseconds).fetch_add(nanoseconds, std::memory_order_relaxed);
+    (worker ? watchedWorkerWaits : watchedMainWaits).fetch_add(1, std::memory_order_relaxed);
+}
 }
 void threadCheckpoint() { checkpoint(false); }
 void threadLock(std::int32_t* value) {
-    if (!current) { lock(value); return; }
-    for (;;) {
-        checkpoint(true);
+    const bool watched = value == watchedLock.load(std::memory_order_relaxed);
+    if (!current) {
+        if (!watched) { lock(value); return; }
         if (tryLock(value)) return;
-        platformThreadSleep(1000000);
+        const auto start = platformThreadTime();
+        lock(value);
+        noteWatchedWait(false, platformThreadTime() - start);
+        return;
     }
+    checkpoint(true);
+    if (tryLock(value)) return;
+    const auto start = platformThreadTime();
+    while (!lockWithin(value, lockSlice)) {
+        // Suspension/cancellation requests are observed between slices.
+        checkpoint(true);
+        if (tryLock(value)) break;
+    }
+    if (watched) noteWatchedWait(true, platformThreadTime() - start);
+}
+void watchLockWaits(const std::int32_t* lock) { watchedLock.store(lock, std::memory_order_relaxed); }
+LockWaitTotals watchedLockWaits() {
+    return {watchedMainNanoseconds.load(std::memory_order_relaxed), watchedWorkerNanoseconds.load(std::memory_order_relaxed),
+            watchedMainWaits.load(std::memory_order_relaxed), watchedWorkerWaits.load(std::memory_order_relaxed)};
 }
 void threadConditionWait(std::int32_t* condition, std::int32_t* value) {
     if (!current) { conditionWait(condition, value); return; }
@@ -321,7 +377,9 @@ void sleepThreadWhile(OSThreadQueue* queue, const bool* paused) {
 namespace dusk::native {
 bool createThreadOnCore(OSThread* record, void* (*entry)(void*), void* argument,
                     void* stackTop, std::uint32_t size, int priority, std::uint16_t attr, int core) {
-    if(core!=-2&&core!=0&&core!=2)return false;
+    // -2 the title's core; 0-3 a core of the New 3DS (the kernel decides: 1
+    // needs APT_SetAppCpuTimeLimit first, 3 is refused on many consoles).
+    if(core!=-2&&(core<0||core>3))return false;
     if (!record || !entry || priority < 0 || priority > 31 || (attr & ~OS_THREAD_ATTR_DETACH) ||
         !size || size > 512 * 1024 ||
         (stackTop && (reinterpret_cast<std::uintptr_t>(stackTop) < size || reinterpret_cast<std::uintptr_t>(stackTop) % 8))) return FALSE;

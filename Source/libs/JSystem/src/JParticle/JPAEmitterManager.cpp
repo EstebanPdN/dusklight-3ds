@@ -90,6 +90,8 @@ void JPAEmitterManager::calc(u8 group_id) {
 
 #if defined(DUSK_TARGET_3DS)
 void JPANativeBatchEnd(); // JPAResource.cpp
+bool JPANativeDrawGroup(JPAEmitterWorkData* work, JPAResourceManager* const* managers,
+                        JSUList<JPABaseEmitter>& list); // JPAResource.cpp
 #endif
 
 void JPAEmitterManager::draw(JPADrawInfo const* drawInfo, u8 group_id) {
@@ -120,6 +122,16 @@ void JPAEmitterManager::draw(JPADrawInfo const* drawInfo, u8 group_id) {
     GXSetChanCtrl(GX_COLOR1A1, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE,
                   GX_AF_NONE);
     GXSetNumChans(0);
+
+#if defined(DUSK_TARGET_3DS)
+    // Native emitter loop (particle-runs.txt, on by default): emitters with
+    // nothing on screen set no GX state at all, and emitters of one resource
+    // share one draw where moving them together cannot change the picture.
+    if (JPANativeDrawGroup(pWd, pResMgrAry, pEmtrUseList[group_id])) {
+        JPANativeBatchEnd();
+        return;
+    }
+#endif
 
     for (JSULink<JPABaseEmitter>* pLink = pEmtrUseList[group_id].getFirst();
          pLink != pEmtrUseList[group_id].getEnd(); pLink = pLink->getNext()) {

@@ -8,16 +8,16 @@ inline void J3DGDWrite_u8(u8 data) {
     __GDWrite(data);
 }
 
+// Each command is written as one run of bytes (__GDWriteBytes): the same
+// bytes in the same order, one read of the thread's list per command.
 inline void J3DGDWrite_u16(u16 data) {
-    __GDWrite((u8)((data >> 8)));
-    __GDWrite((u8)((data >> 0) & 0xFF));
+    const u8 bytes[2] = {(u8)(data >> 8), (u8)data};
+    __GDWriteBytes(bytes, 2);
 }
 
 inline void J3DGDWrite_u32(u32 data) {
-    __GDWrite((u8)((data >> 24) & 0xFF));
-    __GDWrite((u8)((data >> 16) & 0xFF));
-    __GDWrite((u8)((data >> 8) & 0xFF));
-    __GDWrite((u8)((data >> 0) & 0xFF));
+    const u8 bytes[4] = {(u8)(data >> 24), (u8)(data >> 16), (u8)(data >> 8), (u8)data};
+    __GDWriteBytes(bytes, 4);
 }
 
 inline void J3DGDWrite_f32(f32 data) {
@@ -30,21 +30,20 @@ inline void J3DGDWrite_f32(f32 data) {
 }
 
 inline void J3DGDWriteBPCmd(u32 regval) {
-    J3DGDWrite_u8(GX_LOAD_BP_REG);
-    J3DGDWrite_u32(regval);
+    const u8 bytes[5] = {GX_LOAD_BP_REG, (u8)(regval >> 24), (u8)(regval >> 16), (u8)(regval >> 8), (u8)regval};
+    __GDWriteBytes(bytes, 5);
 }
 
 inline void J3DGDWriteXFCmd(u16 addr, u32 val) {
-    J3DGDWrite_u8(GX_LOAD_XF_REG);
-    J3DGDWrite_u16(0);
-    J3DGDWrite_u16(addr);
-    J3DGDWrite_u32(val);
+    const u8 bytes[9] = {GX_LOAD_XF_REG, 0, 0, (u8)(addr >> 8), (u8)addr,
+                         (u8)(val >> 24), (u8)(val >> 16), (u8)(val >> 8), (u8)val};
+    __GDWriteBytes(bytes, 9);
 }
 
 inline void J3DGDWriteXFCmdHdr(u16 addr, u8 len) {
-    J3DGDWrite_u8(GX_LOAD_XF_REG);
-    J3DGDWrite_u16(len - 1);
-    J3DGDWrite_u16(addr);
+    const u16 count = (u16)(len - 1);
+    const u8 bytes[5] = {GX_LOAD_XF_REG, (u8)(count >> 8), (u8)count, (u8)(addr >> 8), (u8)addr};
+    __GDWriteBytes(bytes, 5);
 }
 
 inline void J3DGXCmd1f32ptr(f32* data) {
@@ -61,9 +60,8 @@ inline void J3DGXCmd1f32(f32 data) {
 }
 
 inline void J3DGDWriteCPCmd(u8 reg, u32 value) {
-    J3DGDWrite_u8(8);
-    J3DGDWrite_u8(reg);
-    J3DGDWrite_u32(value);
+    const u8 bytes[6] = {8, reg, (u8)(value >> 24), (u8)(value >> 16), (u8)(value >> 8), (u8)value};
+    __GDWriteBytes(bytes, 6);
 }
 
 void J3DGDSetGenMode(u8 texGenNum, u8 colorChanNum, u8 tevStageNum, u8 IndTexStageNum,

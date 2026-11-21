@@ -149,6 +149,7 @@ static int checkCreateHeap(fopAc_ac_c* i_this) {
 
 #if defined(DUSK_TARGET_3DS)
 extern "C" void duskNativeSceneryTexture(const void* image, bool add);
+extern "C" void duskNativePacketsConfigure(void);
 static void dusk_bg_scenery_textures(J3DModelData* data, bool add) {
     J3DTexture* textures = data != NULL ? data->getTexture() : NULL;
     if (textures == NULL) return;
@@ -237,6 +238,14 @@ int daBg_c::createHeap() {
 #if defined(DUSK_TARGET_3DS)
             // Native texture policy: room scenery samples its mip 1 (50% per axis).
             if (bgPart->model != NULL) dusk_bg_scenery_textures(modelData, true);
+            // Native packets: the material packets of a room model may leave
+            // their register work to the second core (runtime/native_packets.hpp).
+            if (bgPart->model != NULL) {
+                duskNativePacketsConfigure();
+                for (u16 m = 0; m < modelData->getMaterialNum(); m++) {
+                    bgPart->model->getMatPacket(m)->mNativeFlags |= J3DDrawPacket::NATIVE_ROOM_MODEL;
+                }
+            }
 #endif
             if (bgPart->model == NULL) {
                 return 0;

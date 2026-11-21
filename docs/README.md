@@ -12,8 +12,9 @@ The guides below describe the New3DS adaptation, not a supported consumer releas
 | Understand the SDK enum boundary and GPU read-backs | [ADR 0002](decisions/0002-int-sized-enums.md), [ADR 0003](decisions/0003-cpu-readbacks-and-transfer-stops.md) |
 | Build a clean checkout | [Building](BUILDING.md), [Configuration](CONFIGURATION.md) |
 | Find the owner of a subsystem | [Repository map](REPOSITORY.md), [Architecture](ARCHITECTURE.md) |
-| Prepare your own local runtime inputs | [Game data and controls](GAME_DATA.md) |
+| Prepare your own local runtime inputs | [Game data and controls](GAME_DATA.md), [Desktop converter](../Tools/converter/README.md) |
 | Run tests or investigate a defect | [Testing](TESTING.md), [Diagnostics](DIAGNOSTICS.md) |
+| Measure where a picture's time goes | [Measurements](DIAGNOSTICS.md#measurements), [Verification status](STATUS.md) |
 | Contribute a change | [Contributing](../CONTRIBUTING.md), [Changelog](../CHANGELOG.md) |
 | Check attribution and redistribution scope | [Upstream](UPSTREAM.md), [Third-party notices](legal/THIRD_PARTY_NOTICES.md) |
 

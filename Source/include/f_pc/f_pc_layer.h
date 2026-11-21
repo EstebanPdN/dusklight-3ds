@@ -30,6 +30,11 @@ layer_class* fpcLy_Layer(fpc_ProcID i_id);
 layer_class* fpcLy_Search(fpc_ProcID i_id);
 void fpcLy_Regist(layer_class* i_layer);
 
+#if defined(DUSK_TARGET_3DS)
+// Game-thread generation of process membership and fpcLyIt_AllJudge order.
+u64 fpcLy_SearchRevision();
+#endif
+
 void fpcLy_CreatedMesg(layer_class* i_layer);
 void fpcLy_CreatingMesg(layer_class* i_layer);
 void fpcLy_DeletedMesg(layer_class* i_layer);

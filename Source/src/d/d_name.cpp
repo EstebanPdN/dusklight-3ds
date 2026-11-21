@@ -436,7 +436,7 @@ void dName_c::_move() {
     }
     #endif
 
-    IF_NOT_DUSK(cursorAnm());
+    DUSK_ORIGINAL_ONLY(cursorAnm());
 }
 
 int dName_c::nameCheck() {

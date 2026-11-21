@@ -1,8 +1,9 @@
 #pragma once
 #include "runtime/gx_state.hpp"
+#include "runtime/gx_world_mip_use.hpp"
 #include "runtime/texture_gx.hpp"
 namespace dusk::native {
-// Configure an empty cache before original startup. Hard maximum10 MiB/128
+// Configure an empty cache before original startup. Hard maximum 12 MiB/256
 // images stays inside the existing16 MiB linear heap. Defaults4 MiB/64 for
 // diagnostics. No live storage, binding or budget may change through this call.
 // Reference mode changes GX RGB565 storage only, for same-binary A/B runs.
@@ -13,12 +14,17 @@ namespace dusk::native {
 // immutable opaque pixels alone do not prove this. Projected admitted content
 // fails closed before allocation/binding. GX4 or all-mip opaque GX14 only;
 // CMPR remains decoded RGBA8. No wildcard or scene/handle policy.
+// Before configureGxTextureCache: false keeps RGBA8 for every converted
+// format (SD switch texture-compact-off.txt; Alpha 12 default on).
+void setGxTextureCompact(bool on);
 bool configureGxTextureCache(std::size_t bytes,unsigned images,bool rgb565Rgba8Reference=false,
                              std::span<const NativeTextureFingerprint> halfResolutionAllowlist={},
                              bool enableFusedColorCopy=false);
 // A draw protects all of its consumed images before any binding/eviction.
 // Pressure may retire unprotected least-recently-used GPU conversions only
 // after actual queue completion. Their live CPU resource/token stays intact.
+// The second (ping-pong) storage of a dynamic image is released first, with
+// no wait once no queued draw can read it.
 class GxTextureDrawScope {
     bool active{};
 public:
@@ -41,9 +47,49 @@ void gpuCaptureCommit(gx::TextureHandle);
 bool gpuCaptureRead(gx::TextureHandle,std::span<std::uint8_t> out,unsigned paddedWidth,unsigned paddedHeight);
 // Forget cached unit bindings (frame begin, or any foreign C3D_TexBind).
 void invalidateGxTextureBindings();
+// Profiled report: recent decodes, then two lines since the previous report,
+// re-decode GPU waits and re-decode paths/spares (each under the 255-character
+// console OSReport limit).
 void gxTextureDecodeReport();
+// Changed re-decodes since startup, by how the CPU write was kept away from
+// pixels that queued draws may still read: a completion since the last
+// invalidation (unfenced), storage last bound in an earlier frame (idle), the
+// image's second storage (spare, ping-pong), or a full GPU wait (fenced).
+// Unchanged sources are skipped with no decode. Spares count in gxTextureBytes.
+// alpha6Waits counts the waits the Alpha 6 rule took (the first changed
+// re-decode after each invalidation). spareHeldWaits counts eviction waits
+// taken while spares in service held the missing memory, which Alpha 6 might
+// not have taken. fenceTicks is the time of the fenced and spare-held waits.
+struct GxTextureRedecodeStatistics {
+    std::uint64_t unfenced{},idle{},spare{},fenced{},unchanged{};
+    std::uint64_t alpha6Waits{},spareHeldWaits{},fenceTicks{};
+    std::uint64_t spareAllocations{},spareReleases{},spareRefusals{};
+    unsigned spares{};std::size_t spareBytes{};
+};
+GxTextureRedecodeStatistics gxTextureRedecodeStatistics();
 void gxTextureBindStatistics(std::uint64_t& skips,std::uint64_t& applies);
-bool bindGxTexture(const gx::Texture& texture, float& scaleU, float& scaleV,unsigned unit=0,bool projective=false);
+// mipUse (worldMips, runtime/perf_features.hpp): a unit of a world-model draw
+// may sample generated mip levels (runtime/gx_world_mips.hpp says which).
+bool bindGxTexture(const gx::Texture& texture, float& scaleU, float& scaleV,unsigned unit=0,bool projective=false,
+                   GxWorldMipUse mipUse={});
+// worldMips memory and decisions since start (tour report, measured dump).
+struct GxWorldMipStatistics {
+    unsigned images{};        // resident images with generated levels
+    std::size_t bytes{};      // their generated levels' bytes (linear memory)
+    std::uint64_t made{};     // images given levels
+    std::uint64_t worldBinds{},sampledBinds{}; // world-use binds; of them sampling generated levels
+    // Binds of images that carry generated levels at their base level while
+    // the improvement is on: other uses of a world image (rare), or a world
+    // draw path that does not pass its use (Alpha 21: the worker's record
+    // replays). Compare with sampledBinds.
+    std::uint64_t levelBaseBinds{};
+    std::uint64_t refusedShape{},refusedAlpha{},refusedCap{},refusedLinear{},refusedAllocation{};
+    std::uint64_t residentWithout{}; // world-use binds of an image already stored without levels
+};
+GxWorldMipStatistics gxWorldMipStatistics();
+// The checksum the cache keeps of an image the game can rewrite (header,
+// palette and texels), taken now. False when the image cannot be inspected.
+bool gxTextureSourceSum(const gx::Texture& texture,std::uint64_t& sum);
 // Unit 0 after bindGxTexture: PICA projection mode (per-pixel divide by the
 // third coordinate) or plain 2D. False when no texture is bound to unit 0.
 bool setGxTextureProjection(bool projective);
@@ -52,7 +98,9 @@ std::size_t gxTextureBytes(); // Live PICA allocations in the bounded cache.
 // Cached images released because the linear heap refused a new image.
 std::uint64_t gxTextureLinearEvictions();
 // Render owner: release the cached image the current frame needs least (one
-// GPU fence first, tracked by the caller's flag). False when none can go.
+// GPU fence first, tracked by the caller's flag). Spare storage goes first: an
+// idle one with no wait, one still in service after that fence. False when
+// nothing can go.
 bool releaseLeastNeededTexture(bool& fenced);
 std::size_t gxTextureIdleBytes(); // At most 256 bytes for retired, unused unit bindings.
 struct GxTextureHalfStatus {
@@ -62,9 +110,10 @@ struct GxTextureHalfStatus {
 // Full bytes are a counterfactual for exactly these resident images, not a
 // measured whole-cache/whole-RAM saving (eviction can change the resident set).
 GxTextureHalfStatus gxTextureHalfStatus();
-// Only the render owner after successful GPU completion. No pixels are read or
-// changed here; the next binding validates its current borrowed view, decodes
-// into the existing GPU image and flushes it before that image is sampled.
+// Render owner only. No pixels are read or changed here; the next binding
+// validates its current borrowed view, decodes into GPU storage no queued draw
+// reads (or waits for the GPU) and flushes it before that image is sampled.
+// Also releases spare storage unused for a while once it is idle.
 void invalidateGxTextures();
 bool invalidateGxTexture(gx::TextureHandle); // Render owner, after completion.
 bool releaseGxTexture(gx::TextureHandle); // Render owner, after completion.

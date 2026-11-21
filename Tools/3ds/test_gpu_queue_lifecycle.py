@@ -71,7 +71,8 @@ extern "C" u32 C3D_FrameCounter(int);
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
     sources = [NATIVE / 'gpu_sync_ctru.cpp', NATIVE / 'ctru_gxqueue.c', NATIVE.parent / 'tests/gpu_queue_lifecycle_test.cpp']
-    inputs = [*sources, Path(__file__).resolve(), NATIVE / 'gpu_sync.hpp', NATIVE / 'clock.hpp',
+    capture = NATIVE / 'gpu_list_capture_ctru.cpp'
+    inputs = [*sources, capture, NATIVE / 'gpu_list_capture.hpp', Path(__file__).resolve(), NATIVE / 'gpu_sync.hpp', NATIVE / 'shadow_gpu_tags.h', NATIVE / 'clock.hpp',
               CTRU / 'include/3ds/gpu/gx.h']
     hashes = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     common = ['-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
@@ -79,7 +80,7 @@ extern "C" u32 C3D_FrameCounter(int);
     commands = [
         ['clang', '-std=c11','-DgxCmdQueueInterrupt=duskOriginalGxCmdQueueInterrupt', *common, '-c', str(sources[1]), '-o', str(out / 'gxqueue.o')],
         ['clang++', '-std=c++20', *common, '-Wall', '-Wextra', '-Werror',
-         str(sources[0]), str(sources[2]), str(out / 'gxqueue.o'), '-o', str(out / 'probe')],
+         str(sources[0]), str(sources[2]), str(capture), str(out / 'gxqueue.o'), '-o', str(out / 'probe')],
     ]
     receipt = {'schema': 1, 'status': 'running', 'commands': commands, 'input_sha256': hashes,
                'origin': 'Actual native lifecycle gate + unchanged pinned queue body, host SDK/device fixtures',
@@ -94,8 +95,9 @@ extern "C" u32 C3D_FrameCounter(int);
         receipt['cases'] = []
         for name in ('delayed', 'postcopy', 'timeout', 'flushfailure', 'foreign',
                      'stoppedfull', 'stoppedquery', 'unrelatedirq', 'headroom', 'tail', 'reserve-timeout', 'bad-reserve', 'callback', 'frame-tail', 'begin', 'frame-timeout',
-                     'submit', 'submit-backlog', 'present-guard', 'present-paced', 'chunk-draws'):
-            result = subprocess.run([str(out / 'probe'), name], capture_output=True, text=True,
+                     'submit', 'submit-backlog', 'present-guard', 'present-paced', 'chunk-draws',
+                     'poll-step', 'complete-reasons', 'gpu-time', 'shadow-gpu-time', 'gpu-list-capture'):
+            result = subprocess.run([str(out / 'probe'), name], cwd=out, capture_output=True, text=True,
                                     timeout=5, env={**os.environ, 'ASAN_OPTIONS': 'halt_on_error=1',
                                                     'UBSAN_OPTIONS': 'halt_on_error=1'})
             receipt['cases'].append({'name': name, 'returncode': result.returncode,

@@ -8,6 +8,49 @@
 #include <cstring>
 
 namespace dusk::native::gx {
+// Per-vertex warp of a draw whose indirect warp is on the GPU route
+// (gx_indirect_gpu.hpp, planVertexWarp). The constant-offset plan gives every
+// warped unit the warp's mean; the rest, what the warp map adds at each
+// vertex, is sampled by the decoder as the CPU vertex route sampled it
+// (gx_rigid_decode.cpp) and stored where a record keeps its second texture
+// coordinate, which no unit of such a material reads (the record stays the
+// 32-byte one). The shader adds it to each warped unit through coefficients
+// in its rows, so the distortion again changes from vertex to vertex and
+// with the map's scroll while the PICA transforms the vertices.
+struct VertexWarpPlan {
+    bool enabled{};
+    // What the map's coordinate is generated from: GX_VA_POS or a GX_VA_TEXn.
+    std::uint8_t sourceAttribute{};
+    // The map's coordinate in images (texgen, post matrix and the indirect
+    // scale folded in): rows on (x,y,z,1) for a position, (s,t,1,1) for a
+    // texture coordinate. `projected`: the third row is the divisor of the
+    // other two (a map projected from the position).
+    std::array<std::array<float,4>,3> rows{};
+    bool projected{};
+    // The map as the vertex sampler reads it (sampleIndirectImage): one level,
+    // or two blended by `blend` (the second weighs `blend`).
+    struct Level {const std::uint8_t* texels{};std::uint32_t bytes{};std::uint16_t width{},height{};bool linear{};};
+    std::array<Level,2> levels{};
+    float blend{};
+    std::uint8_t format{},wrapS{},wrapT{};
+    // The map's texels never change (Texture::immutablePixels): the numbers
+    // sampled under this plan hold for later pictures too.
+    bool constantMap{};
+    // A vertex stores value[i] = recordScale * functional[i] . (sample - mean)
+    // for i = 0, 1, rounded: two numbers that every warped unit's offset is a
+    // combination of. The unit rows already hold 1 / recordScale.
+    std::array<std::array<float,3>,2> functional{};
+    std::array<float,3> mean{};
+    float recordScale{};
+};
+// Diagnostics: vertices whose warp the pass without floats wrote
+// (VertexWarpSampler::runTurns); the others took a float form.
+inline std::uint64_t vertexWarpIntegerVertices{};
+// A static batch drawn again under a warp it was already sampled with
+// copies those warps (gx_rigid_decode.cpp, WarpStore). A/B switch (SD file
+// warp-repeat-off.txt) and what it saved.
+inline bool vertexWarpRepeats{true};
+inline std::uint64_t vertexWarpRepeatDraws{},vertexWarpRepeatVertices{};
 // Original rigid GX vertices: position/normal matrices, clamped spot lighting,
 // identity TEX0 and linear perspective range fog executed by PICA. The shared
 // 60-byte stream carries raw position.xyz/normal.z and normal.xy in UV1.
@@ -38,7 +81,38 @@ struct RigidVertexPlan {
     // needs rows (multiRowUnits of them, counted from unit 0).
     bool multiTexture{};
     std::uint8_t multiRowUnits{3};
-    std::array<std::uint8_t,3> unitSource{}; // 0 TEX0, 1 TEX1 per unit (role 1)
+    // Per unit: 0 and 1 the record's first and second coordinate (role 1),
+    // 2 the normal (role -1: 2x4 texgen on (normal,1), the J3D environment
+    // maps; the shader scales the normal), 3 the third coordinate of a wide
+    // record (role 1).
+    std::array<std::uint8_t,3> unitSource{};
+    // Units generated from the normal through a texture matrix chosen per
+    // vertex, one per bone (pairedTexgenRows): bit n = unit n, and the same
+    // by texture coordinate for the vertex decoder. Their rows act on the
+    // normal after the bone's normal matrix (u[12].w = 1); pairedRows keep
+    // them without the texture scale, so that every other bone the draw
+    // places is checked against them (addRigidMatrix).
+    std::uint8_t pairedUnits{},pairedSelectors{};
+    std::array<std::uint8_t,3> pairedCoordinate{};
+    std::array<std::array<std::array<float,4>,2>,3> pairedRows{};
+    // The GX attributes the texture coordinates of a compact record are read
+    // from. TEX0 and TEX1 unless a texgen of the material reads another one
+    // (TEX2 and up): its sources then take the places in rising order
+    // (buildRigidMultiVertex; the decoder follows).
+    std::array<std::uint8_t,3> texcoordAttribute{GX_VA_TEX0,GX_VA_TEX1,GX_VA_TEX2};
+    // The texgens read three GX coordinates: the records are
+    // CompactRigidVertexMTWide, with the third coordinate in the upper half
+    // of shader input v5. A unit that reads it (unitSource 3) keeps its
+    // coefficients in z and w of its S1 and T1 rows, which the shader applies
+    // to (second coordinate, third coordinate). Such a draw is decoded and
+    // submitted every picture: its vertices never become resident, so no
+    // native shape record, immediate record or shadow caster holds them
+    // (those assume the 32-byte records).
+    bool wideRecord{};
+    std::size_t recordBytes()const{return wideRecord?sizeof(CompactRigidVertexMTWide):sizeof(CompactRigidVertexMT);}
+    // The record's second coordinate holds the warp of each vertex instead
+    // of a coordinate set (texcoordAttribute[1] then names no attribute).
+    VertexWarpPlan vertexWarp;
     // Multi-texture: unit 0 is projected from the position (role 2): u[81..83]
     // are its S, T and Q rows on (position,1), u[84].xy the texture scales.
     bool multiProjected{};
@@ -51,8 +125,12 @@ struct RigidVertexPlan {
     // the registers): finishing a plan twice does not fold it twice.
     std::array<float,3> foldedOrigin{};
     bool normalsUnused{}; // unlit: normal matrix rows may be absent (zeroed)
+    // A merged skin draw (runtime/gx_skin_palette.hpp): its palette entries,
+    // three rows each at skin::row(k), named by the records' matrix bytes;
+    // matrixOffsets are then unused. 0: the slot palette above.
+    std::uint8_t skinEntries{};
     // Fixed-point scales of the decoded compact records (native shape replay).
-    float decodedNormalScale{},decodedTex0Scale{1},decodedTex1Scale{1};
+    float decodedNormalScale{},decodedTex0Scale{1},decodedTex1Scale{1},decodedTex2Scale{1};
     RasterColorPlan color;
     unsigned lights{};
     unsigned projectionBase() const { return 19+4*lights; }
@@ -65,6 +143,18 @@ struct RigidVertexPlan {
 // A/B switch (SD file mt-wide-palette-off.txt): off keeps the palette below
 // row 81 whatever the number of texture units, as before 2026-11-14.
 inline bool multiTextureWidePalette{true};
+// A/B switch (SD file mt-normal-texgen-off.txt): off refuses units generated
+// from the normal (reject 15, the CPU vertex route), as before 2026-11-16.
+inline bool multiTextureNormalTexgen{true};
+// A/B switch: constant-fog-ramp-off.txt keeps the original fog planner gates.
+inline bool rigidConstantFogRamp{true};
+inline std::uint64_t gxRigidConstantFogRampPlans{};
+// A/B switch (SD file mt-single-attribute.txt, '0'): off refuses vertex
+// formats with one attribute in decodeCompactRigidBatchMT (compact reject 58,
+// the CPU vertex route), as before 2026-11-16.
+inline bool gxCompactSingleAttribute{true};
+// Diagnostics: one-attribute formats decoded (accepted by the switch above).
+inline std::uint64_t gxCompactSingleAttributeDecodes{};
 // Multi-texture uniform layout (gx_rigid_mt.v.pica).
 constexpr unsigned multiUnitRow(unsigned unit){return 89-4*unit;}
 inline float& multiRole(RigidVertexPlan& p,unsigned unit){return unit==0?p.uniforms[13][2]:unit==1?p.uniforms[13][3]:p.uniforms[18][3];}
@@ -73,24 +163,135 @@ inline float multiRole(const RigidVertexPlan& p,unsigned unit){return unit==0?p.
 inline void setMultiDepthClamp(RigidVertexPlan& p){p.uniforms[10][3]=1;}
 // Diagnostics: first failing condition of planRigidMultiVertex (see game_startup).
 inline std::array<std::uint32_t,64> gxRigidPlanRejects{};
+// The reject counts the profiled-frame report has cleared so far, of the plans
+// and of the compact decoders (the automatic test's zone reports add the
+// current ones).
+inline std::array<std::uint64_t,64> gxRigidPlanRejectsCleared{},gxCompactDecodeRejectsCleared{};
 // Diagnostics: compact multi-texture decode failures (0-7 general, 8+slot*8+type unsupported field).
 inline std::array<std::uint32_t,64> gxCompactDecodeRejects{};
+// Diagnostics: accepted multi-texture plans with a unit generated from the
+// normal (role -1); before 2026-11-16 these were rigid plan reject 15.
+inline std::uint32_t gxRigidNormalTexgenPlans{};
+// Diagnostics: the last texgen refused with reject 10, 15 or 16 (XF
+// 0x1040+n and 0x1050+n words), to name the forms still left on the CPU.
+struct RefusedTexgen {std::uint32_t gen{},post{},code{};};
+inline RefusedTexgen gxRigidLastRefusedTexgen{};
+// Diagnostics: the last draw refused for reading more GX coordinates than a
+// record carries (reject 61): which TEXn (bit n), the texgen words of its
+// units and what its lighting reads, to choose how to carry them.
+struct RefusedSources {
+    std::uint8_t mask{},units{},vertexColor{},ambientVertex{},lit{},required{},lightMask{},fog{};
+    std::array<std::uint32_t,3> gen{};
+};
+inline RefusedSources gxRigidLastRefusedSources{};
+// Diagnostics: the fog of the last draw refused with reject 20 (a fog the
+// multi-texture shader cannot make: not linear and no unit free for the ramp,
+// orthographic, or coefficients out of range).
+struct RefusedFog {
+    unsigned function{},units{};int fogUnit{};float a{},b{},c{};
+    std::uint8_t orthographic{},vertexColor{},lit{},set{};
+};
+inline RefusedFog gxRigidLastRefusedFog{};
+struct RefusedRigidUniform {
+    unsigned row{},component{};
+    float value{};
+    std::array<std::uint32_t,5> fogWords{}; // BP e8, ee, ef, f0, f1
+};
+inline RefusedRigidUniform gxRigidLastRefusedUniform{};
+// Environment maps on skinned models. J3D loads, beside the position matrix
+// of each bone of a batch, a texture matrix made from that bone's matrix, and
+// every vertex selects it (texture matrix selector = position selector + 30).
+// GX then computes  uv = post . texture matrix[bone] . (normal,1).
+// When texture matrix[bone] = E . normal matrix[bone] with one E for the
+// draw, that is  uv = post . E . (normal matrix[bone] . normal, 1): the
+// shader already forms that normal for lighting, so the unit needs only the
+// rows post . E, the same for every bone. pairedTexgenRows gives those rows
+// from one bone; addRigidMatrix compares every other bone the draw places
+// (a batch whose bones disagree, a non-uniform scale for instance, stays on
+// the CPU vertex route). SD switch mt-paired-texgen-off.txt. Until Alpha 8
+// every such draw took the CPU route (plan reject 2): 84 draws a picture and
+// 172 ms in a Lakebed Temple room (console zone 32 of seed 54737253).
+inline bool multiTexturePairedTexgen{true};
+// A material whose texgens read three GX coordinates (a lit room floor with
+// two layers and a third set for its shading map: Kakariko's cellar,
+// R_SP209 r7, 2,080 vertices) gets wide records (RigidVertexPlan::wideRecord)
+// instead of plan reject 61 and the CPU vertex route, which took 38 ms of a
+// 65 ms picture there. SD switch mt-third-coordinate-off.txt.
+inline bool multiTextureThirdCoordinate{true};
+inline std::uint64_t gxWideRecordPlans{};
+inline std::uint64_t gxPairedTexgenPlans{},gxPairedTexgenRefusals{};
+// False when a word is missing or not finite, the post matrix normalises or
+// the normal matrix has no inverse.
+inline bool pairedTexgenRows(const CommandRegisters& r,unsigned coordinate,unsigned index,std::array<std::array<float,4>,2>& rows){
+    if(index>27||index%3||coordinate>7||!r.xfValid[0x1050+coordinate])return false;
+    auto word=[&](unsigned at,double& value){
+        if(!r.xfValid[at])return false;
+        const float f=std::bit_cast<float>(r.xf[at]);
+        if(!std::isfinite(f)||std::abs(f)>1e6f)return false;
+        value=f;return true;
+    };
+    double t[2][4];
+    for(unsigned row=0;row<2;++row)for(unsigned k=0;k<4;++k)if(!word(4*(index+30)+4*row+k,t[row][k]))return false;
+    const auto post=r.xf[0x1050+coordinate];const unsigned postRow=post&63;
+    if((post&0x100)||(postRow!=61&&(postRow>57||postRow%3)))return false;
+    if(postRow!=61){
+        // uv = P.(s',t',1,1), as for the texgens with one matrix.
+        double composed[2][4];
+        for(unsigned row=0;row<2;++row){
+            double pr[4];
+            for(unsigned k=0;k<4;++k)if(!word(0x500+4*(postRow+row)+k,pr[k]))return false;
+            for(unsigned k=0;k<4;++k)composed[row][k]=pr[0]*t[0][k]+pr[1]*t[1][k];
+            composed[row][3]+=pr[2]+pr[3];
+        }
+        for(unsigned row=0;row<2;++row)for(unsigned k=0;k<4;++k)t[row][k]=composed[row][k];
+    }
+    double n[3][3];
+    for(unsigned row=0;row<3;++row)for(unsigned k=0;k<3;++k)if(!word(0x400+3*index+3*row+k,n[row][k]))return false;
+    const double c00=n[1][1]*n[2][2]-n[1][2]*n[2][1],c01=n[1][2]*n[2][0]-n[1][0]*n[2][2],c02=n[1][0]*n[2][1]-n[1][1]*n[2][0];
+    const double det=n[0][0]*c00+n[0][1]*c01+n[0][2]*c02;
+    if(!(std::abs(det)>1e-12))return false;
+    const double inverse[3][3]{
+        {c00/det,(n[0][2]*n[2][1]-n[0][1]*n[2][2])/det,(n[0][1]*n[1][2]-n[0][2]*n[1][1])/det},
+        {c01/det,(n[0][0]*n[2][2]-n[0][2]*n[2][0])/det,(n[0][2]*n[1][0]-n[0][0]*n[1][2])/det},
+        {c02/det,(n[0][1]*n[2][0]-n[0][0]*n[2][1])/det,(n[0][0]*n[1][1]-n[0][1]*n[1][0])/det}};
+    for(unsigned row=0;row<2;++row){
+        for(unsigned k=0;k<3;++k)rows[row][k]=float(t[row][0]*inverse[0][k]+t[row][1]*inverse[1][k]+t[row][2]*inverse[2][k]);
+        rows[row][3]=float(t[row][3]);
+    }
+    return true;
+}
+// The bone at position selector `index` gives the rows the plan holds.
+inline bool pairedTexgenHolds(const CommandRegisters& r,unsigned index,const RigidVertexPlan& p){
+    for(unsigned unit=0;unit<3;++unit)if(p.pairedUnits&(1u<<unit)){
+        std::array<std::array<float,4>,2> rows;
+        if(!pairedTexgenRows(r,p.pairedCoordinate[unit],index,rows))return false;
+        for(unsigned row=0;row<2;++row)for(unsigned k=0;k<4;++k){
+            const float want=p.pairedRows[unit][row][k];
+            if(!(std::abs(rows[row][k]-want)<=1e-3f+2e-3f*std::abs(want)))return false;
+        }
+    }
+    return true;
+}
 inline bool addRigidMatrix(const CommandRegisters& r,unsigned index,RigidVertexPlan& p){
     if(index>27||index%3)return false;
     if(p.matrixOffsets[index/3]>=0)return true;
     if(p.matrices>=10)return false;
+    if(p.pairedUnits&&!pairedTexgenHolds(r,index,p)){++gxPairedTexgenRefusals;return false;}
+    // A paired texgen reads the normal rows whatever the lighting does.
+    const bool normalsUnused=p.normalsUnused&&!p.pairedUnits;
     std::array<std::array<float,4>,6> values{};
     for(unsigned row=0;row<3;++row){
         for(unsigned c=0;c<4;++c){const auto at=4*index+4*row+c;if(!r.xfValid[at])return false;values[row][c]=std::bit_cast<float>(r.xf[at]);}
         for(unsigned c=0;c<3;++c){const auto at=0x400+3*index+3*row+c;
-            if(!r.xfValid[at]){if(p.normalsUnused){values[3+row][c]=0;continue;}return false;}
+            if(!r.xfValid[at]){if(normalsUnused){values[3+row][c]=0;continue;}return false;}
             values[3+row][c]=std::bit_cast<float>(r.xf[at]);}
     }
     for(const auto& row:values)for(float value:row)if(!std::isfinite(value)||std::abs(value)>1e8f)return false;
     if(p.compactPalette&&p.matrices){
-        // Normal 3x3 == k * position 3x3 (k > 0) gives the same unit normal.
-        bool shared=p.normalsUnused;
-        if(!shared){
+        // Normal 3x3 == k * position 3x3 (k > 0) gives the same unit normal
+        // (not the same normal: a paired texgen keeps its own rows).
+        bool shared=normalsUnused;
+        if(!shared&&!p.pairedUnits){
             float num=0,den=0;
             for(unsigned row=0;row<3;++row)for(unsigned c=0;c<3;++c){num+=values[3+row][c]*values[row][c];den+=values[row][c]*values[row][c];}
             if(den>0&&num>0){
@@ -201,16 +402,42 @@ inline bool planRigidVertex(const CommandRegisters& r,const DecodedVertex& first
     for(float value:u[93])if(!std::isfinite(value)||std::abs(value)>1e8f)return false;
     reset.keep=true;return true;
 }
-// Native PICA engine: rigid draws whose material samples 1-3 textures through
-// regular 2x4 GX texgens from TEX0/TEX1 with an identity or palette texture
-// matrix and identity post-transform. Lighting/fog/palette match the rigid
-// plan; texture rows fold texgen matrix, texture scale and the vertical flip.
-// decodeCompactRigidBatchMT later folds the fixed-point TEX fractions in.
-inline bool planRigidMultiVertex(const CommandRegisters& r,const DecodedVertex& first,
-    const VertexTransformPlan& transform,const RasterColorPlan& color,const VertexFogPlan& fog,bool primaryAlpha,
+// The texgen part of planVertexTransform (gx_vertex_transform.cpp) for the
+// native shape replay, which takes the clip projection from a cache instead
+// of building a 2.7 KB transform plan per shape: the same conditions on the
+// requested coordinates (count, form, source row, post matrix) and the same
+// projective mask. Tools/3ds/test_gx_rigid_texgen.py compares the two over
+// a sweep of register words.
+inline bool replayTexgenMask(const CommandRegisters& r,std::uint8_t requested,std::uint8_t& projective){
+    projective=0;
+    if(requested){
+        if(!r.xfValid[0x103f])return false;
+        const auto count=r.xf[0x103f];if(count>8||(unsigned(requested)>>count))return false;
+    }
+    for(unsigned i=0;i<8;++i)if(requested&(1u<<i)){
+        if(!r.xfValid[0x1040+i]||!r.xfValid[0x1050+i])return false;
+        const auto config=r.xf[0x1040+i],post=r.xf[0x1050+i];
+        const unsigned type=(config>>4)&7,row=(config>>7)&31,postRow=post&63;
+        bool projection=(config>>1)&1;
+        if(type==2||type==3)projection=false;
+        else if(type!=0||row>12)return false;
+        if(postRow!=61&&(postRow>57||postRow%3))return false;
+        if(projection)projective|=std::uint8_t(1u<<i);
+    }
+    return true;
+}
+// Body of planRigidMultiVertex (below). The clip projection and the mask of
+// projected coordinates come from a VertexTransformPlan, or on the native
+// shape replay from cached results of the same computation. `out` must hold
+// a fresh plan's values in every field but `uniforms` and `color`, with rows
+// 6-18 and 81-93 zero: the body writes every other row it reads or checks
+// (0-5 through addRigidMatrix, the light records from 19, the unit rows), so
+// rows it does not write are never read, checked or uploaded before the
+// palette placement writes them (see prepareRigidMultiReuse).
+inline bool buildRigidMultiVertex(const CommandRegisters& r,const DecodedVertex& first,
+    std::uint8_t projectiveMask,const std::array<float,16>& projection,const RasterColorPlan& color,const VertexFogPlan& fog,bool primaryAlpha,
     unsigned logicalWidth,const PicaMaterialPlan& material,unsigned textureUnits,
-    const std::array<std::array<float,2>,3>& scales,int fogUnit,RigidVertexPlan& out,bool allowProjected=false){
-    out={};
+    const std::array<std::array<float,2>,3>& scales,int fogUnit,RigidVertexPlan& out,bool allowProjected){
     // First failing condition per rejected draw (sparse-frame diagnostics).
     auto reject=[](unsigned code){++gxRigidPlanRejects[code];return false;};
     // Unlit draws (2D/UI, emissive meshes) use ambient 1 and a zero-color dummy
@@ -241,12 +468,46 @@ inline bool planRigidMultiVertex(const CommandRegisters& r,const DecodedVertex& 
     const bool projected=material.projectiveTexture0;
     if(projected){
         if(!allowProjected||!textureUnits||material.textures[0].coordinate>7||
-           transform.projectiveMask()!=(1u<<material.textures[0].coordinate))return reject(11);
-    }else if(transform.projectiveMask())return reject(11);
+           projectiveMask!=(1u<<material.textures[0].coordinate))return reject(11);
+    }else if(projectiveMask)return reject(11);
     if(!r.matrixIndexValid[0])return reject(12);
     if(fogUnit>=0&&(fogUnit!=int(textureUnits)||fogUnit>2))return reject(13);
-    struct Gen {std::array<std::array<float,4>,2> rows{};std::uint8_t source{};};
+    struct Gen {std::array<std::array<float,4>,2> rows{};std::uint8_t source{};bool paired{};}; // source: 0 and 1 the record's coordinates, 2 normal
     std::array<Gen,3> gens{};
+    std::uint8_t pairedUnits=0,pairedSelectors=0;
+    // Which GX coordinates the texgens read (bit n: TEXn). A record carries
+    // two: TEX0 and TEX1 in their places, as always; a material that reads
+    // TEX2 or beyond gets its own two in rising order (until Alpha 8 such a
+    // draw was plan reject 16, then the CPU vertex route: one room mesh of
+    // 2,080 vertices cost 38 ms of a picture).
+    std::uint8_t texcoordMask=0;
+    for(unsigned u=0;u<textureUnits;++u){
+        if(u==0&&material.projectiveTexture0)continue;
+        const unsigned c=material.textures[u].coordinate;
+        if(c>7||!r.xfValid[0x1040+c])continue; // refused in the loop below
+        const auto gen=r.xf[0x1040+c];const unsigned source=(gen>>7)&31;
+        if(!(gen&4)&&source>=5&&source<=12)texcoordMask|=std::uint8_t(1u<<(source-5));
+    }
+    std::array<std::uint8_t,3> texcoordAttribute{GX_VA_TEX0,GX_VA_TEX1,GX_VA_TEX2};
+    bool wideRecord=false;
+    if(texcoordMask&~3u){
+        if(unsigned(__builtin_popcount(texcoordMask))>(multiTextureThirdCoordinate?3u:2u)){
+            auto& d=gxRigidLastRefusedSources;d={};
+            d.mask=texcoordMask;d.units=std::uint8_t(textureUnits);d.vertexColor=std::uint8_t(color.vertex);
+            d.ambientVertex=std::uint8_t(color.ambientVertex);d.lit=std::uint8_t(color.lit);d.required=std::uint8_t(color.required);
+            d.lightMask=std::uint8_t(color.channels[0].mask);d.fog=fog.enabled;
+            for(unsigned u=0;u<textureUnits;++u){
+                const unsigned c=material.textures[u].coordinate;
+                if(c<=7&&r.xfValid[0x1040+c])d.gen[u]=r.xf[0x1040+c];
+            }
+            return reject(61);
+        }
+        unsigned placed=0;
+        for(unsigned t=0;t<8;++t)if(texcoordMask&(1u<<t))texcoordAttribute[placed++]=std::uint8_t(GX_VA_TEX0+t);
+        // One source: the other place takes a coordinate no texgen reads.
+        if(placed==1)texcoordAttribute[1]=std::uint8_t(texcoordAttribute[0]==GX_VA_TEX7?int(GX_VA_TEX6):texcoordAttribute[0]+1);
+        wideRecord=placed==3;
+    }
     std::array<std::array<float,4>,3> projectedRows{};
     for(unsigned u=0;u<textureUnits;++u){
         const unsigned c=material.textures[u].coordinate;
@@ -255,13 +516,26 @@ inline bool planRigidMultiVertex(const CommandRegisters& r,const DecodedVertex& 
         const unsigned source=(gen>>7)&31;
         // A per-vertex texture matrix selector is refused only for a
         // coordinate the material reads; formats often carry unused ones.
-        if(first.present&(1u<<(GX_VA_TEX0MTXIDX+c)))return reject(2);
+        // One kind stays: the 2x4 texgen from the normal whose selector
+        // follows the position selector (pairedTexgenRows); the decoder
+        // checks the selectors of every vertex.
+        if(first.present&(1u<<(GX_VA_TEX0MTXIDX+c))){
+            const bool paired=multiTexturePairedTexgen&&multiTextureNormalTexgen&&(first.present&1)&&!(u==0&&projected)&&
+                !((gen>>4)&7)&&!(gen&2)&&(gen&4)&&source==1&&first.matrix[1+c]==first.matrix[0]+30&&
+                (first.present&(1u<<GX_VA_NRM))&&first.normalCount>=1;
+            if(!paired||!pairedTexgenRows(r,c,first.matrix[0],gens[u].rows))return reject(2);
+            gens[u].source=2;gens[u].paired=true;
+            pairedUnits|=std::uint8_t(1u<<u);pairedSelectors|=std::uint8_t(1u<<c);
+            continue;
+        }
         if((gen>>4)&7)return reject(14);
         if(u==0&&projected){
             // Regular 3x4 texgen from the position (matrix or none), then an
             // optional post matrix without normalisation: as transformVertex,
             // composed into three rows on (position,1).
-            if(!(gen&2)||source!=0)return reject(16);
+            // The refused texgen goes to the report (which source a projected
+            // unit that is not made from the position reads).
+            if(!(gen&2)||source!=0){gxRigidLastRefusedTexgen={gen,post,16};return reject(16);}
             const unsigned postRow=post&63;
             if((post&0x100)||(postRow!=61&&(postRow>57||postRow%3)))return reject(17);
             if(c>=4&&!r.matrixIndexValid[1])return reject(28);
@@ -292,14 +566,33 @@ inline bool planRigidMultiVertex(const CommandRegisters& r,const DecodedVertex& 
             for(unsigned row=0;row<3;++row)for(unsigned k=0;k<4;++k)projectedRows[row][k]=float(rows[row][k]);
             continue;
         }
-        if(gen&6)return reject(15);
-        if(source!=5&&source!=6)return reject(16);
+        auto refuse=[&](unsigned code){gxRigidLastRefusedTexgen={gen,post,code};return reject(code);};
+        // A 3x4 (STQ) coordinate here shares the coordinate unit 0 projects
+        // (routeProjectiveTexture routes the one projected coordinate there,
+        // and the transform plan has no other): the PICA divides per pixel
+        // on unit 0 only. Refused, reject 15.
+        if(gen&2)return refuse(15);
+        // ABC1 input form: GX feeds (row,1). From the normal this is the J3D
+        // environment map, modes 6 and 10 (disc scan 2026-11-16: about 540
+        // materials, among them the Master Sword, Freezards, Blizzeta's ice;
+        // no binormal/tangent 2x4 texgen, one material from the position).
+        // Position rows would need the compact origin folded in
+        // (finishCompactRigidUniforms): refused, reject 10. The 3x4 env maps
+        // from the normal (J3D mode 7: bottles, bow) are projected units,
+        // refused above (16, or 11 with the projected unit off): their q
+        // varies per pixel, so they stay on the CPU route.
+        const bool fromNormal=gen&4;
+        if(fromNormal&&!multiTextureNormalTexgen)return refuse(15);
+        if(fromNormal?(source!=1):(source<5||source>12))return refuse(fromNormal?10:16);
         const unsigned postRow=post&63;
         if((post&0x100)||(postRow!=61&&(postRow>57||postRow%3)))return reject(17);
-        if(!(first.present&(1u<<(source==5?GX_VA_TEX0:GX_VA_TEX1))))return reject(18);
+        const unsigned sourceAttribute=fromNormal?unsigned(GX_VA_NRM):unsigned(GX_VA_TEX0)+(source-5);
+        const bool sourcePresent=fromNormal?((first.present&(1u<<GX_VA_NRM))&&first.normalCount>=1):bool(first.present&(1u<<sourceAttribute));
+        if(!sourcePresent)return reject(18);
         if(c>=4&&!r.matrixIndexValid[1])return reject(28);
         const unsigned m=c<4?(r.matrixIndex[0]>>(6+6*c))&63:(r.matrixIndex[1]>>(6*(c-4)))&63;
-        auto& g=gens[u];g.source=source==5?0:1;
+        auto& g=gens[u];
+        g.source=fromNormal?2:sourceAttribute==texcoordAttribute[0]?0:wideRecord&&sourceAttribute==texcoordAttribute[2]?3:1;
         if(m==60){g.rows[0]={1,0,0,0};g.rows[1]={0,1,0,0};}
         else{
             if(m>=60||m%3)return reject(19);
@@ -325,23 +618,49 @@ inline bool planRigidMultiVertex(const CommandRegisters& r,const DecodedVertex& 
             g.rows=composed;
         }
     }
+    // One switch in the shader turns every unit of role -1: a draw is paired
+    // in all its normal texgens or in none.
+    if(pairedUnits)for(unsigned u=0;u<textureUnits;++u)if(gens[u].source==2&&!gens[u].paired&&!(u==0&&projected))return reject(2);
     if(!r.xfValid[0x1040]||!r.xfValid[0x1050])return reject(30);
     const unsigned position=first.present&1?first.matrix[0]:r.matrixIndex[0]&63;
     if(position>27||position%3)return reject(31);
-    if(fog.enabled&&(fog.function!=2||fog.orthographic||fog.a<0||fog.b<=1))return reject(20);
+    // The shader computes the linear ramp coordinate. A fog unit applies the
+    // curve of the other functions from its ramp texture; a fog factor in
+    // the primary colour has no such step.
+    const bool zeroFogRamp=fog.enabled&&fog.zeroReverseRamp&&fogUnit>=0&&rigidConstantFogRamp;
+    if(fog.enabled&&!zeroFogRamp&&((fog.function!=2&&fogUnit<0)||fog.orthographic||fog.a<0||fog.b<=1)){
+        gxRigidLastRefusedFog={fog.function,textureUnits,fogUnit,float(fog.a),float(fog.b),float(fog.c),
+            std::uint8_t(fog.orthographic),std::uint8_t(color.vertex),std::uint8_t(color.lit),1};
+        return reject(20);
+    }
     struct FailureReset {RigidVertexPlan& plan;bool keep=false;~FailureReset(){if(!keep)plan={};}} reset{out};
-    auto& p=out;p.color=color;p.indexedMatrices=first.present&1;p.multiTexture=true;p.normalsUnused=noNormals;p.matrixOffsets.fill(-1);p.normalOffsets.fill(-1);
+    auto& p=out;if(&p.color!=&color)p.color=color;
+    p.indexedMatrices=first.present&1;p.multiTexture=true;p.normalsUnused=noNormals;p.matrixOffsets.fill(-1);p.normalOffsets.fill(-1);
+    p.pairedUnits=pairedUnits;p.pairedSelectors=pairedSelectors;p.texcoordAttribute=texcoordAttribute;p.wideRecord=wideRecord;
+    for(unsigned unit=0;unit<textureUnits;++unit)if(gens[unit].paired){
+        p.pairedCoordinate[unit]=std::uint8_t(material.textures[unit].coordinate);p.pairedRows[unit]=gens[unit].rows;
+    }
     if(!addRigidMatrix(r,position,p))return reject(21);
     auto& u=p.uniforms;
-    const auto& projection=transform.clipProjection();
     for(unsigned row=0;row<4;++row)for(unsigned c=0;c<4;++c)u[6+row][c]=projection[row*4+c];
     // Units that need rows: the textures (the fog ramp unit, after them,
     // only needs its role). Their count sets where the palette may end.
     p.multiRowUnits=std::uint8_t(multiTextureWidePalette?textureUnits:3);
     u[10]=color.ambient;u[93]=color.material;
-    u[11]={float(fog.a),float(fog.b),float(fog.c),0};
-    u[12]={float(fog.enabled),float(fog.rangeEnabled),float(primaryAlpha),0};
-    if(fog.rangeEnabled){
+    // u[12].w: units of role -1 read the normal after the bone's matrix
+    // (finishCompactRigidUniforms writes it again).
+    // Castle sewers encodes linear fog with a very large positive A and C
+    // exactly -1. In the accepted perspective path B > 1 and depth <= 1,
+    // so A/(B-depth) is nonnegative, even after range adjustment. Adding
+    // one clamps to one everywhere. Keep B, C and range rows validated.
+    const float fogA=float(fog.a);
+    const bool fullFogRamp=rigidConstantFogRamp&&fog.enabled&&fog.function==2&&fog.c==-1.0&&
+        std::isfinite(fogA)&&fogA>1e8f;
+    const bool constantFogRamp=zeroFogRamp||fullFogRamp;
+    u[11]=zeroFogRamp?std::array<float,4>{}:std::array{fullFogRamp?1.f:fogA,float(fog.b),float(fog.c),0.f};
+    u[12]={constantFogRamp?2.f:float(fog.enabled),float(fog.rangeEnabled&&!zeroFogRamp),
+           float(primaryAlpha&&!zeroFogRamp),pairedUnits?1.f:0.f};
+    if(fog.rangeEnabled&&!zeroFogRamp){
         u[13]={float(-double(logicalWidth)/fog.viewportWidth),float((logicalWidth-2*fog.rangeCenter)/fog.viewportWidth),0,0};
         for(unsigned i=0;i<5;++i)u[14+i]={float(fog.rangeK[2*i]),float(fog.rangeK[2*i+1]),float(fog.rangeK[std::min(2*i+2,9u)]),0};
     }
@@ -367,7 +686,8 @@ inline bool planRigidMultiVertex(const CommandRegisters& r,const DecodedVertex& 
     // u[10].w is the depth clamp switch in this program (the ambient alpha
     // is folded into the material by the decoders).
     u[10][3]=0;
-    // Texture units: role 1 = texgen rows, 0.5 = fog ramp coordinate.
+    // Texture units: role 1 = texgen rows on TEX0/TEX1, -1 = rows on the
+    // normal, 0.5 = fog ramp coordinate.
     for(unsigned unit=0;unit<3;++unit){
         const unsigned base=multiUnitRow(unit);
         if(unit==0&&projected){
@@ -379,32 +699,84 @@ inline bool planRigidMultiVertex(const CommandRegisters& r,const DecodedVertex& 
             const auto& g=gens[unit];const float su=scales[unit][0],sv=scales[unit][1];
             if(!std::isfinite(su)||!std::isfinite(sv)||su<=0||sv<=0)return reject(24);
             const auto& m0=g.rows[0];const auto& m1=g.rows[1];
-            if(g.source==0){
+            // TEX0 rows act on (s0,t0,1,1) and normal rows on (n,1): both take
+            // the whole row, with the constant in w (the same values).
+            if(g.source==3){
+                // Third coordinate: z and w of the second input (wideRecord).
+                u[base+0]={0,0,su*m0[2],su*m0[3]};u[base+1]={0,0,su*m0[0],su*m0[1]};
+                u[base+2]={0,0,-sv*m1[2],1-sv*m1[3]};u[base+3]={0,0,-sv*m1[0],-sv*m1[1]};
+            }else if(g.source!=1){
                 u[base+0]={su*m0[0],su*m0[1],su*m0[2],su*m0[3]};u[base+1]={0,0,0,0};
                 u[base+2]={-sv*m1[0],-sv*m1[1],-sv*m1[2],1-sv*m1[3]};u[base+3]={0,0,0,0};
             }else{
                 u[base+0]={0,0,su*m0[2],su*m0[3]};u[base+1]={su*m0[0],su*m0[1],0,0};
                 u[base+2]={0,0,-sv*m1[2],1-sv*m1[3]};u[base+3]={-sv*m1[0],-sv*m1[1],0,0};
             }
-            p.unitSource[unit]=g.source;multiRole(p,unit)=1;
+            p.unitSource[unit]=g.source;multiRole(p,unit)=g.source==2?-1.f:1.f;
         }else if(int(unit)==fogUnit)multiRole(p,unit)=0.5f;
     }
     for(unsigned row=0;row<p.uniformCount();++row)
-        for(float value:u[row])if(!std::isfinite(value)||std::abs(value)>1e8f)return reject(25);
+        for(unsigned c=0;c<4;++c){
+            const float value=u[row][c];
+            if(!std::isfinite(value)||std::abs(value)>1e8f){
+                gxRigidLastRefusedUniform={row,c,value,{r.bp[0xe8],r.bp[0xee],r.bp[0xef],r.bp[0xf0],r.bp[0xf1]}};
+                return reject(25);
+            }
+        }
     for(unsigned row=p.paletteLimit();row<94;++row)for(float value:u[row])if(!std::isfinite(value)||std::abs(value)>1e8f)return reject(26);
+    for(unsigned unit=0;unit<3;++unit)if(multiRole(p,unit)<0){++gxRigidNormalTexgenPlans;break;}
+    if(pairedUnits)++gxPairedTexgenPlans;
+    if(wideRecord)++gxWideRecordPlans;
+    if(constantFogRamp)++gxRigidConstantFogRampPlans;
     reset.keep=true;return true;
+}
+// Native PICA engine: rigid draws whose material samples 1-3 textures through
+// regular 2x4 GX texgens from TEX0/TEX1 or the normal with an identity or
+// palette texture matrix and a non-normalizing post matrix (folded in). Unit 0
+// may instead be projected from the position. Lighting/fog/palette match the rigid
+// plan; texture rows fold texgen matrix, texture scale and the vertical flip.
+// decodeCompactRigidBatchMT later folds the fixed-point TEX fractions in.
+inline bool planRigidMultiVertex(const CommandRegisters& r,const DecodedVertex& first,
+    const VertexTransformPlan& transform,const RasterColorPlan& color,const VertexFogPlan& fog,bool primaryAlpha,
+    unsigned logicalWidth,const PicaMaterialPlan& material,unsigned textureUnits,
+    const std::array<std::array<float,2>,3>& scales,int fogUnit,RigidVertexPlan& out,bool allowProjected=false){
+    out={};
+    return buildRigidMultiVertex(r,first,transform.projectiveMask(),transform.clipProjection(),color,fog,primaryAlpha,logicalWidth,
+                                 material,textureUnits,scales,fogUnit,out,allowProjected);
+}
+// Native shape replay: one plan's storage serves every replayed shape. In
+// place of `plan={}` (2.2 KB) only what buildRigidMultiVertex requires is
+// reset: every field but `uniforms` and `color` (copied from a fresh plan,
+// so fields added later are covered), and rows 6-18 and 81-93, which it
+// reads or checks without always writing (fog range rows and unit roles,
+// unit rows of absent units under the narrow palette). The rows a submission
+// uploads are then the rows planRigidMultiVertex gives; the rest are palette
+// rows the placement writes before any use.
+inline constexpr RigidVertexPlan freshRigidVertexPlan{};
+inline void prepareRigidMultiReuse(RigidVertexPlan& p){
+    static_assert(offsetof(RigidVertexPlan,uniforms)==0&&offsetof(RigidVertexPlan,matrixOffsets)==sizeof(RigidVertexPlan::uniforms)&&
+                  offsetof(RigidVertexPlan,color)<offsetof(RigidVertexPlan,lights));
+    constexpr std::size_t head=offsetof(RigidVertexPlan,matrixOffsets),colorAt=offsetof(RigidVertexPlan,color);
+    constexpr std::size_t tail=colorAt+sizeof(RasterColorPlan);
+    auto* bytes=reinterpret_cast<std::byte*>(&p);const auto* source=reinterpret_cast<const std::byte*>(&freshRigidVertexPlan);
+    std::memcpy(bytes+head,source+head,colorAt-head);
+    std::memcpy(bytes+tail,source+tail,sizeof(RigidVertexPlan)-tail);
+    std::fill(p.uniforms.begin()+6,p.uniforms.begin()+19,std::array<float,4>{});
+    std::fill(p.uniforms.begin()+81,p.uniforms.end(),std::array<float,4>{});
 }
 inline bool packRigidVertex(const RigidVertexPlan& p,const DecodedVertex& v,
     const std::array<float,2>& scale,GpuVertex& out){
     constexpr unsigned needed=(1u<<GX_VA_POS)|(1u<<GX_VA_NRM)|(1u<<GX_VA_TEX0);
-    if((v.present&needed)!=needed||(v.present&2)||v.normalCount<1||
-       ((p.color.vertex|p.color.ambientVertex)&&!(v.present&(1u<<GX_VA_CLR0))))return false;
+    if((v.present&needed)!=needed||(v.present&2)||v.normalCount<1)return false;
     for(float value:v.position)if(!std::isfinite(value)||std::abs(value)>1e7f)return false;
     for(float value:v.normal[0])if(!std::isfinite(value)||std::abs(value)>1e4f)return false;
     for(float value:v.texcoord[0])if(!std::isfinite(value)||std::abs(value)>1e8f)return false;
     auto color=p.color.material;
+    // The colour evaluateRasterColor reads (rasterVertexColor: CLR1 or white
+    // for a format without CLR0).
+    const float* vertexColor=(p.color.vertex|p.color.ambientVertex)?rasterVertexColor(v,0):nullptr;
     for(unsigned c=0;c<4;++c)if((p.color.vertex|p.color.ambientVertex)&(c==3?2:1)){
-        const float value=v.color[0][c];if(!std::isfinite(value)||value<0||value>1)return false;color[c]=value;
+        const float value=vertexColor[c];if(!std::isfinite(value)||value<0||value>1)return false;color[c]=value;
     }
     if(p.color.lit&2)color[3]*=std::clamp(p.color.ambient[3],0.f,1.f);
     out={};out.position={v.position[0],v.position[1],v.position[2],v.normal[0][2]};out.color=color;
@@ -432,13 +804,16 @@ inline void setProjectedScales(RigidVertexPlan& p,const std::array<float,2>& pro
 }
 inline bool validateRigidProjection(const RigidVertexPlan& p,std::span<const GpuVertex> vertices){
     if(!p.projectedTexture&&!p.multiProjected)return true;
-    // Both compact records start with the position and have one size.
-    static_assert(sizeof(CompactRigidVertexMT)==sizeof(CompactRigidVertex)&&offsetof(CompactRigidVertexMT,position)==0&&offsetof(CompactRigidVertex,position)==0);
+    // Every compact record starts with the position; the two narrow ones
+    // have one size, and wide records are never resident.
+    static_assert(sizeof(CompactRigidVertexMT)==sizeof(CompactRigidVertex)&&offsetof(CompactRigidVertexMT,position)==0&&offsetof(CompactRigidVertex,position)==0&&
+                  offsetof(CompactRigidVertexMTWide,position)==0);
+    const std::size_t stride=p.multiTexture?p.recordBytes():sizeof(CompactRigidVertex);
     const auto& matrix=p.multiProjected?p.uniforms[multiUnitRow(0)+2]:p.uniforms[p.projectionBase()+2];
     const auto bytes=p.staticVertices?std::span<const std::byte>(p.staticVertices,vertices.size()*sizeof(CompactRigidVertex)):std::as_bytes(vertices);
     for(unsigned i=0;i<vertices.size();++i){
         std::array<float,3> pos;
-        if(p.compact){CompactRigidVertex v;std::memcpy(&v,bytes.data()+i*sizeof(v),sizeof(v));pos=v.position;}
+        if(p.compact)std::memcpy(pos.data(),bytes.data()+i*stride,sizeof(pos));
         else for(unsigned c=0;c<3;++c)pos[c]=vertices[i].position[c];
         float q=0,magnitude=std::abs(matrix[3]);
         for(unsigned c=0;c<3;++c){const float term=matrix[c]*pos[c];q+=term;magnitude+=std::abs(term);}q+=matrix[3];
@@ -449,5 +824,34 @@ inline bool validateRigidProjection(const RigidVertexPlan& p,std::span<const Gpu
         if(!std::isfinite(q)||!std::isfinite(magnitude)||q<=std::max(1e-5f,magnitude*1e-4f))return false;
     }
     return true;
+}
+// The projected unit 0 takes its divisor from the camera: q = k w with k > 0
+// at every position, w being the clip w the shader computes for the same
+// vertex (water that refracts the picture behind it is projected through the
+// camera). Divided per pixel, such a unit needs no positive divisor at the
+// vertices: the PICA cuts a triangle that crosses the camera plane at the
+// near plane, where w is positive, interpolates s, t and q along the cut,
+// and every pixel that is left divides by a positive q. Dividing it per
+// vertex instead, with the divisor clamped, sampled the image's border over
+// every such triangle (Ordon Spring in Alpha 8: flat water beside the
+// camera). Compared on the rows the shader applies, the compact origin
+// folded into both or into neither, for a draw with one position matrix
+// (rows 0-2). The tolerance keeps q within a few hundredths of a unit of
+// k w for a mesh 20,000 units from the camera.
+inline bool projectedUnitFollowsCamera(const RigidVertexPlan& p){
+    if(!p.multiTexture||!p.multiProjected||p.indexedMatrices||p.matrices!=1)return false;
+    const auto& u=p.uniforms;
+    std::array<double,4> w{};
+    for(unsigned k=0;k<4;++k)for(unsigned c=0;c<3;++c)w[k]+=double(u[9][c])*double(u[c][k]);
+    w[3]+=double(u[9][3]);
+    const auto& q=u[multiUnitRow(0)+2];
+    unsigned widest=0;
+    for(unsigned k=1;k<3;++k)if(std::abs(w[k])>std::abs(w[widest]))widest=k;
+    if(!(std::abs(w[widest])>0))return false; // orthographic: w does not follow the position
+    const double factor=double(q[widest])/w[widest];
+    if(!(factor>1e-6&&factor<1e6))return false;
+    const double size=std::abs(w[widest])*factor;
+    for(unsigned k=0;k<3;++k)if(!(std::abs(double(q[k])-factor*w[k])<=1e-5*size))return false;
+    return std::abs(double(q[3])-factor*w[3])<=factor*(2e-6*std::abs(w[3])+1e-2);
 }
 }

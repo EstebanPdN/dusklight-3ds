@@ -5,6 +5,7 @@
 
 #if defined(DUSK_TARGET_3DS)
 #include "../../platforms/3ds/runtime/gx_profile.hpp"
+#include "d/d_native_lod.h"
 #endif
 #include "f_pc/f_pc_draw.h"
 #include "SSystem/SComponent/c_API_graphic.h"
@@ -34,8 +35,18 @@ int fpcDw_Execute(base_process_class* i_proc) {
         fpcLy_SetCurrentLayer(i_proc->layer_tag.layer);
 #if defined(DUSK_TARGET_3DS)
         dusk::native::GxProcessProfileScope processProfile(1, i_proc->profname);
+        // The level of detail asks whose models are being entered (a scene
+        // draws its children inside its own draw: restore the outer owner).
+        const void* const save_owner = dNativeLod::drawOwner;
+        const short save_name = dNativeLod::drawOwnerName;
+        dNativeLod::drawOwner = i_proc;
+        dNativeLod::drawOwnerName = i_proc->profname;
 #endif
         ret = draw_func(i_proc);
+#if defined(DUSK_TARGET_3DS)
+        dNativeLod::drawOwner = save_owner;
+        dNativeLod::drawOwnerName = save_name;
+#endif
         fpcLy_SetCurrentLayer(save_layer);
         return ret;
     }

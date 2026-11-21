@@ -9,4 +9,5 @@ extern "C" {
 #include <3ds/gfx.h>
 #include <3ds/gpu/gx.h>
 #include <3ds/services/gspgpu.h>
+#include <3ds/os.h>
 }

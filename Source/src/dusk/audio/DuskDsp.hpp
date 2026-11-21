@@ -112,6 +112,41 @@ namespace dusk::audio {
     void DspRender(OutputSubframe& subframe);
 
     /**
+     * Plain stereo output (no reverb, surround bus or per-voice dump) mixes
+     * each voice straight into the output. DspPlainMix keeps the original
+     * path (a buffer per voice); DspVerifyMix renders every subframe through
+     * both from the same state and counts the subframes whose samples differ
+     * (the count must stay zero).
+     */
+    extern bool DspPlainMix;
+    extern bool DspVerifyMix;
+    extern u64 DspVerifiedSubframes;
+    extern u64 DspVerifyMismatches;
+
+    /**
+     * Rate the mixer renders at (the desktop: SampleRate). The 3DS renders at
+     * the GameCube's own 32 kHz (JAS output rate 0: 7 subframes of 80 samples
+     * per 17.5 ms block) unless an SD switch asks for 48 kHz.
+     */
+    extern int RenderRate;
+
+    /**
+     * Fixed-point plain stereo mix (the 3DS). ADPCM and PCM voices without a
+     * biquad are resampled and mixed in integers (ARMv6 SMMLAR) straight into
+     * a 32-bit stereo accumulator, and voices whose two volumes stay zero only
+     * advance through their source. Oscillators, filtered voices and volumes
+     * outside 0..1 keep the float path. Positions advance exactly as in the
+     * float path (multiples of 1/4096); the samples differ from it by rounding
+     * only. With DspVerifyMix, every subframe is also rendered by the float
+     * path from the same state; the largest difference is kept in 1/32768
+     * steps (one step = one 16-bit output step at gain 1) with the number of
+     * samples that differ by more than one step.
+     */
+    extern bool DspFixedMix;
+    extern f32 DspVerifyLargestStep;
+    extern u64 DspVerifySamplesOverStep;
+
+    /**
      * Get the amount of samples a single "block" of this channel's data has.
      */
     constexpr u32 BlockSamples(const JASDsp::TChannel& channel) {

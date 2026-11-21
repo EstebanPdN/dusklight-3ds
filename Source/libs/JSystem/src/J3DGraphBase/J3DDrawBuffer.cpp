@@ -15,6 +15,32 @@
 #endif
 #endif
 
+#if defined(DUSK_TARGET_3DS)
+#include "../../../../platforms/3ds/runtime/gx_profile.hpp"
+// Measured dump (gx_profile.hpp): each packet of the list starts with no
+// owner (a J3D shape sets its model's), and on a profiled picture the game
+// thread's time painting it is charged to that owner (kind 2).
+static inline void nativeDrawPacket(J3DPacket* packet) {
+    using namespace dusk::native;
+    gxPaintOwner = 0;
+    if (gxProcessProfiling || gxSparseVertexProfiling) {
+        const std::uint64_t start = gxProfileTick();
+        packet->draw();
+        const unsigned owner = gxPaintOwner < gxProcessProfileCapacity ? gxPaintOwner : 0;
+        gxProcessTicks[2][owner] += std::uint32_t(gxProfileTick() - start);
+        ++gxProcessCalls[2][owner];
+        return;
+    }
+    packet->draw();
+}
+#define J3D_DRAW_PACKET(packet) nativeDrawPacket(packet)
+// What the painter draws after a list (particles, 2D) is nobody's model.
+#define J3D_DRAW_LIST_END() (dusk::native::gxPaintOwner = 0)
+#else
+#define J3D_DRAW_PACKET(packet) (packet)->draw()
+#define J3D_DRAW_LIST_END() ((void)0)
+#endif
+
 void J3DDrawBuffer::calcZRatio() {
     mZRatio = (mZFar - mZNear) / (f32)mEntryTableSize;
 }
@@ -238,9 +264,10 @@ void J3DDrawBuffer::drawHead() const {
 
     for (u32 i = 0; i < size; i++) {
         for (J3DPacket* packet = buf[i]; packet != NULL; packet = packet->getNextPacket()) {
-            packet->draw();
+            J3D_DRAW_PACKET(packet);
         }
     }
+    J3D_DRAW_LIST_END();
 }
 
 void J3DDrawBuffer::drawTail() const {
@@ -249,7 +276,8 @@ void J3DDrawBuffer::drawTail() const {
 #endif
     for (int i = mEntryTableSize - 1; i >= 0; i--) {
         for (J3DPacket* packet = mpBuffer[i]; packet != NULL; packet = packet->getNextPacket()) {
-            packet->draw();
+            J3D_DRAW_PACKET(packet);
         }
     }
+    J3D_DRAW_LIST_END();
 }

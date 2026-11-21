@@ -1821,6 +1821,10 @@ public:
     int initShadowScaleLight();
     int moveShadowScaleLight();
     void shadowDraw();
+#if defined(DUSK_TARGET_3DS)
+    bool isShadowProfileBody(const J3DModel* model) const { return model && model == mpLinkModel; }
+    bool isShadowProfileEquipment(const J3DModel* model) const;
+#endif
     void modelCalc(J3DModel* i_model);
     void basicModelDraw(J3DModel* i_model);
     void modelDraw(J3DModel*, int);
@@ -3772,6 +3776,7 @@ public:
     BOOL checkRideOn() const { return mRideStatus != 0; }
 
     BOOL checkSwimDashMode() const { return checkNoResetFlg1(FLG1_DASH_MODE); }
+    bool checkSwimMoveProc() const { return mProcID == PROC_SWIM_MOVE || mProcID == PROC_SWIM_DIVE; }
 
     BOOL talkTrigger() const { return mItemTrigger & BTN_A; }
     J3DAnmTransform* getNowAnmPackUnder(daAlink_UNDER i_idx) {
@@ -4556,6 +4561,12 @@ public:
     /* 0x03848 */ cXyz* field_0x3848;
     /* 0x0384C */ cXyz DUSK_CONST* field_0x384c;
     /* 0x03850 */ daAlink_procFunc mpProcFunc;
+
+#if defined(DUSK_TARGET_3DS)
+    void setWolfDoorAnime(daAlink_ANM i_doorAnm, f32 i_start, s16 i_end, f32 i_morf);
+    J3DAnmTransform* mWolfDoorMotion = nullptr;
+    cXyz mWolfDoorPreviousRoot{0.0f, 0.0f, 0.0f};
+#endif
 
 #if TARGET_PC
     void handleWolfHowl();

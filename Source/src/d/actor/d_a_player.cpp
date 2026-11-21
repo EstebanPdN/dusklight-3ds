@@ -411,6 +411,9 @@ void daPy_sightPacket_c::draw() {
             mpImg->mipmapCount > 1 ? GX_ENABLE : GX_DISABLE);
         GXInitTexObjLOD(
             &mTexObj, GX_LINEAR, GX_LINEAR, 0.0, 0.0, 0.0, GX_FALSE, GX_FALSE, GX_ANISO_1);
+#if defined(DUSK_TARGET_3DS)
+        mDoLib_retainNativeTexture(mpImg, &mTexObj);
+#endif
         mpCachedImg = mpImg;
     }
     GXLoadTexObj(&mTexObj, GX_TEXMAP0);

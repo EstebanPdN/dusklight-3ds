@@ -11,6 +11,9 @@
 #include "d/d_com_inf_game.h"
 #include "d/actor/d_a_player.h"
 #include "f_pc/f_pc_name.h"
+#if defined(DUSK_TARGET_3DS)
+#include "f_pc/f_pc_layer.h"
+#endif
 #include "d/actor/d_a_mg_rod.h"
 #include "d/actor/d_a_mg_fish.h"
 #include "SSystem/SComponent/c_math.h"
@@ -257,7 +260,6 @@ static int way_bg_check(npc_ne_class* i_this, s16 i_angle) {
 
 static int water_check(npc_ne_class* i_this, f32 param_1) {
     dBgS_ObjGndChk_Spl gnd_chk_spl;
-    dBgS_GndChk gnd_chk;
     dBgS_LinChk lin_chk;
     cXyz vec;
     vec.x = i_this->current.pos.x;
@@ -269,10 +271,13 @@ static int water_check(npc_ne_class* i_this, f32 param_1) {
     }
     gnd_chk_spl.SetPos(&vec);
     i_this->mWaterY = dComIfG_Bgsp().GroundCross(&gnd_chk_spl);
+    if (!(i_this->current.pos.y <= i_this->mWaterY)) {
+        return 0;
+    }
+    dBgS_GndChk gnd_chk;
     gnd_chk.SetPos(&vec);
     f32 cross = dComIfG_Bgsp().GroundCross(&gnd_chk);
-    if (i_this->current.pos.y <= i_this->mWaterY
-        && i_this->mWaterY - cross > param_1 * 2.0f * i_this->mBaseScale.z)
+    if (i_this->mWaterY - cross > param_1 * 2.0f * i_this->mBaseScale.z)
     {
         return 1;
     } else {
@@ -316,86 +321,86 @@ static bool hio_set;
 
 static daNpc_Ne_HIO_c l_HIO;
 
-static fopAc_ac_c* target_info[5];
+struct CatTargetSearch {
+    s16 names[2];
+    fopAc_ac_c* actors[5];
+    int count = 0;
+#if defined(DUSK_TARGET_3DS)
+    u64 revision = ~u64(0);
+#endif
+};
 
-static BOOL target_bgc[5];
-
-static int target_info_count;
-
-static void* s_bl_sub(void* i_proc, void* i_this) {
-    if (fopAc_IsActor(i_proc)
-        && (fopAcM_GetName(i_proc) == fpcNm_OBJ_FOOD_e || fopAcM_GetName(i_proc) == fpcNm_BD_e)
-        && target_info_count < 5)
-    {
-        target_info[target_info_count] = static_cast<fopAc_ac_c*>(i_proc);
-        target_info_count++;
-    }
-    return NULL;
-}
-
-static void* s_ss_sub(void* i_proc, void* i_this) {
-    if (fopAc_IsActor(i_proc)
-        && (fopAcM_GetName(i_proc) == fpcNm_NI_e || fopAcM_GetName(i_proc) == fpcNm_BD_e)
-        && target_info_count < 5)
-    {
-        target_info[target_info_count] = static_cast<fopAc_ac_c*>(i_proc);
-        target_info_count++;
+static void* collect_cat_target(void* i_proc, void* i_data) {
+    auto& search = *static_cast<CatTargetSearch*>(i_data);
+    if (fopAc_IsActor(i_proc)) {
+        const s16 name = fopAcM_GetName(i_proc);
+        if ((name == search.names[0] || name == search.names[1]) && search.count < 5) {
+            search.actors[search.count++] = static_cast<fopAc_ac_c*>(i_proc);
+        }
     }
     return NULL;
 }
 
 static fopAc_ac_c* search_bird(npc_ne_class* i_this) {
-    target_info_count = 0;
-    for (int i = 0; i < 5; i++) {
-        target_info[i] = NULL;
-        target_bgc[i] = false;
+#if defined(DUSK_TARGET_3DS)
+    // Cache only the ordered candidate list. Position and obstruction checks
+    // below still run for each cat, even when no process changed layers.
+    static CatTargetSearch searches[] = {
+        {{fpcNm_BD_e, fpcNm_NI_e}},
+        {{fpcNm_BD_e, fpcNm_OBJ_FOOD_e}},
+    };
+    auto& search = searches[i_this->mSearchBall != 0];
+    const u64 revision = fpcLy_SearchRevision();
+    if (search.revision != revision) {
+        search.count = 0;
+        fpcEx_Search(collect_cat_target, &search);
+        search.revision = revision;
+    }
+#else
+    const s16 alternate = i_this->mSearchBall ? fpcNm_OBJ_FOOD_e : fpcNm_NI_e;
+    CatTargetSearch search{{fpcNm_BD_e, alternate}};
+    fpcEx_Search(collect_cat_target, &search);
+#endif
+    constexpr f32 farthest = 2000.0f;
+    if (search.count == 0) {
+        return NULL;
+    }
+    f32 eyeDistance[5];
+    int remaining = 0;
+    for (int i = 0; i < search.count; ++i) {
+        const auto* actor = search.actors[i];
+        const f32 x = actor->current.pos.x - i_this->eyePos.x;
+        const f32 z = actor->current.pos.z - i_this->eyePos.z;
+        eyeDistance[i] = JMAFastSqrt(x * x + z * z);
+        remaining += eyeDistance[i] < farthest;
     }
 
-    if (i_this->mSearchBall) {
-        fpcEx_Search(s_bl_sub, i_this);
-    } else {
-        fpcEx_Search(s_ss_sub, i_this);
-    }
-
-    f32 f = 200.0f;
-    if (target_info_count != 0) {
-        fopAc_ac_c* actor;
-        int i = 0;
-        while (i < target_info_count) {
-            actor = target_info[i];
-            cXyz eye_delta, delta;
-            eye_delta.x = actor->current.pos.x - i_this->eyePos.x;
-            eye_delta.y = actor->current.pos.y + 50.0f - i_this->eyePos.y;
-            eye_delta.z = actor->current.pos.z - i_this->eyePos.z;
-            delta.x = actor->current.pos.x - i_this->current.pos.x;
-            delta.z = actor->current.pos.z - i_this->current.pos.z;
-            f32 eye_dist = JMAFastSqrt(eye_delta.x * eye_delta.x + eye_delta.z * eye_delta.z);
-            f32 dist = JMAFastSqrt(delta.x * delta.x + delta.z * delta.z);
-
-            if (eye_dist < f && !(dist > i_this->mDistToTarget + 30.0f)) {
-                if (target_bgc[i] || other_bg_check(i_this, actor)) {
-                    target_bgc[i] = true;
-                } else {
-                    if (fabsf(actor->current.pos.y + 50.0f - i_this->eyePos.y) <= 100.0f) {
-                        s16 angle = i_this->shape_angle.y - cM_atan2s(eye_delta.x, eye_delta.z);
-                        if (angle < 0x4000 && angle > -0x4000) {
-                            return actor;
-                        }
-                    }
-                }
+    // The original chooses by 200-unit bands, then by process-layer order.
+    // A target rejected in its first band has the same inputs in every later
+    // band of this search, so check it once when it first enters range.
+    for (f32 radius = 200.0f; remaining != 0 && radius <= farthest; radius += 200.0f) {
+        for (int i = 0; i < search.count; ++i) {
+            if (!(eyeDistance[i] < radius)) {
+                continue;
             }
-
-            i++;
-            if (i == target_info_count) {
-                i = 0;
-                f += 200.0f;
-                if (f > 2000.0f) {
-                    return NULL;
+            eyeDistance[i] = farthest;
+            --remaining;
+            auto* actor = search.actors[i];
+            const f32 x = actor->current.pos.x - i_this->current.pos.x;
+            const f32 z = actor->current.pos.z - i_this->current.pos.z;
+            const f32 dist = JMAFastSqrt(x * x + z * z);
+            if (dist > i_this->mDistToTarget + 30.0f || other_bg_check(i_this, actor)) {
+                continue;
+            }
+            if (fabsf(actor->current.pos.y + 50.0f - i_this->eyePos.y) <= 100.0f) {
+                const s16 angle = i_this->shape_angle.y -
+                    cM_atan2s(actor->current.pos.x - i_this->eyePos.x,
+                              actor->current.pos.z - i_this->eyePos.z);
+                if (angle < 0x4000 && angle > -0x4000) {
+                    return actor;
                 }
             }
         }
-    } else {
-        return NULL;
     }
     return NULL;
 }

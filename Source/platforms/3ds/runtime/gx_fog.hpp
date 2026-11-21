@@ -14,7 +14,7 @@ struct VertexFogPlan {
     std::array<double,10> rangeK{};
     std::array<std::uint8_t,4> color{};
     unsigned function{};
-    bool orthographic{},rangeEnabled{},enabled{};
+    bool orthographic{},rangeEnabled{},enabled{},zeroReverseRamp{};
 };
 inline bool planVertexFog(const CommandRegisters& r,VertexFogPlan& p) {
     p={};
@@ -47,9 +47,20 @@ inline bool planVertexFog(const CommandRegisters& r,VertexFogPlan& p) {
     // These curves are identically zero when A=0 and C>=0, including range
     // adjustment. Preserve validation above but avoid a redundant fog sampler.
     if(p.a==0&&p.c>=0&&(p.function==2||p.function==4||p.function==5))p.enabled=false;
+    // Test the compressed words so ARM flush-to-zero cannot turn a nonzero
+    // subnormal A or negative C into evidence for the shortcut. For finite
+    // float clip coordinates, depth is finite and the CPU's B==depth case
+    // also gives zero. Range multiplies by a finite double: even with minimum
+    // positive float W and viewport scale, the offset is below 2^460, and
+    // the table interpolation floors k at 1e-6. Thus the clamped ramp input
+    // is zero, while reverse exponential fog still has weight 1/256.
+    const auto a=r.bp[0xee]&0x7ffffu,c=r.bp[0xf1]&0xfffffu;
+    p.zeroReverseRamp=p.function>=6&&a==0&&(c<=0x80000u);
     return true;
 }
-inline float evaluateVertexFog(const VertexFogPlan& p,const std::array<float,4>& clip,unsigned logicalWidth) {
+// curve false: the clamped ramp coordinate before the fog curve, for a draw
+// whose fog unit samples the curve itself (fogRampTexture with p.function).
+inline float evaluateVertexFog(const VertexFogPlan& p,const std::array<float,4>& clip,unsigned logicalWidth,bool curve=true) {
     if(!p.enabled)return 0;
     // PICA clips camera-crossing triangles itself. Their non-visible original
     // vertices use near-plane fog; interpolation across clipped edges is part
@@ -67,7 +78,20 @@ inline float evaluateVertexFog(const VertexFogPlan& p,const std::array<float,4>&
         base*=std::hypot(offset,k)/k;
     }
     const double f=std::clamp(base-p.c,0.0,1.0);
+    if(!curve)return float(f);
     switch(p.function) {
+    case 2:return f;
+    case 4:return 1-std::exp2(-8*f);
+    case 5:return 1-std::exp2(-8*f*f);
+    case 6:return std::exp2(-8*(1-f));
+    case 7:return std::exp2(-8*(1-f)*(1-f));
+    default:return 0;
+    }
+}
+// The fog curve of GX fog function `function` at ramp coordinate f in [0,1]
+// (the switch of evaluateVertexFog).
+inline double fogCurve(unsigned function,double f) {
+    switch(function) {
     case 2:return f;
     case 4:return 1-std::exp2(-8*f);
     case 5:return 1-std::exp2(-8*f*f);

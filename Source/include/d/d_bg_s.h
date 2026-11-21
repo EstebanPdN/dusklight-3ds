@@ -183,6 +183,19 @@ public:
     /* 0x18 */ cXyz m_p1;
 };
 
+#if defined(DUSK_TARGET_3DS)
+// Native New 3DS (logic.txt crrskip, d_bg_s.cpp): the XZ column a
+// dBgS_Acch::CrrPos call can query, and the collision-world versions.
+struct dBgS_NativeColumn {
+    f32 minX, maxX, minZ, maxZ;
+};
+u32 dBgS_NativeClock();
+void dBgS_NativeTouchMask(const cBgS& bgs, const dBgS_NativeColumn& c, u32 o_mask[8], int* o_end);
+bool dBgS_NativeUnchanged(const cBgS& bgs, u32 i_clock, const u32 i_mask[8], int i_end,
+                          const dBgS_NativeColumn& c, int* o_slot);
+void dBgS_NativeReportChanges(f32 perPicture);
+#endif
+
 class dBgS : public cBgS {
 public:
     dBgS() {}

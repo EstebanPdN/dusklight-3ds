@@ -56,12 +56,21 @@ static int fopOvlpReq_phase_IsWaitOfFadeout(overlap_request_class* i_overlapReq)
     return cPhs_INIT_e;
 }
 
+#if defined(DUSK_TARGET_3DS)
+extern "C" bool duskNativeTransitionMayOpen();
+#endif
 static int fopOvlpReq_phase_WaitOfFadeout(overlap_request_class* i_overlapReq) {
     if (i_overlapReq->peektime) {
         i_overlapReq->peektime--;
     }
 
+#if defined(DUSK_TARGET_3DS)
+    // The new scene stays paused (and the curtain closed) until its rooms,
+    // actors and archives are ready (runtime/scene_transition.cpp).
+    if (i_overlapReq->base.flag2 == 2 && !i_overlapReq->peektime && duskNativeTransitionMayOpen()) {
+#else
     if (i_overlapReq->base.flag2 == 2 && !i_overlapReq->peektime) {
+#endif
         cReq_Command(&i_overlapReq->overlap_task->request, 2);
         return cPhs_NEXT_e;
     }

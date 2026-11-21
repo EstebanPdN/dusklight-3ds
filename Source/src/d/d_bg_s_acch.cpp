@@ -3,11 +3,13 @@
  * BG collision Actor Check
  */
 
+#include <cstdio>
 #include "d/dolzel.h" // IWYU pragma: keep
 
 #include "d/actor/d_a_player.h"
 #include "d/d_bg_s.h"
 #include "d/d_bg_s_acch.h"
+#include "d/d_tick_profile.h"
 #include "d/d_com_inf_game.h"
 #include "global.h"
 
@@ -308,9 +310,458 @@ void dBgS_Acch::LineCheck(dBgS& bgs) {
     }
 }
 
+#if defined(DUSK_TARGET_3DS)
+#include "d/d_bg_w.h"
+#include "d/d_native_logic.h"
+#include "f_pc/f_pc_name.h"
+#include <cstring>
+
+// Native New 3DS (logic.txt crrskip): a door (DOOR20), a carried object
+// (Obj_Carry) and, since Alpha 21, a pumpkin (OBJ_PUMPKIN), a barrel
+// (Obj_GpTaru) or an item on the ground (ITEM) standing still runs CrrPos
+// every tick with the same inputs (Alpha 21 measurement: 31 barrel calls in
+// Hidden Village, 41 pumpkin calls in Ordon, 39 item calls in Zora's Domain
+// per picture, 3.5, 1.5 and 1.3 ms in the emulator). CrrPos is the same
+// function for every caller: its only effects beyond the kept images are the
+// ride callback (excluded below) and the census. Its
+// last call is kept: the whole dBgS_Acch and its wall circles, and the
+// actor's position, old position, speed, angle and shape angle, before (input)
+// and after (output) the call, with the collision-world clock and the slots
+// whose objects could reach its queries (an XZ column around the old, new and
+// corrected positions widened by twice the widest wall circle). A call whose
+// input is byte-identical, while no such slot has changed (d_bg_s.cpp slot
+// versions), gets the stored output instead of the queries. Not kept: calls
+// with an output poly-info pointer, with a horse in play (special walls ask
+// it), a ground/wall/roof object with its move flag set (the moving-BG
+// correction reads its live matrix), or a stored call that reached a ride
+// callback. Verify (crrskip=2) makes the call anyway and compares every byte.
+namespace {
+enum { kSkipEntries = 64, kSkipCircles = 2 };
+
+struct SkipImage {
+    u8 acch[sizeof(dBgS_Acch)];
+    u8 cir[kSkipCircles][sizeof(dBgS_AcchCir)];
+    cXyz pos, oldPos, speed;
+    csXyz angle, shapeAngle;
+};
+
+struct SkipEntry {
+    const dBgS_Acch* key;
+    bool valid;
+    u32 clock;
+    int end;
+    u32 mask[8];
+    SkipImage in;
+    SkipImage out;
+};
+
+SkipEntry l_skip[kSkipEntries];
+unsigned l_skipMismatchLogs;
+
+// Census of one window: why eligible calls were not served from the store,
+// the first input region that differed, the slots that blocked.
+struct SkipCount {
+    const char* name;
+    u32 count;
+};
+SkipCount l_skipReasons[8];
+SkipCount l_skipRegions[16];
+u32 l_skipBlockers[0x100];
+
+// The kept profiles. Each is accepted on its own verify evidence (crrskip=2):
+// eligible calls and checks/mismatches of the census window, and the checks
+// and mismatches since the start.
+const s16 kSkipProfiles[] = {fpcNm_DOOR20_e, fpcNm_Obj_Carry_e, fpcNm_OBJ_PUMPKIN_e, fpcNm_Obj_GpTaru_e,
+                             fpcNm_ITEM_e};
+const char* const kSkipProfileNames[] = {"DOOR20", "Obj_Carry", "OBJ_PUMPKIN", "Obj_GpTaru", "ITEM"};
+enum { kSkipProfileCount = sizeof(kSkipProfiles) / sizeof(kSkipProfiles[0]) };
+struct SkipProfileCount {
+    u32 eligible, checks, mismatches;
+    u32 totalChecks, totalMismatches;
+};
+SkipProfileCount l_skipProfiles[kSkipProfileCount];
+
+int skipProfileIndex(s16 prof) {
+    for (int i = 0; i < kSkipProfileCount; i++) {
+        if (kSkipProfiles[i] == prof) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void skipCount(SkipCount* table, int size, const char* name) {
+    for (int i = 0; i < size; i++) {
+        if (table[i].name == name || table[i].name == NULL) {
+            table[i].name = name;
+            table[i].count++;
+            return;
+        }
+    }
+}
+
+SkipEntry* skipFind(const dBgS_Acch* acch, bool create) {
+    const unsigned home = (unsigned)((uintptr_t)acch >> 4) % kSkipEntries;
+    for (unsigned k = 0; k < kSkipEntries; k++) {
+        SkipEntry& e = l_skip[(home + k) % kSkipEntries];
+        if (e.key == acch) {
+            return &e;
+        }
+        if (e.key == NULL) {
+            if (!create) {
+                return NULL;
+            }
+            e.key = acch;
+            e.valid = false;
+            return &e;
+        }
+    }
+    if (!create) {
+        return NULL;
+    }
+    // Full: the home entry is taken over (exactness never depends on a hit).
+    SkipEntry& e = l_skip[home];
+    e.key = acch;
+    e.valid = false;
+    return &e;
+}
+
+struct AcchField {
+    const char* name;
+    unsigned offset;
+};
+
+}  // namespace
+
+static void duskAcchCapture(const dBgS_Acch* acch, SkipImage& img) {
+    std::memset(&img, 0, sizeof(img));
+    std::memcpy(img.acch, acch, sizeof(dBgS_Acch));
+    for (int k = 0; k < acch->m_tbl_size && k < kSkipCircles; k++) {
+        std::memcpy(img.cir[k], &acch->pm_acch_cir[k], sizeof(dBgS_AcchCir));
+    }
+    img.pos = *acch->pm_pos;
+    img.oldPos = *acch->pm_old_pos;
+    if (acch->pm_speed != NULL) {
+        img.speed = *acch->pm_speed;
+    }
+    if (acch->pm_angle != NULL) {
+        img.angle = *acch->pm_angle;
+    }
+    if (acch->pm_shape_angle != NULL) {
+        img.shapeAngle = *acch->pm_shape_angle;
+    }
+}
+
+static void duskAcchRestore(dBgS_Acch* acch, const SkipImage& img) {
+    std::memcpy((void*)acch, img.acch, sizeof(dBgS_Acch));
+    for (int k = 0; k < acch->m_tbl_size && k < kSkipCircles; k++) {
+        std::memcpy((void*)&acch->pm_acch_cir[k], img.cir[k], sizeof(dBgS_AcchCir));
+    }
+    *acch->pm_pos = img.pos;
+    *acch->pm_old_pos = img.oldPos;
+    if (acch->pm_speed != NULL) {
+        *acch->pm_speed = img.speed;
+    }
+    if (acch->pm_angle != NULL) {
+        *acch->pm_angle = img.angle;
+    }
+    if (acch->pm_shape_angle != NULL) {
+        *acch->pm_shape_angle = img.shapeAngle;
+    }
+}
+
+static dBgS_NativeColumn duskAcchColumn(const dBgS_Acch* acch, const SkipImage& in,
+                                        const SkipImage& out) {
+    f32 r = 0.0f;
+    for (int k = 0; k < acch->m_tbl_size && k < kSkipCircles; k++) {
+        dBgS_AcchCir* cir = (dBgS_AcchCir*)in.cir[k];
+        if (cir->GetWallR() > r) {
+            r = cir->GetWallR();
+        }
+    }
+    const f32 margin = 2.0f * r + 100.0f;
+    dBgS_NativeColumn c;
+    c.minX = c.maxX = in.pos.x;
+    c.minZ = c.maxZ = in.pos.z;
+    const cXyz* pts[2] = {&in.oldPos, &out.pos};
+    for (int k = 0; k < 2; k++) {
+        if (pts[k]->x < c.minX) c.minX = pts[k]->x;
+        if (pts[k]->x > c.maxX) c.maxX = pts[k]->x;
+        if (pts[k]->z < c.minZ) c.minZ = pts[k]->z;
+        if (pts[k]->z > c.maxZ) c.maxZ = pts[k]->z;
+    }
+    c.minX -= margin;
+    c.maxX += margin;
+    c.minZ -= margin;
+    c.maxZ += margin;
+    return c;
+}
+
+// The moving-BG correction at the start of CrrPos (dBgS::MoveBgCrrPos) reads
+// a live matrix when the object under one of these poly infos has its move
+// flag set: such a call is never kept or replayed.
+static bool duskPolyOnMovingBg(dBgS& bgs, const cBgS_PolyInfo& poly) {
+    if (!poly.ChkBgIndex()) {
+        return false;
+    }
+    const int slot = poly.GetBgIndex();
+    if (slot < 0 || slot >= 0x100 || !bgs.m_chk_element[slot].ChkUsed()) {
+        return false;
+    }
+    return bgs.m_chk_element[slot].m_bgw_base_ptr->ChkMoveFlag() != 0;
+}
+
+static bool duskAcchMovingBg(dBgS& bgs, const dBgS_Acch* acch) {
+    if (duskPolyOnMovingBg(bgs, acch->m_gnd) || duskPolyOnMovingBg(bgs, acch->m_roof)) {
+        return true;
+    }
+    for (int k = 0; k < acch->m_tbl_size; k++) {
+        if (duskPolyOnMovingBg(bgs, acch->pm_acch_cir[k])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A stored call that reached RideCallBack (field_0xc0 is set exactly then)
+// is replayable only when that callback does nothing.
+static bool duskAcchRideCallbackSilent(dBgS& bgs, const SkipImage& out) {
+    const dBgS_Acch* stored = (const dBgS_Acch*)out.acch;
+    if (stored->field_0xc0 == 0) {
+        return true;
+    }
+    if (!stored->m_gnd.ChkBgIndex()) {
+        return false;
+    }
+    const int slot = stored->m_gnd.GetBgIndex();
+    if (slot < 0 || slot >= 0x100 || !bgs.m_chk_element[slot].ChkUsed()) {
+        return false;
+    }
+    const dBgW* dbgw = dynamic_cast<const dBgW*>(bgs.m_chk_element[slot].m_bgw_base_ptr);
+    return dbgw == NULL || dbgw->m_ride_callback == NULL;
+}
+
+// The first byte where two images differ, named (acch member, wall circle,
+// position, old position, speed, angles).
+static const char* duskAcchRegion(const dBgS_Acch* acch, const SkipImage& stored,
+                                  const SkipImage& real, unsigned* o_at, unsigned* o_offset) {
+    const u8* a = (const u8*)&stored;
+    const u8* b = (const u8*)&real;
+    unsigned at = 0;
+    while (at < sizeof(SkipImage) && a[at] == b[at]) {
+        at++;
+    }
+    *o_at = at;
+    const char* region = "acch";
+    unsigned offset = at;
+    const unsigned cirAt = (unsigned)((const u8*)stored.cir - a);
+    const unsigned posAt = (unsigned)((const u8*)&stored.pos - a);
+    if (at >= posAt) {
+        region = at < posAt + 12 ? "pos" : at < posAt + 24 ? "old_pos" : at < posAt + 36 ? "speed"
+                                                                        : "angle/shape_angle";
+        offset = at - posAt;
+    } else if (at >= cirAt) {
+        region = (at - cirAt) < sizeof(dBgS_AcchCir) ? "circle0" : "circle1";
+        offset = (at - cirAt) % sizeof(dBgS_AcchCir);
+    } else {
+        // Nearest named member of dBgS_Acch at or before the offset.
+        const u8* base = (const u8*)acch;
+        const AcchField fields[] = {
+            {"m_flags", (unsigned)((const u8*)&acch->m_flags - base)},
+            {"m_lin", (unsigned)((const u8*)&acch->m_lin - base)},
+            {"m_wall_cyl", (unsigned)((const u8*)&acch->m_wall_cyl - base)},
+            {"m_bg_index", (unsigned)((const u8*)&acch->m_bg_index - base)},
+            {"field_0x90..0x94", (unsigned)((const u8*)&acch->field_0x90 - base)},
+            {"m_ground_h", (unsigned)((const u8*)&acch->m_ground_h - base)},
+            {"field_0xa0 (ground plane)", (unsigned)((const u8*)&acch->field_0xa0 - base)},
+            {"field_0xb4..0xc0", (unsigned)((const u8*)&acch->field_0xb4 - base)},
+            {"m_roof_height..", (unsigned)((const u8*)&acch->m_roof_height - base)},
+            {"m_gnd", (unsigned)((const u8*)&acch->m_gnd - base)},
+            {"m_roof", (unsigned)((const u8*)&acch->m_roof - base)},
+            {"m_wtr", (unsigned)((const u8*)&acch->m_wtr - base)},
+        };
+        for (const AcchField& f : fields) {
+            if (f.offset <= at) {
+                region = f.name;
+            }
+        }
+    }
+    *o_offset = offset;
+    return region;
+}
+
+static void duskAcchReportMismatch(const dBgS_Acch* acch, const SkipImage& stored,
+                                   const SkipImage& real) {
+    const u8* a = (const u8*)&stored;
+    const u8* b = (const u8*)&real;
+    unsigned at = 0, offset = 0;
+    const char* region = duskAcchRegion(acch, stored, real, &at, &offset);
+    const fopAc_ac_c* actor = acch->m_my_ac;
+    OSReport("Native logic crrskip mismatch: actor profname=%d id=%u region=%s offset=0x%x stored=%02x "
+             "real=%02x\n",
+             actor != NULL ? (int)fopAcM_GetProfName(actor) : -1,
+             actor != NULL ? (unsigned)fopAcM_GetID(actor) : 0u, region, offset,
+             at < sizeof(SkipImage) ? a[at] : 0, at < sizeof(SkipImage) ? b[at] : 0);
+}
+
+// Census lines (f_pc_executor.cpp endPicture), then a reset.
+void dBgS_Acch_NativeReportSkip(f32 perPicture) {
+    char line[320];
+    int at = std::snprintf(line, sizeof(line),
+                           "Native logic crrskip by profile (eligible per picture, verify checks/mismatches of the "
+                           "window, since start):");
+    for (int i = 0; i < kSkipProfileCount; i++) {
+        SkipProfileCount& c = l_skipProfiles[i];
+        at += std::snprintf(line + at, sizeof(line) - at, " %s %.1f %u/%u %u/%u", kSkipProfileNames[i],
+                            c.eligible * perPicture, c.checks, c.mismatches, c.totalChecks, c.totalMismatches);
+        c.eligible = c.checks = c.mismatches = 0;
+    }
+    OSReport("%s\n", line);
+    at = std::snprintf(line, sizeof(line), "Native logic crrskip misses (per picture):");
+    for (SkipCount& c : l_skipReasons) {
+        if (c.name != NULL && at < (int)sizeof(line) - 40) {
+            at += std::snprintf(line + at, sizeof(line) - at, " %s=%.1f", c.name, c.count * perPicture);
+        }
+        c.name = NULL;
+        c.count = 0;
+    }
+    at += std::snprintf(line + at, sizeof(line) - at, "; input first differs in:");
+    for (SkipCount& c : l_skipRegions) {
+        if (c.name != NULL && at < (int)sizeof(line) - 40) {
+            at += std::snprintf(line + at, sizeof(line) - at, " %s=%.1f", c.name, c.count * perPicture);
+        }
+        c.name = NULL;
+        c.count = 0;
+    }
+    OSReport("%s\n", line);
+    at = std::snprintf(line, sizeof(line), "Native logic crrskip blocked by slot (slot:profname=per picture):");
+    for (int rank = 0; rank < 8 && at < (int)sizeof(line) - 32; rank++) {
+        int best = -1;
+        for (int i = 0; i < 0x100; i++) {
+            if (l_skipBlockers[i] != 0 && (best < 0 || l_skipBlockers[i] > l_skipBlockers[best])) {
+                best = i;
+            }
+        }
+        if (best < 0) {
+            break;
+        }
+        const cBgS_ChkElm& elm = dComIfG_Bgsp().m_chk_element[best];
+        const int prof = elm.ChkUsed() && elm.m_actor_ptr != NULL
+                             ? (int)fopAcM_GetProfName((fopAc_ac_c*)elm.m_actor_ptr)
+                             : -1;
+        at += std::snprintf(line + at, sizeof(line) - at, " %d:%d=%.1f", best, prof,
+                            l_skipBlockers[best] * perPicture);
+        l_skipBlockers[best] = 0;
+    }
+    OSReport("%s\n", line);
+    for (int i = 0; i < 0x100; i++) {
+        l_skipBlockers[i] = 0;
+    }
+}
+
 void dBgS_Acch::CrrPos(dBgS& bgs) {
+    const unsigned mode = dNativeLogic::config().crrSkip;
+    if (mode == dNativeLogic::Off || (m_flags & 1) || m_my_ac == NULL) {
+        CrrPosOriginal(bgs);
+        return;
+    }
+    const int kept = skipProfileIndex(fopAcM_GetProfName(m_my_ac));
+    if (kept < 0) {
+        CrrPosOriginal(bgs);
+        return;
+    }
+    // A kept profile: the census says why a call is not eligible.
+    const char* notEligible = pm_out_poly_info != NULL               ? "out poly info"
+                              : m_tbl_size > kSkipCircles             ? "wall circles"
+                              : pm_pos == NULL || pm_old_pos == NULL  ? "no position"
+                              : dComIfGp_getHorseActor() != NULL      ? "horse in play"
+                                                                       : NULL;
+    if (notEligible != NULL) {
+        skipCount(l_skipReasons, 8, notEligible);
+        CrrPosOriginal(bgs);
+        return;
+    }
+    dNativeLogic::Census& census = dNativeLogic::census;
+    census.crrEligible++;
+    l_skipProfiles[kept].eligible++;
+
+    SkipImage now;  // on the stack: CrrPos may run inside another CrrPos (ride callbacks)
+    duskAcchCapture(this, now);
+    SkipEntry* e = skipFind(this, true);
+    bool hit = false;
+    if (!e->valid) {
+        skipCount(l_skipReasons, 8, "no stored call");
+    } else if (std::memcmp(&e->in, &now, sizeof(SkipImage)) != 0) {
+        unsigned at = 0, offset = 0;
+        skipCount(l_skipReasons, 8, "input differs");
+        skipCount(l_skipRegions, 16, duskAcchRegion(this, e->in, now, &at, &offset));
+    } else if (duskAcchMovingBg(bgs, this)) {
+        skipCount(l_skipReasons, 8, "moving BG under it");
+    } else if (!duskAcchRideCallbackSilent(bgs, e->out)) {
+        skipCount(l_skipReasons, 8, "ride callback");
+    } else {
+        const dBgS_NativeColumn column = duskAcchColumn(this, e->in, e->out);
+        int blocker = -1;
+        hit = dBgS_NativeUnchanged(bgs, e->clock, e->mask, e->end, column, &blocker);
+        if (!hit) {
+            skipCount(l_skipReasons, 8, "collision object changed");
+            if (blocker >= 0 && blocker < 0x100) {
+                l_skipBlockers[blocker]++;
+            }
+        }
+    }
+    if (hit) {
+        census.crrHits++;
+        if (mode == dNativeLogic::On) {
+            duskAcchRestore(this, e->out);
+            census.crrSkipped++;
+            return;
+        }
+    }
+
+    const u32 clockBefore = dBgS_NativeClock();
+    // The moving-BG correction at the start reads the input poly infos.
+    const bool movingBefore = duskAcchMovingBg(bgs, this);
+    CrrPosOriginal(bgs);
+    SkipImage out;
+    duskAcchCapture(this, out);
+
+    if (hit) {
+        // Verify: the stored output against the real one, every byte.
+        census.crrChecks++;
+        l_skipProfiles[kept].checks++;
+        l_skipProfiles[kept].totalChecks++;
+        if (std::memcmp(&e->out, &out, sizeof(SkipImage)) != 0) {
+            census.crrMismatches++;
+            l_skipProfiles[kept].mismatches++;
+            l_skipProfiles[kept].totalMismatches++;
+            if (l_skipMismatchLogs++ < 8) {
+                duskAcchReportMismatch(this, e->out, out);
+            }
+        }
+    }
+
+    // Keep this call (only when the world did not change during it).
+    e->valid = dBgS_NativeClock() == clockBefore && !movingBefore;
+    if (e->valid) {
+        e->in = now;
+        e->out = out;
+        e->clock = clockBefore;
+        dBgS_NativeTouchMask(bgs, duskAcchColumn(this, now, out), e->mask, &e->end);
+    }
+}
+
+#endif
+
+#if defined(DUSK_TARGET_3DS)
+void dBgS_Acch::CrrPosOriginal(dBgS& bgs) {
+#else
+void dBgS_Acch::CrrPos(dBgS& bgs) {
+#endif
+    DUSK_TICK_PROFILE(tick_profile, "acch.CrrPos");
     bool bvar9;
     if (!(m_flags & 1)) {
+        DUSK_SPLIT_SPAN(split_move, "acch.s.move");
         JUT_ASSERT(792, pm_pos != NULL);
         JUT_ASSERT(793, pm_old_pos != NULL);
 
@@ -358,14 +809,18 @@ void dBgS_Acch::CrrPos(dBgS& bgs) {
         f32 fvar1 = m_gnd_chk_offset + GetPos()->y;
         bool bvar2 = false;
 
+        split_move.stop();
         OffLineCheckHit();
         if (!ChkLineCheckNone() && !cM3d_IsZero(wall_all_low_h_r) &&
             (old_pos_dist2XZ > SQUARE(wall_all_low_h_r) || fvar12 > fvar1 || old_pos_dist_y > m_gnd_chk_offset || ChkLineCheck()))
         {
             bvar2 = true;
+            DUSK_SPLIT_SPAN(split_line, "acch.s.line");
             LineCheck(bgs);
+            split_line.stop();
         }
 
+        DUSK_SPLIT_SPAN(split_wall, "acch.s.wall");
         if (!(m_flags & FLAG_WALL_NONE)) {
             if (ChkWallSort()) {
                 bgs.WallCorrectSort(this);
@@ -374,10 +829,15 @@ void dBgS_Acch::CrrPos(dBgS& bgs) {
             }
         }
 
+        split_wall.stop();
+
         if (ChkWallHit() && bvar2) {
+            DUSK_SPLIT_SPAN(split_line2, "acch.s.line2");
             LineCheck(bgs);
+            split_line2.stop();
         }
 
+        DUSK_SPLIT_SPAN(split_roof, "acch.s.roof");
         field_0xcc = G_CM3D_F_INF;
 
         if (!(m_flags & FLAG_ROOF_NONE)) {
@@ -396,6 +856,8 @@ void dBgS_Acch::CrrPos(dBgS& bgs) {
             }
         }
 
+        split_roof.stop();
+        DUSK_SPLIT_SPAN(split_ground, "acch.s.ground");
         if (!(m_flags & FLAG_GRND_NONE)) {
             ClrGroundFind();
             GroundCheck(bgs);
@@ -406,6 +868,8 @@ void dBgS_Acch::CrrPos(dBgS& bgs) {
             }
         }
 
+        split_ground.stop();
+        DUSK_SPLIT_SPAN(split_water, "acch.s.water");
         if (!(m_flags & FLAG_WATER_NONE)) {
             ClrWaterHit();
             ClrWaterIn();
@@ -453,6 +917,7 @@ void dBgS_Acch::CrrPos(dBgS& bgs) {
             }
         }
 
+        split_water.stop();
         JUT_ASSERT(1124, !isnan(pm_pos->x));
         JUT_ASSERT(1125, !isnan(pm_pos->y));
         JUT_ASSERT(1126, !isnan(pm_pos->z));
