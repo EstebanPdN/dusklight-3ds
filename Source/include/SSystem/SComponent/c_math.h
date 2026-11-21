@@ -22,6 +22,11 @@ float cM_rnd();
 float cM_rndF(float);
 float cM_rndFX(float);
 void cM_initRnd2(int, int, int);
+#if defined(DUSK_TARGET_3DS)
+// Native New 3DS: the six generator states (cM_rnd, then cM_rnd2), for the
+// logic state probe (f_pc_manager.cpp).
+void cM_rndState(int o_state[6]);
+#endif
 float cM_rnd2();
 float cM_rndF2(float);
 float cM_rndFX2(float);

@@ -12,7 +12,9 @@
 #include "m_Do/m_Do_dvd_thread.h"
 #include "m_Do/m_Do_ext.h"
 #include "os_report.h"
-#if !defined(DUSK_TARGET_3DS)
+#if defined(DUSK_TARGET_3DS)
+#include "JSystem/JKernel/JKRDvdFile.h"
+#else
 #include "dusk/logging.h"
 #endif
 
@@ -152,11 +154,52 @@ DUSK_GAME_DATA JKRFileCache* DynamicModuleControl::sFileCache;
 
 static const char* baseString = "Base";
 
+#if defined(DUSK_TARGET_3DS)
+static bool isUncompressedRelArchive(s32 entry) {
+    JKRDvdFile file(entry);
+    const s32 fileSize = file.isAvailable() ? file.getFileSize() : 0;
+    constexpr s32 headerSize = sizeof(SArcHeader);
+    if (fileSize < headerSize) {
+        return false;
+    }
+
+    alignas(32) SArcHeader header;
+    if (DVDReadPrio(file.getFileInfo(), &header, headerSize, 0, 2) != headerSize) {
+        return false;
+    }
+
+    const u32 payloadSize = static_cast<u32>(fileSize - headerSize);
+    const u32 indexSize = header.file_data_offset;
+    return header.signature == 'RARC' && header.header_length == headerSize &&
+           header.file_length == static_cast<u32>(fileSize) &&
+           indexSize >= sizeof(SArcDataInfo) && indexSize <= payloadSize &&
+           header.file_data_length == payloadSize - indexSize;
+}
+#endif
+
 JKRArchive* DynamicModuleControl::mountCallback(void* param_0) {
     JKRExpHeap* heap = mDoExt_getArchiveHeap();
     sFileCache = JKRFileCache::mount("/rel/Final/Release", heap, NULL);
+#if defined(DUSK_TARGET_3DS)
+    // The profiles are statically linked here. The grass asset loader only
+    // needs one REL, so avoid staging the entire ARAM bank of an uncompressed
+    // RELS.arc. The DVD archive still looks up and decompresses that member.
+    const s32 entry = DVDConvertPathToEntrynum("RELS.arc");
+    sArchive = nullptr;
+    if (entry >= 0) {
+        if (isUncompressedRelArchive(entry)) {
+            sArchive = JKRArchive::mount(entry, JKRArchive::MOUNT_DVD, heap,
+                                         JKRArchive::MOUNT_DIRECTION_HEAD);
+        }
+        if (!sArchive) {
+            sArchive = JKRArchive::mount(entry, JKRArchive::MOUNT_COMP, heap,
+                                         JKRArchive::MOUNT_DIRECTION_HEAD);
+        }
+    }
+#else
     sArchive = JKRArchive::mount("RELS.arc", JKRArchive::MOUNT_COMP, heap,
                                  JKRArchive::MOUNT_DIRECTION_HEAD);
+#endif
     if (sArchive == NULL) {
         // "Mount failure, but if the archive isn't created, it was too slow %s\n"
         OSReport_Warning("マウント失敗ですが単にアーカイブを作ってないだけなら遅いだけです %s\n",

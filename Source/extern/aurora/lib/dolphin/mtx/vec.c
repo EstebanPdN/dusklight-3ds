@@ -2,6 +2,61 @@
 #include <math.h>
 #include <dolphin/mtx.h>
 #include <dolphin/ppc_math.h>
+#include <string.h>
+
+#if defined(DUSK_TARGET_3DS)
+// logic.txt frsqrte= fmaf= rnd= (d_native_logic.h): 0 original, 1 native,
+// 2 verify. 0 until logic.txt is read.
+int dusk_native_frsqrte_mode;
+int dusk_native_fmaf_mode;
+int dusk_native_rnd_mode;
+unsigned dusk_native_math_checks;
+unsigned dusk_native_math_mismatches;
+
+static inline int dusk_positive_normal(float x) {
+  union c32 in;
+  in.f = x;
+  return (int32_t)in.u > 0 && (in.u >> 23) != 0 && (in.u >> 23) != 0xffu;
+}
+
+// JMAFastSqrt when frsqrte != 0: the double it multiplies by its input.
+double dusk_frsqrte_f32(float x) {
+  if (dusk_native_frsqrte_mode == 0 || !dusk_positive_normal(x)) {
+    return frsqrte((double)x);
+  }
+  double fast = dusk_frsqrte_f32_fast(x);
+  if (dusk_native_frsqrte_mode == 2) {
+    double original = frsqrte((double)x);
+    dusk_native_math_checks++;
+    if (memcmp(&fast, &original, sizeof(double)) != 0) {
+      dusk_native_math_mismatches++;
+      fast = original;
+    }
+  }
+  return fast;
+}
+
+// ppc_rsqrte when frsqrte != 0 or fmaf != 0: each part as switched; verify
+// compares the float ppc_rsqrte returns with the original computation.
+float dusk_ppc_rsqrte(float x) {
+  double rsqrt_d = dusk_native_frsqrte_mode != 0 && dusk_positive_normal(x)
+                       ? dusk_frsqrte_f32_fast(x)
+                       : frsqrte((double)x);
+  float nwork0 = (float)(rsqrt_d * rsqrt_d);
+  float nwork1 = (float)(rsqrt_d * 0.5);
+  nwork0 = dusk_native_fmaf_mode != 0 ? dusk_fmaf_device(-nwork0, x, 3.0f) : fmaf(-nwork0, x, 3.0f);
+  float result = nwork0 * nwork1;
+  if (dusk_native_frsqrte_mode == 2 || dusk_native_fmaf_mode == 2) {
+    float original = ppc_rsqrte_original(x);
+    dusk_native_math_checks++;
+    if (memcmp(&result, &original, sizeof(float)) != 0) {
+      dusk_native_math_mismatches++;
+      result = original;
+    }
+  }
+  return result;
+}
+#endif
 
 void C_VECAdd(const Vec* a, const Vec* b, Vec* ab) {
   assert(a && "VECAdd():  NULL VecPtr 'a' ");
@@ -78,6 +133,20 @@ f32 PSVECSquareMag(const Vec* v) {
 
   xx = v->x * v->x;
   yy = v->y * v->y;
+#if defined(DUSK_TARGET_3DS)
+  if (dusk_native_fmaf_mode != 0) {
+    float fast = dusk_fmaf_device(dusk_fmaf_device(v->z, v->z, xx), 1.0f, yy);
+    if (dusk_native_fmaf_mode == 2) {
+      float original = fmaf(fmaf(v->z, v->z, xx), 1.0f, yy);
+      dusk_native_math_checks++;
+      if (memcmp(&fast, &original, sizeof(float)) != 0) {
+        dusk_native_math_mismatches++;
+        fast = original;
+      }
+    }
+    return fast;
+  }
+#endif
   xx_zz = fmaf(v->z, v->z, xx);
   return fmaf(xx_zz, 1.0f, yy);
 }

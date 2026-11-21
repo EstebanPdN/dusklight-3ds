@@ -16,6 +16,14 @@
 #include "m_Do/m_Do_ext.h"
 #include "os_report.h"
 
+#if defined(DUSK_TARGET_3DS)
+// The DVD thread runs on another core (mDoDvdThd::create): everything a
+// command wrote must be visible before the game sees mIsDone (sync()).
+#define DUSK_DVD_COMPLETE() (__atomic_thread_fence(__ATOMIC_RELEASE), mIsDone = true)
+#else
+#define DUSK_DVD_COMPLETE() (mIsDone = true)
+#endif
+
 s32 mDoDvdThd::main(void* param_0) {
     JKRThread(OSGetCurrentThread(), 0);
 #if TARGET_PC
@@ -54,7 +62,34 @@ DUSK_GAME_DATA u8 sDefaultDirection;
 static u8 padding[0x18];
 #pragma pop
 
+#if defined(DUSK_TARGET_3DS)
+#include <cstdint>
+namespace dusk::native {
+bool createThreadOnCore(OSThread*, void* (*)(void*), void*, void*, std::uint32_t, int, std::uint16_t, int core);
+}
+extern "C" bool duskNativeLoaderOnSecondCore;
+#endif
+
 void mDoDvdThd::create(s32 param_0) {
+#if defined(DUSK_TARGET_3DS)
+    // New 3DS: archive reads, Yaz0 decompression and archive parsing run on
+    // the second application core. On the game's core this thread ran above
+    // the game (priority main - 2, as on the GameCube, whose disc reads were
+    // DMA): every archive an actor, item or effect loaded during play froze
+    // the picture while it was decompressed. On core 2 it runs below the
+    // audio mixer and the GX worker, in their idle time, while the game keeps
+    // drawing. Commands still complete through mIsDone (release/acquire).
+    // SD switch loader-core0.txt keeps it on the game's core.
+    if (duskNativeLoaderOnSecondCore &&
+        dusk::native::createThreadOnCore(&l_thread, (void*(*)(void*))mDoDvdThd::main, &l_param,
+                                         l_threadStack.stack + sizeof(l_threadStack), sizeof(l_threadStack),
+                                         param_0, 1, 2)) {
+        OSReport("Native DVD thread: second core, priority %d\n", int(param_0));
+        OSResumeThread(&l_thread);
+        return;
+    }
+    OSReport("Native DVD thread: game core, priority %d\n", int(param_0));
+#endif
     OSCreateThread(&l_thread, (void*(*)(void*))mDoDvdThd::main, &l_param,
                    l_threadStack.stack + sizeof(l_threadStack), sizeof(l_threadStack), param_0, 1);
     OSResumeThread(&l_thread);
@@ -135,7 +170,16 @@ mDoDvdThd_command_c* mDoDvdThd_param_c::getFirstCommand() {
     return (mDoDvdThd_command_c*)mNodeList.mpHead;
 }
 
+#if defined(DUSK_TARGET_3DS)
+// Commands added and not yet executed (scene_transition.cpp: a zone is not
+// shown while its archives are still loading).
+extern "C" { int duskNativeDvdPending = 0; }
+#endif
+
 void mDoDvdThd_param_c::addition(mDoDvdThd_command_c* pCommand) {
+#if defined(DUSK_TARGET_3DS)
+    __atomic_add_fetch(&duskNativeDvdPending, 1, __ATOMIC_RELAXED);
+#endif
     OSLockMutex(&mMutext);
     cLs_Addition(&mNodeList, pCommand);
     OSUnlockMutex(&mMutext);
@@ -155,6 +199,9 @@ static void cb(void* param_0) {
     if (result != 1) {
         OSReport_Error("mDoDvdThd_param_c::mainLoop() コマンドの実行が失敗しました。\n");
     }
+#if defined(DUSK_TARGET_3DS)
+    __atomic_sub_fetch(&duskNativeDvdPending, 1, __ATOMIC_RELEASE);
+#endif
 }
 
 void mDoDvdThd_param_c::mainLoop() {
@@ -215,7 +262,7 @@ mDoDvdThd_callback_c* mDoDvdThd_callback_c::create(mDoDvdThd_callback_func pFunc
 
 s32 mDoDvdThd_callback_c::execute() {
     mResult = mFunction(mData);
-    mIsDone = true;
+    DUSK_DVD_COMPLETE();
     return mResult != NULL;
 }
 
@@ -327,7 +374,7 @@ s32 mDoDvdThd_mountArchive_c::execute() {
         }
 #endif
     }
-    mIsDone = true;
+    DUSK_DVD_COMPLETE();
     return mArchive != NULL;
 }
 
@@ -367,7 +414,7 @@ s32 mDoDvdThd_mountAramArchive_c::execute() {
         }
 #endif
     }
-    mIsDone = true;
+    DUSK_DVD_COMPLETE();
     return result;
 }
 
@@ -430,7 +477,7 @@ s32 mDoDvdThd_mountXArchive_c::execute() {
         }
     }
 #endif
-    mIsDone = true;
+    DUSK_DVD_COMPLETE();
     return result;
 }
 
@@ -458,7 +505,7 @@ s32 mDoDvdThd_getResource_c::execute() {
     if (!mResource) {
         OSReport_Error("mDoDvdThd_getResource_c::execute() リソース取得に失敗\n");
     }
-    mIsDone = true;
+    DUSK_DVD_COMPLETE();
     return mResource != NULL;
 }
 
@@ -522,6 +569,6 @@ s32 mDoDvdThd_toMainRam_c::execute() {
         OS_REPORT("mDoDvdThd_toMainRam_c::execute: mMemAddress=%08x mMemSize=%08x %s\n", mData, mDataSize, mDoDvdHack::ConvertEntrynumToName(mEntryNum));
     }
 #endif
-    mIsDone = true;
+    DUSK_DVD_COMPLETE();
     return mData != NULL;
 }

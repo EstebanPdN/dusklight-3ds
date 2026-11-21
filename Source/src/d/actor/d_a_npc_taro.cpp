@@ -287,6 +287,13 @@ int daNpc_Taro_c::create() {
     if (mType == 9) {
         mTwilight = false;
     }
+#if defined(DUSK_TARGET_3DS)
+    // The first Execute below reads the player's stance and targeting state.
+    // Native room loading can reach Taro's creation before Link is registered.
+    if (daPy_getPlayerActorClass() == NULL) {
+        return cPhs_INIT_e;
+    }
+#endif
     int rv = loadRes(l_loadResPtrnList[mType], (const char**)l_resNameList);
     if (rv == cPhs_COMPLEATE_e) {
         OS_REPORT("\t(%s:%d) flowNo:%d, PathID:%02x, BitSW:%02x, BitSW2:%02x<%08x> ",

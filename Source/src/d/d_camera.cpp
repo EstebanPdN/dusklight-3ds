@@ -2,6 +2,7 @@
 #include "d/d_native_lod.h"
 
 #include "d/d_camera.h"
+#include "d/d_tick_profile.h"
 #include "SSystem/SComponent/c_counter.h"
 #include "SSystem/SComponent/c_math.h"
 #include "d/actor/d_a_alink.h"
@@ -1070,6 +1071,7 @@ void dCamera_c::debugDrawInit() {
 }
 
 bool dCamera_c::Run() {
+    DUSK_TICK_PROFILE(tick_profile, "cam.run");
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
     ResetView();
     if (dusk::isCameraDetached()) {

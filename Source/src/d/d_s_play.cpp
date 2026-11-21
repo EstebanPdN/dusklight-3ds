@@ -46,6 +46,13 @@
 #include "dusk/ui/ui.hpp"
 #include "mods/items.h"
 #endif
+#if defined(DUSK_TARGET_3DS)
+#include "../../platforms/3ds/runtime/game_startup.hpp"
+#include "f_pc/f_pc_layer.h"
+#include "f_pc/f_pc_node.h"
+#include "f_pc/f_pc_pause.h"
+extern "C" { extern unsigned duskNativeSceneLogicRuns; }
+#endif
 
 #if DEBUG
 #include "d/d_s_menu.h"
@@ -542,17 +549,18 @@ static void drawUsedHeapSize() {
 }
 #endif
 
-static int dScnPly_Draw(dScnPly_c* i_this) {
+// The part of the scene's draw phase that is game logic, not drawing. Before
+// the model manager reset: the collision pass over the colliders the actors
+// registered in this tick, and the scene change request. After it: vibration,
+// suspend areas, moving backgrounds, the particle simulation and the frame
+// counter. The GameCube runs both once per frame, because every frame draws.
+// The 3DS runs several logic ticks per picture (real-speed pacing) and enters
+// the draw lists only on the last one, so both also run on the ticks that do
+// not draw (dScnPly_LogicOnlyDraw below).
+static void dScnPly_DrawLogicBefore(dScnPly_c* i_this) {
     static s16 l_wipeType[] = {
         0, 0, 17, 2, 2, 1, 3, 1, 4, 4, 5, 5, 6, 7, 0, 0, 2, 2, 2, 2, 2, 8, 8,
     };
-
-    #if DEBUG
-    fapGm_HIO_c::startCpuTimer();
-    fpc_ProcID id = fpcM_GetID(i_this);
-    drawUsedHeapSize();
-    dStage_DebugDisp();
-    #endif
 
     dComIfG_Ccsp()->Move();
     dComIfG_Bgsp().ClrMoveFlag();
@@ -595,9 +603,9 @@ static int dScnPly_Draw(dScnPly_c* i_this) {
             }
         }
     }
+}
 
-    dMdl_mng_c::reset();
-
+static void dScnPly_DrawLogicAfter(dScnPly_c* i_this) {
     if (!dComIfGp_isPauseFlag() && !dScnPly_c::isPause()
         #if DEBUG
         && !fapGm_HIO_c::isCaptureScreen()
@@ -625,6 +633,21 @@ static int dScnPly_Draw(dScnPly_c* i_this) {
             dComIfGp_getVibration().Pause();
         }
     }
+}
+
+static int dScnPly_Draw(dScnPly_c* i_this) {
+    #if DEBUG
+    fapGm_HIO_c::startCpuTimer();
+    fpc_ProcID id = fpcM_GetID(i_this);
+    drawUsedHeapSize();
+    dStage_DebugDisp();
+    #endif
+
+    dScnPly_DrawLogicBefore(i_this);
+
+    dMdl_mng_c::reset();
+
+    dScnPly_DrawLogicAfter(i_this);
 
     #if DEBUG
     if (fopOvlpM_IsDoingReq() != TRUE) {
@@ -1097,6 +1120,13 @@ void dScnPly_c::offReset() {
 }
 
 static int phase_00(dScnPly_c* i_this) {
+#if defined(DUSK_TARGET_3DS)
+    // A developer travel's save state: the previous scene is deleted and no
+    // actor of this one exists yet.
+    if (fpcM_GetName(i_this) == fpcNm_PLAY_SCENE_e) {
+        dusk::native::applyTravelLoadout();
+    }
+#endif
     if (!i_this->resetGame()) {
         return cPhs_INIT_e;
     }
@@ -1672,6 +1702,40 @@ static scene_method_class l_dScnPly_Method = {
     (process_method_func)dScnPly_Execute, (process_method_func)dScnPly_IsDelete,
     (process_method_func)dScnPly_Draw,
 };
+
+#if defined(DUSK_TARGET_3DS)
+// A logic tick that enters no draw lists (f_pc_manager.cpp): the play scene
+// still runs the logic of its draw phase, under the test fpcDw_Execute makes
+// before a scene's draw. Until Alpha 7 that logic ran once per picture.
+// Colliders of actors deleted between two ticks of one picture then stayed in
+// the collision set, and the next pass called through them: on the console
+// (Alpha 7, zone 57 of the random test) such a call landed in the deleting
+// destructor of another object that had taken the freed memory, which handed
+// a game-heap pointer to the C library's free. Particles, moving backgrounds
+// and the frame counter also advanced with the picture rate, not the logic
+// rate.
+int dScnPly_LogicOnlyDraw(void* i_proc, void*) {
+    base_process_class* proc = (base_process_class*)i_proc;
+    // The draw of a play scene goes through three method tables: the node's
+    // (g_fpcNd_Method, in base.methods), the scene layer's (g_fopScn_Method,
+    // in the node) and the play scene's own (l_dScnPly_Method, in the scene).
+    // Other root processes (overlaps, other scenes) are skipped.
+    if (!fpcBs_Is_JustOfType(g_fpcNd_type, proc->subtype) ||
+        (const void*)((process_node_class*)proc)->nodedraw_method != (const void*)&g_fopScn_Method ||
+        ((scene_class*)proc)->submethod != &l_dScnPly_Method || fpcPause_IsEnable(proc, 2)) {
+        return 0;
+    }
+    layer_class* save_layer = fpcLy_CurrentLayer();
+    // Match fpcNd_Draw: collision callbacks create actors in the play
+    // scene's layer. An actor created in root is also drawn by the root pass.
+    fpcLy_SetCurrentLayer(&((process_node_class*)proc)->layer);
+    dScnPly_DrawLogicBefore((dScnPly_c*)proc);
+    dScnPly_DrawLogicAfter((dScnPly_c*)proc);
+    fpcLy_SetCurrentLayer(save_layer);
+    ++duskNativeSceneLogicRuns;
+    return 1;
+}
+#endif
 
 DUSK_PROFILE scene_process_profile_definition DUSK_CONST g_profile_PLAY_SCENE = {
     /* Layer ID     */ fpcLy_ROOT_e,

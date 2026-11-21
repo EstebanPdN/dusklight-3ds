@@ -1028,15 +1028,14 @@ DUSK_GAME_DATA cull_sphere l_cullSizeSphere[fopAc_CULLSPHERE_MAX_e] = {
 };
 
 #if defined(DUSK_TARGET_3DS)
-static s32 fopAcM_frustumCullingCheck(fopAc_ac_c const* i_actor);
-
-// Native cost reduction: after the original frustum test, skip drawing actors
-// that project below the detail threshold. The player and events are exempt.
-s32 fopAcM_cullingCheck(fopAc_ac_c const* i_actor) {
-    const s32 culled = fopAcM_frustumCullingCheck(i_actor);
-    if (culled || i_actor == (fopAc_ac_c*)dComIfGp_getPlayer(0) || dComIfGp_event_runCheck()) {
-        return culled;
-    }
+// Native level of detail, rule "actor" (include/d/d_native_lod.h): an actor
+// whose cull volume projects below the threshold is "tiny". fopAc_Draw still
+// runs its draw method and the original "not drawn" condition still follows
+// the frustum test alone (game logic reads it: actors that pause off screen,
+// room deletion, the goats), but its models are not entered
+// (m_Do_ext.cpp). Link, Epona, the locked-on actor and every actor during an
+// event are never tiny.
+static s32 fopAcM_lodCullingCheck(fopAc_ac_c const* i_actor) {
     Mtx concat_mtx;
     MtxP mtx_p = j3dSys.getViewMtx();
     if (fopAcM_GetMtx(i_actor) != NULL) {
@@ -1058,10 +1057,18 @@ s32 fopAcM_cullingCheck(fopAc_ac_c const* i_actor) {
     return dNativeLod::tooSmall(mtx_p, sphere->center, sphere->radius, dNativeLod::config().actorPixels);
 }
 
-static s32 fopAcM_frustumCullingCheck(fopAc_ac_c const* i_actor) {
-#else
-s32 fopAcM_cullingCheck(fopAc_ac_c const* i_actor) {
+bool fopAcM_nativeLodTiny(fopAc_ac_c const* i_actor) {
+    if (dNativeLod::config().actorPixels <= 0.0f || i_actor == dComIfGp_getPlayer(0) ||
+        i_actor == (fopAc_ac_c*)dComIfGp_getHorseActor() || dComIfGp_event_runCheck() ||
+        !fopAcM_lodCullingCheck(i_actor))
+    {
+        return false;
+    }
+    return dComIfGp_getAttention() == NULL || dComIfGp_getAttention()->LockonTarget(0) != i_actor;
+}
 #endif
+
+s32 fopAcM_cullingCheck(fopAc_ac_c const* i_actor) {
     MtxP mtx_p;
 #if AVOID_UB
     Mtx concat_mtx;

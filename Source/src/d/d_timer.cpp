@@ -13,6 +13,9 @@
 #include "JSystem/J2DGraph/J2DAnmLoader.h"
 #include "JSystem/J2DGraph/J2DGrafContext.h"
 #include "JSystem/J2DGraph/J2DScreen.h"
+#include "JSystem/J2DGraph/J2DPicture.h"
+#include "JSystem/JKernel/JKRFileLoader.h"
+#include "JSystem/JUtility/JUTTexture.h"
 #include "JSystem/J2DGraph/J2DTextBox.h"
 #include "JSystem/JKernel/JKRExpHeap.h"
 #include "JSystem/JUtility/JUTFont.h"
@@ -856,13 +859,54 @@ void dDlst_TimerScrnDraw_c::deleteScreen() {
     mpGetInText = NULL;
 }
 
+#if defined(DUSK_TARGET_3DS)
+namespace {
+// The ten digit images as J2DScreen::getNameResource finds them, kept while
+// the mounted volume list is unchanged (the global name lookup answers from
+// that list). setTimer asks for 12 digits in every logic tick, also while
+// paused: each ask walked every mounted archive by name (80 us in Azahar) and
+// re-stored an unchanged image, which on 3DS also retires the texture's
+// retained records (58 us, and a GPU completion before the next draw).
+// Alpha 13 profile, F_SP00 goat minigame: 5.4 of the timer's 5.9 ms.
+const ResTIMG* sNumberImages[10];
+JSULink<JKRFileLoader>* sNumberVolumesHead;
+u32 sNumberVolumesCount;
+}  // namespace
+#endif
+
 void dDlst_TimerScrnDraw_c::changeNumberTexture(J2DPane* i_pane, int i_num) {
     if (i_num < 0 || i_num >= 10) {
         i_num = 0;
     }
 
+#if defined(DUSK_TARGET_3DS)
+    JSUList<JKRFileLoader>& volumes = JKRFileLoader::getVolumeList();
+    if (volumes.getFirst() != sNumberVolumesHead || volumes.getNumLinks() != sNumberVolumesCount) {
+        memset(sNumberImages, 0, sizeof(sNumberImages));
+        sNumberVolumesHead = volumes.getFirst();
+        sNumberVolumesCount = volumes.getNumLinks();
+    }
+    if (sNumberImages[i_num] == NULL) {
+        sNumberImages[i_num] = (const ResTIMG*)J2DScreen::getNameResource(getNumber(i_num));
+    }
+
+    // The picture already shows this plain (non-indexed) image: storing it
+    // again sets the same texture state. The lookup above it in the original
+    // reads a memory archive and its result is unused.
+    J2DPicture* picture = static_cast<J2DPicture*>(i_pane);
+    const ResTIMG* image = sNumberImages[i_num];
+    if (image != NULL && image->numColors == 0 && picture->getTextureCount() != 0 &&
+        picture->getTexture(0) != NULL && picture->getTexture(0)->getTexInfo() == image)
+    {
+        return;
+    }
+
+    dComIfGp_getMain2DArchive()->getResource('TIMG', getNumber(i_num));
+    picture->changeTexture(image, 0);
+#else
     dComIfGp_getMain2DArchive()->getResource('TIMG', getNumber(i_num));
     static_cast<J2DPicture*>(i_pane)->changeTexture(getNumber(i_num), 0);
+#endif
 }
 
 const char* dDlst_TimerScrnDraw_c::getNumber(int i_num) {

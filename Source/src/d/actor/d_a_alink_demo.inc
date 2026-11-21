@@ -2669,6 +2669,35 @@ int daAlink_c::procCoTurnBack() {
     return 1;
 }
 
+#if defined(DUSK_TARGET_3DS)
+void daAlink_c::setWolfDoorAnime(daAlink_ANM i_doorAnm, f32 i_start, s16 i_end, f32 i_morf) {
+    setSingleAnimeWolf(i_start > 0.0f ? WANM_WALK_A : WANM_WAIT, 1.0f, 0.0f, -1, i_morf);
+
+    // A knob-door cut can run on a forced Wolf start. The human BCK has
+    // 35 tracks and the wolf has 40 joints, so use the BCK only as a root
+    // motion track. Wolf's single animation leaves upper slots 0 and 1
+    // unused (upper 0 shares the lower track).
+    auto& motionHeap = mUpperAnmHeap[0];
+    motionHeap.resetIdx();
+    mWolfDoorMotion = getAnimeResource(&motionHeap, getMainBckData(i_doorAnm)->m_underID, 2 * 0x2C00);
+    motionHeap.resetIdx();
+    if (!mWolfDoorMotion) {
+        return;
+    }
+
+    if (i_end < 0) {
+        i_end = mWolfDoorMotion->getFrameMax();
+    }
+    // Hold the final sample until the cut ends. RESET would jump back to
+    // the starting root and undo the traversal before the camera handoff.
+    mUpperFrameCtrl[0].setFrameCtrl(J3DFrameCtrl::EMode_NONE, i_start, i_end, 1.0f, i_start);
+    mWolfDoorMotion->setFrame(i_start);
+    J3DTransformInfo root;
+    mWolfDoorMotion->getTransform(0, &root);
+    mWolfDoorPreviousRoot = i_start > 0.0f ? l_waitBaseAnime : cXyz(root.mTranslate);
+}
+#endif
+
 int daAlink_c::procDoorOpenInit() {
     if (!commonProcInitNotSameProc(PROC_DOOR_OPEN)) {
         return 1;
@@ -2721,12 +2750,24 @@ int daAlink_c::procDoorOpenInit() {
         mProcVar2.field_0x300c = 0;
     }
 
-    setSingleAnime(open_anm, 1.0f, start_f, end_f, 0.0f);
+#if defined(DUSK_TARGET_3DS)
+    if (checkWolf()) {
+        setWolfDoorAnime(open_anm, start_f, end_f, 0.0f);
+        field_0x2f99 = 0;
+    } else
+#endif
+    {
+        setSingleAnime(open_anm, 1.0f, start_f, end_f, 0.0f);
+    }
     mNormalSpeed = 0.0f;
 
     mLinkAcch.SetWallNone();
     mLinkAcch.OnLineCheckNone();
+#if defined(DUSK_TARGET_3DS)
+    field_0x3588 = checkWolf() ? l_wolfBaseAnime : l_waitBaseAnime;
+#else
     field_0x3588 = l_waitBaseAnime;
+#endif
     field_0x3198 = 0;
     mProcVar5.field_0x3012 = 0;
     return 1;
@@ -2734,6 +2775,30 @@ int daAlink_c::procDoorOpenInit() {
 
 int daAlink_c::procDoorOpen() {
     daPy_frameCtrl_c* frameCtrl_p = mUnderFrameCtrl;
+#if defined(DUSK_TARGET_3DS)
+    const bool wolfDoor = checkWolf();
+    if (wolfDoor) {
+        if (field_0x3198 != 0) {
+            dComIfGp_evmng_cutEnd(mAlinkStaffId);
+            return 1;
+        }
+        frameCtrl_p = &mUpperFrameCtrl[0];
+        if (mWolfDoorMotion) {
+            J3DTransformInfo root;
+            mWolfDoorMotion->getTransform(0, &root);
+            if (mProcVar2.field_0x300c == 0) {
+                const f32 dx = root.mTranslate.x - mWolfDoorPreviousRoot.x;
+                const f32 dz = root.mTranslate.z - mWolfDoorPreviousRoot.z;
+                const f32 sine = cM_ssin(shape_angle.y);
+                const f32 cosine = cM_scos(shape_angle.y);
+                current.pos.x += dx * cosine + dz * sine;
+                current.pos.z += dz * cosine - dx * sine;
+            }
+            mWolfDoorPreviousRoot = root.mTranslate;
+            animePlay(mWolfDoorMotion, frameCtrl_p);
+        }
+    }
+#endif
 
     if (field_0x3198 == 0) {
         if (mProcVar2.field_0x300c == 0 && mProcVar4.field_0x3010 != 0) {
@@ -2748,7 +2813,12 @@ int daAlink_c::procDoorOpen() {
         }
     }
 
-    if (checkAnmEnd(frameCtrl_p)) {
+#if defined(DUSK_TARGET_3DS)
+    const bool finished = (wolfDoor && !mWolfDoorMotion) || checkAnmEnd(frameCtrl_p);
+#else
+    const bool finished = checkAnmEnd(frameCtrl_p);
+#endif
+    if (finished) {
         if (mProcVar0.field_0x3008 != 0) {
             daAlink_ANM open_anm;
             if (mDemo.getParam0() & 1) {
@@ -2758,9 +2828,16 @@ int daAlink_c::procDoorOpen() {
             }
 
             seStartMapInfo(Z2SE_OBJ_KNOB_DOOR_LOCKED);
-            setSingleAnimeBaseMorf(open_anm, 0.0f);
+#if defined(DUSK_TARGET_3DS)
+            if (wolfDoor) {
+                setWolfDoorAnime(open_anm, 0.0f, -1, 0.0f);
+            } else
+#endif
+            {
+                setSingleAnimeBaseMorf(open_anm, 0.0f);
+                field_0x2f99 = 5;
+            }
             mProcVar0.field_0x3008 = 0;
-            field_0x2f99 = 5;
             mProcVar4.field_0x3010 = 0;
         } else {
             mLinkAcch.ClrWallNone();
@@ -2769,6 +2846,12 @@ int daAlink_c::procDoorOpen() {
             onModeFlg(1);
             offModeFlg(0x4000);
 
+#if defined(DUSK_TARGET_3DS)
+            if (wolfDoor) {
+                mWolfDoorMotion = nullptr;
+                setSingleAnimeWolfBaseMorf(WANM_WAIT, field_0x3478);
+            } else
+#endif
             if (mProcVar2.field_0x300c == 0) {
                 setBlendMoveAnime(field_0x3478);
             }
@@ -2779,6 +2862,11 @@ int daAlink_c::procDoorOpen() {
             if (mProcVar5.field_0x3012 == 0) {
                 mProcVar5.field_0x3012 = 1;
             } else {
+#if defined(DUSK_TARGET_3DS)
+                if (wolfDoor) {
+                    return 1;
+                }
+#endif
                 field_0x2f99 = 5;
             }
         }

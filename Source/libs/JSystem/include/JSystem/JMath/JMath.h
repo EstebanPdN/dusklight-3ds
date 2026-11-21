@@ -73,6 +73,13 @@ inline f32 JMAFastSqrt(__REGISTER const f32 input) {
     }
 #else
     if (input > 0.0f) {
+#if defined(DUSK_TARGET_3DS)
+        // logic.txt frsqrte: the same double as frsqrte(input) with 32-bit
+        // integer work (ppc_math.h); off = the original line below.
+        if (dusk_native_frsqrte_mode != 0) {
+            return dusk_frsqrte_f32(input) * input;
+        }
+#endif
         return frsqrte(input) * input;
     } else {
         return input;

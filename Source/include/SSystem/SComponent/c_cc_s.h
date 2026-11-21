@@ -48,6 +48,15 @@ public:
     void CalcArea();
     void Move();
     void DrawClear();
+#if defined(DUSK_TARGET_3DS)
+    // Removes from the sets every collider that `actor` owns or that lies in
+    // one of the two address ranges (the actor's object and its heap), keeping
+    // the order of the others. Returns the number of entries removed. Called
+    // when an actor is deleted (f_op_actor.cpp), so no pass can call through
+    // a collider of freed memory.
+    unsigned RemoveActor(const fopAc_ac_c* actor, const void* begin0, const void* end0,
+                         const void* begin1, const void* end1);
+#endif
     virtual void SetCoGObjInf(bool, bool, cCcD_GObjInf*, cCcD_GObjInf*,
                                                    cCcD_Stts*, cCcD_Stts*, cCcD_GStts*,
                                                    cCcD_GStts*);

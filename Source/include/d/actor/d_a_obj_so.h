@@ -5,6 +5,9 @@
 #include "d/d_cc_d.h"
 #include "d/d_cc_uty.h"
 #include "f_op/f_op_actor_mng.h"
+#if defined(DUSK_TARGET_3DS)
+#include "JSystem/J3DGraphBase/J3DNativeInstances.h"
+#endif
 
 /**
  * @ingroup actors-objects
@@ -85,6 +88,12 @@ public:
     /* 0x1BC0 */ f32 field_0x1bc0;
     /* 0x1BC4 */ u8 field_0x1bc4[0x1bcc - 0x1bc4];
     /* 0x1BCC */ u8 field_0x1bcc;
+#if defined(DUSK_TARGET_3DS)
+    // Instance batches (m_Do_ext.h mDoExt_nativeInstancesUpdateDL): the cage
+    // bars of each model data in the order the original draw enters them.
+    J3DModel* mNativeBars[2][34];
+    J3DNativeInstances mNativeBarBatch[2];
+#endif
 
     bool partBreak() {
         for (int i = 0; i < 8; i++) {

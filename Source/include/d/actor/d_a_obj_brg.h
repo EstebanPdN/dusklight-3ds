@@ -4,6 +4,9 @@
 #include "f_op/f_op_actor_mng.h"
 #include "d/d_bg_w_sv.h"
 #include "d/d_cc_d.h"
+#if defined(DUSK_TARGET_3DS)
+#include "JSystem/J3DGraphBase/J3DNativeInstances.h"
+#endif
 
 struct br_s {
     /* 0x000 */ J3DModel* mpBridgeModel;
@@ -92,6 +95,14 @@ public:
     /* 0xB1F1 */ s8 field_0xb1f1;
     /* 0xB1F2 */ s8 field_0xb1f2[2];
     /* 0xB1F4 */ u8 field_0xb1f4[0xb1f8 - 0xB1F4];
+#if defined(DUSK_TARGET_3DS)
+    // Instance batches (m_Do_ext.h mDoExt_nativeInstancesUpdateDL): the
+    // planks and the knots in the order the original draw enters them.
+    J3DModel* mNativePlanks[24];
+    J3DModel* mNativeKnots[48];
+    J3DNativeInstances mNativePlankBatch;
+    J3DNativeInstances mNativeKnotBatch;
+#endif
 };
 
 STATIC_ASSERT(sizeof(obj_brg_class) == 0xb1f8);

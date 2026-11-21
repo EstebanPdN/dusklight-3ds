@@ -92,7 +92,10 @@ public:
     cCcD_DivideInfo() {}
     virtual ~cCcD_DivideInfo() {}
     void Set(u32, u32, u32);
-    bool Chk(cCcD_DivideInfo const&) const;
+    bool Chk(const cCcD_DivideInfo& other) const {
+        return (mXDivInfo & other.mXDivInfo) && (mZDivInfo & other.mZDivInfo) &&
+               (mYDivInfo & other.mYDivInfo);
+    }
 };  // Size = 0x10
 
 STATIC_ASSERT(0x10 == sizeof(cCcD_DivideInfo));

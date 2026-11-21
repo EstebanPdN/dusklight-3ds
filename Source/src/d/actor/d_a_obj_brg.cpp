@@ -98,6 +98,40 @@ static void ride_call_back(dBgW* i_bgw, fopAc_ac_c* i_bgActor, fopAc_ac_c* i_rid
     }
 }
 
+#if defined(DUSK_TARGET_3DS)
+// Instance batches: every plank is one model data lit by the actor's tevStr,
+// and so is every knot. The planks go to the BG list and the knots to the
+// ordinary one, so entering all planks, then all knots, keeps each list's
+// order. True: planks and knots are entered; false: nothing was.
+static bool daObj_Brg_nativeInstances(obj_brg_class* i_this) {
+    fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+    const int count = i_this->field_0xb1ea;
+    if (count < 2 || count > 24) {
+        return false;
+    }
+    for (int i = 0; i < count; i++) {
+        i_this->mNativePlanks[i] = i_this->mBr[i].mpBridgeModel;
+        i_this->mNativeKnots[2 * i] = i_this->mBr[i].mpKnotModels[0];
+        i_this->mNativeKnots[2 * i + 1] = i_this->mBr[i].mpKnotModels[1];
+    }
+    dComIfGd_setListBG();
+    const bool planks = mDoExt_nativeInstancesUpdateDL(i_this->mNativePlanks, count, &a_this->tevStr,
+                                                       &i_this->mNativePlankBatch);
+    dComIfGd_setList();
+    if (!planks) {
+        return false;
+    }
+    if ((i_this->mType & 8) && !mDoExt_nativeInstancesUpdateDL(i_this->mNativeKnots, 2 * count, &a_this->tevStr,
+                                                                &i_this->mNativeKnotBatch)) {
+        for (int i = 0; i < 2 * count; i++) {
+            g_env_light.setLightTevColorType_MAJI(i_this->mNativeKnots[i], &a_this->tevStr);
+            mDoExt_modelUpdateDL(i_this->mNativeKnots[i]);
+        }
+    }
+    return true;
+}
+#endif
+
 static int daObj_Brg_Draw(obj_brg_class* i_this) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
     g_env_light.settingTevStruct(0x10, &a_this->current.pos, &a_this->tevStr);
@@ -106,10 +140,16 @@ static int daObj_Brg_Draw(obj_brg_class* i_this) {
         return 1;
     }
 
+#if defined(DUSK_TARGET_3DS)
+    const bool nativeInstances = daObj_Brg_nativeInstances(i_this);
+#endif
     br_s* br_p = i_this->mBr;
 
     f32 var_f32, var_f31, var_f30, var_f29, var_f28;
     for (int i = 0; i < i_this->field_0xb1ea; i++, br_p++) {
+#if defined(DUSK_TARGET_3DS)
+        if (!nativeInstances) {
+#endif
         g_env_light.setLightTevColorType_MAJI(br_p->mpBridgeModel, &a_this->tevStr);
         dComIfGd_setListBG();
         mDoExt_modelUpdateDL(br_p->mpBridgeModel);
@@ -121,6 +161,9 @@ static int daObj_Brg_Draw(obj_brg_class* i_this) {
                 mDoExt_modelUpdateDL(br_p->mpKnotModels[j]);
             }
         }
+#if defined(DUSK_TARGET_3DS)
+        }
+#endif
 
         if (!(i_this->mType & 4) && (br_p->field_0x708 & 4)) {
             cXyz sp74;

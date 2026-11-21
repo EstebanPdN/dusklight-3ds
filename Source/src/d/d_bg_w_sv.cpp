@@ -3,12 +3,14 @@
  *
  */
 
+#include <cstring>
 #include "d/dolzel.h" // IWYU pragma: keep
 
 #include "d/d_bg_w_sv.h"
 #include "SSystem/SComponent/c_bg_s_chk.h"
 
 u8 dBgWSv::Set(cBgD_t* pbgd, u32 param_1) {
+    DUSK_BG_NOTE(this, "dBgWSv::Set");
     if (cBgW::Set(pbgd, 99, NULL)) {
         return 1;
     }
@@ -27,9 +29,24 @@ void dBgWSv::CopyBackVtx() {
         return;
     }
 
+#if defined(DUSK_TARGET_3DS)
+    // The saved vertices feed the moving-BG correction: a note only when one
+    // of them takes a different value.
+    bool changed = false;
+#endif
     for (int i = 0; i < pm_bgd->m_v_num; i++) {
+#if defined(DUSK_TARGET_3DS)
+        if (!changed && std::memcmp(&field_0xc0[i], &pm_vtx_tbl[i], sizeof(field_0xc0[i])) != 0) {
+            changed = true;
+        }
+#endif
         field_0xc0[i] = pm_vtx_tbl[i];
     }
+#if defined(DUSK_TARGET_3DS)
+    if (changed) {
+        DUSK_BG_NOTE(this, "CopyBackVtx");
+    }
+#endif
 }
 
 bool dBgWSv::CrrPosWork(cXyz* i_pos, int i_vtx0, int i_vtx1, int i_vtx2) {

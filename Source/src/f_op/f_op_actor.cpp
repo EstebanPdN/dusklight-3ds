@@ -18,6 +18,11 @@
 #include "f_pc/f_pc_debug_sv.h"
 #include "c/c_dylink.h"
 #include "m_Do/m_Do_printf.h"
+#if defined(DUSK_TARGET_3DS)
+#include "d/d_native_lod.h"
+#include "d/d_native_logic.h"
+#include "../../platforms/3ds/runtime/perf_features.hpp"
+#endif
 
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
 #include "dusk/interp/samples.h"
@@ -258,7 +263,20 @@ static int fopAc_Draw(void* i_this) {
             print_error_check_c error_check(actor, print_error_check_c::sDRAW);
             #endif
 
+#if defined(DUSK_TARGET_3DS)
+            // Level of detail "actor": a tiny actor runs its draw method (and
+            // keeps the condition above) as in the original game; only the
+            // entry of its models is left out (m_Do_ext.cpp).
+            const bool save_tiny = dNativeLod::drawOwnerTiny;
+            dNativeLod::drawOwnerTiny = var_r28 != 2 &&
+                                        fopAcM_CheckStatus(actor, fopAcStts_CULL_e) &&
+                                        fopAcM_nativeLodTiny(actor);
+            dNativeLod::census.actors += dNativeLod::drawOwnerTiny;
+#endif
             ret = fpcLf_DrawMethod((leafdraw_method_class DUSK_CONST*)actor->sub_method, actor);
+#if defined(DUSK_TARGET_3DS)
+            dNativeLod::drawOwnerTiny = save_tiny;
+#endif
 
             #if DEBUG
             }
@@ -285,6 +303,31 @@ static int fopAc_Draw(void* i_this) {
 
     return ret;
 }
+
+#if defined(DUSK_TARGET_3DS)
+// features::farLogic (perf_features.hpp, features.txt logic=1): the original
+// lets an actor with the NOEXEC status rest while it was not drawn (culled);
+// a reviewed profile rests the same way when its own rule (in its actor
+// file) says the player can neither see, reach nor hear it. Asked at each
+// execute, so the switch can change between two pictures.
+bool daMg_Fish_FarRest(fopAc_ac_c* i_actor);
+static bool fopAc_farLogicRests(fopAc_ac_c* actor) {
+    if (!dusk::native::features::on(dusk::native::features::Id::farLogic)) {
+        return false;
+    }
+    bool rests = false;
+    switch (fopAcM_GetName(actor)) {
+    case fpcNm_MG_FISH_e:
+        rests = daMg_Fish_FarRest(actor);
+        break;
+    default:
+        return false;
+    }
+    dNativeLogic::census.farCandidates++;
+    dNativeLogic::census.farRested += rests;
+    return rests;
+}
+#endif
 
 static int fopAc_Execute(void* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
@@ -329,7 +372,12 @@ static int fopAc_Execute(void* i_this) {
         if (!fopAcM_CheckStatus(actor, fopAcStts_UNK_0x20000000_e) &&
             (move == 2 ||
                 (move != 0 && !fopAcM_CheckStatus(actor, fopAc_ac_c::getStopStatus()) &&
+#if defined(DUSK_TARGET_3DS)
+                (!fopAcM_CheckCondition(actor, fopAcCnd_NODRAW_e) ||
+                 !(fopAcM_CheckStatus(actor, fopAcStts_NOEXEC_e) || fopAc_farLogicRests(actor))))))
+#else
                 (!fopAcM_CheckStatus(actor, fopAcStts_NOEXEC_e) || !fopAcM_CheckCondition(actor, fopAcCnd_NODRAW_e)))))
+#endif
         {
             fopAcM_OffCondition(actor, fopAcCnd_NOEXEC_e);
             actor->old = actor->current;
@@ -388,7 +436,12 @@ static int fopAc_IsDelete(void* i_this) {
     print_error_check_c error_check(actor, print_error_check_c::sIS_DELETE);
     #endif
 
+#if defined(DUSK_TARGET_3DS)
+    // A profile without actor methods never got created (fopAc_Create).
+    ret = actor->sub_method != NULL ? fpcMtd_IsDelete((process_method_class*)actor->sub_method, actor) : TRUE;
+#else
     ret = fpcMtd_IsDelete((process_method_class*)actor->sub_method, actor);
+#endif
 
     #if DEBUG
     }
@@ -401,16 +454,61 @@ static int fopAc_IsDelete(void* i_this) {
     return ret;
 }
 
+#if defined(DUSK_TARGET_3DS)
+// Colliders removed from the collision sets because their actor was deleted
+// before the pass that would have consumed them (game_startup.cpp reports it).
+extern "C" unsigned duskNativeStaleCollidersRemoved __attribute__((weak));
+extern "C" unsigned duskNativeLogicTick __attribute__((weak));
+// The collision sets hold plain pointers to the colliders the actors
+// registered since the last pass (cCcS::Set). The GameCube consumes them in
+// the draw phase of the same frame, before any actor can be deleted. Here an
+// actor can be deleted between its last registration and the next pass: with
+// several logic ticks per picture (until the scene logic ran on every tick),
+// and while a scene is created or changed, when actors execute but the scene
+// does not draw. The pass then called a virtual function through freed
+// memory (console Alpha 7, zone 57: the memory held another object, whose
+// deleting destructor handed a game-heap pointer to the C library's free).
+// Removing an actor's colliders when it is deleted rules that out whatever
+// the order of ticks, draws and deletions.
+static void nativeRemoveColliders(fopAc_ac_c* actor) {
+    const process_profile_definition* profile = (const process_profile_definition*)fpcM_GetProfile(actor);
+    const u8* object = (const u8*)actor;
+    const u8* objectEnd = object + (profile != NULL ? profile->process_size + profile->unk_size : sizeof(fopAc_ac_c));
+    const u8* heap = NULL;
+    const u8* heapEnd = NULL;
+    if (actor->heap != NULL) {
+        heap = (const u8*)actor->heap->getStartAddr();
+        heapEnd = (const u8*)actor->heap->getEndAddr();
+    }
+    const unsigned removed = dComIfG_Ccsp()->RemoveActor(actor, object, objectEnd, heap, heapEnd);
+    if (removed != 0 && &duskNativeStaleCollidersRemoved) {
+        static unsigned events = 0;
+        if (events++ < 24) {
+            OSReport("Native collision sets: %u colliders of deleted actor %d (proc %d) removed at logic tick %u\n", removed,
+                     int(fpcM_GetID(actor)), int(fpcM_GetName(actor)), &duskNativeLogicTick ? duskNativeLogicTick : 0u);
+        }
+        duskNativeStaleCollidersRemoved += removed;
+    }
+}
+#endif
+
 static int fopAc_Delete(void* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
     int ret = FALSE;
+#if defined(DUSK_TARGET_3DS)
+    nativeRemoveColliders(actor);
+#endif
 
     #if DEBUG
     {
     print_error_check_c error_check(actor, print_error_check_c::sDELETE);
     #endif
 
+#if defined(DUSK_TARGET_3DS)
+    ret = actor->sub_method != NULL ? fpcMtd_Delete((process_method_class*)actor->sub_method, actor) : TRUE;
+#else
     ret = fpcMtd_Delete((process_method_class*)actor->sub_method, actor);
+#endif
 
     #if DEBUG
     }
@@ -537,6 +635,22 @@ static int fopAc_Create(void* i_this) {
             }
         }
     }
+
+#if defined(DUSK_TARGET_3DS)
+    // Stub profiles of the release game (NPC_KDK, NPC_HENNA0, PATH_LINE, and
+    // Obj_DamCps outside debug builds) carry no actor methods. A room that
+    // places one made fpcMtd_Create read the table at address 0 (console
+    // Alpha 10, entering R_SP107 room 3). The actor is not created, as when
+    // the map tool removes an enemy group above.
+    if (actor->sub_method == NULL) {
+        static unsigned reported = 0;
+        if (reported++ < 16) {
+            OSReport("Native actor without methods not created: proc %d room %d\n", int(fpcM_GetName(actor)),
+                     int(actor->home.roomNo));
+        }
+        return cPhs_ERROR_e;
+    }
+#endif
 
     #if DEBUG
     {

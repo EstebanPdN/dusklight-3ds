@@ -32,6 +32,31 @@ static int daObj_So_Draw(obj_so_class* i_this) {
         mDoExt_modelUpdateDL(i_this->field_0x574);
     }
 
+#if defined(DUSK_TARGET_3DS)
+    // Instance batches: bars 0 and 1 are one model data, bars 2 to 25 and the
+    // eight field_0x1aa0 bars another, all lit by the actor's tevStr; the
+    // first two are entered before all the others, so each set can be
+    // entered as a batch in its own original order.
+    int counts[2] = {0, 0};
+    for (int i = 0; i < 26; i++) {
+        if (i_this->field_0x5fc[i] != 0) {
+            const int set = i < 2 ? 0 : 1;
+            i_this->mNativeBars[set][counts[set]++] = i_this->field_0x594[i];
+            if (i_this->field_0xdae != 1 && i >= 2 && i < 10 && i_this->field_0x1a98[i - 2] != 0) {
+                i_this->mNativeBars[1][counts[1]++] = i_this->field_0x1aa0[i - 2];
+            }
+        }
+    }
+    for (int set = 0; set < 2; set++) {
+        if (!mDoExt_nativeInstancesUpdateDL(i_this->mNativeBars[set], counts[set], &a_this->tevStr,
+                                            &i_this->mNativeBarBatch[set])) {
+            for (int i = 0; i < counts[set]; i++) {
+                g_env_light.setLightTevColorType_MAJI(i_this->mNativeBars[set][i], &a_this->tevStr);
+                mDoExt_modelUpdateDL(i_this->mNativeBars[set][i]);
+            }
+        }
+    }
+#else
     for (int i = 0; i < 26; i++) {
         if (i_this->field_0x5fc[i] != 0) {
             g_env_light.setLightTevColorType_MAJI(i_this->field_0x594[i], &a_this->tevStr);
@@ -45,6 +70,7 @@ static int daObj_So_Draw(obj_so_class* i_this) {
             }
         }
     }
+#endif
 
     return 1;
 }

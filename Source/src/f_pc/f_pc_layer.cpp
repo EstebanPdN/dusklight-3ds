@@ -6,6 +6,40 @@
 #include "f_pc/f_pc_layer.h"
 #include "f_pc/f_pc_method_iter.h"
 #include "f_pc/f_pc_method_tag.h"
+#if defined(DUSK_TARGET_3DS)
+#include "f_pc/f_pc_id_index.h"
+
+// Native New 3DS: processes reachable by fpcLyIt_AllJudge, by id (see
+// f_pc_id_index.h, logic.txt procindex).
+namespace {
+fpcIdIndexTable<base_process_class, fpc_ProcID> l_idIndex;
+u64 l_searchRevision;
+
+inline void processQueued(create_tag_class* i_createTag) {
+    ++l_searchRevision;
+    l_idIndex.add((base_process_class*)i_createTag->mpTagData);
+}
+
+inline void processUnqueued(create_tag_class* i_createTag) {
+    ++l_searchRevision;
+    l_idIndex.remove((base_process_class*)i_createTag->mpTagData);
+}
+}  // namespace
+
+u64 fpcLy_SearchRevision() {
+    return l_searchRevision;
+}
+
+int fpcIdIdx_Find(fpc_ProcID i_id, base_process_class** o_proc) {
+    return l_idIndex.find(i_id, o_proc);
+}
+
+void fpcIdIdx_State(unsigned* o_live, unsigned* o_peak, unsigned* o_stopped) {
+    *o_live = l_idIndex.live;
+    *o_peak = l_idIndex.peak;
+    *o_stopped = l_idIndex.stopped;
+}
+#endif
 
 void fpcLy_CancelQTo(process_method_tag_class* i_methods) {
     fpcMtdTg_MethodQTo(i_methods);
@@ -25,11 +59,21 @@ BOOL fpcLy_CancelMethod(process_method_tag_class* i_layer) {
 
 int fpcLy_IntoQueue(layer_class* i_layer, int i_treeListNo, create_tag_class* i_createTag, int i_no) {
     int ret = cTg_InsertToTree(&i_layer->node_tree, i_treeListNo, i_createTag, i_no);
+#if defined(DUSK_TARGET_3DS)
+    if (ret != 0) {
+        processQueued(i_createTag);
+    }
+#endif
     return ret;
 }
 
 int fpcLy_ToQueue(layer_class* i_layer, int i_treeListNo, create_tag_class* i_createTag) {
     int ret = cTg_AdditionToTree(&i_layer->node_tree, i_treeListNo, i_createTag);
+#if defined(DUSK_TARGET_3DS)
+    if (ret != 0) {
+        processQueued(i_createTag);
+    }
+#endif
     return ret;
 }
 
@@ -37,6 +81,11 @@ int fpcLy_QueueTo(layer_class* i_layer, create_tag_class* i_createTag) {
     UNUSED(i_layer);
 
     int ret = cTg_SingleCutFromTree(i_createTag);
+#if defined(DUSK_TARGET_3DS)
+    if (ret != 0) {
+        processUnqueued(i_createTag);
+    }
+#endif
     return ret;
 }
 
@@ -130,11 +179,26 @@ layer_class* fpcLy_Layer(fpc_ProcID i_id) {
 
 void fpcLy_Regist(layer_class* i_layer) {
     cLs_Addition(&l_fpcLy_LayerList, (node_class*)i_layer);
+#if defined(DUSK_TARGET_3DS)
+    ++l_searchRevision;
+#endif
 }
 
 int fpcLy_Delete(layer_class* i_layer) {
     if (i_layer->node_tree.mpLists->mSize == 0 && i_layer->cancel_list.mSize == 0) {
+#if defined(DUSK_TARGET_3DS)
+        // Only the first list is tested above: processes left in the other
+        // lists stop being reachable by the walk. Never seen; the table stops.
+        for (int i = 1; i < i_layer->node_tree.mNumLists; i++) {
+            if (i_layer->node_tree.mpLists[i].mSize != 0) {
+                l_idIndex.stopped = 6;
+            }
+        }
+#endif
         cLs_SingleCut((node_class*)i_layer);
+#if defined(DUSK_TARGET_3DS)
+        ++l_searchRevision;
+#endif
         *i_layer = l_fpcLy_Crear;
         return 1;
     }
