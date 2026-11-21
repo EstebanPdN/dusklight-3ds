@@ -16,6 +16,9 @@
 #if defined(DUSK_TARGET_3DS)
 #include "../../platforms/3ds/runtime/texture_resources.hpp"
 #include "../../platforms/3ds/runtime/gx_state.hpp"
+#include "../../platforms/3ds/runtime/gx_profile.hpp"
+#include "../../platforms/3ds/runtime/gx_stream.hpp"
+#include <cmath>
 #endif
 
 #if TARGET_PC
@@ -2243,6 +2246,139 @@ static void dKr_cullVtx_Set(IF_DUSK(bool const vtxColor = false)) {
 #define KYR_3DS_ELSE(a, b) b
 #endif
 
+#if defined(DUSK_TARGET_3DS)
+// Native 3DS: snow is drawn with GX clipping disabled, one quad per flake
+// and pass (plus a reflection in some Snowpeak rooms). Quads that cannot
+// produce a pixel are skipped before GXBegin: no GX encoding and no CPU-route
+// vertices. The drawn quads keep their order and state: the same picture.
+// - Behind the camera: every corner has z_eye > 1, so w = -z_eye < 0, and
+//   with the projection's z row (p4 < 1, p5 <= 0) z_clip < -w: all four
+//   corners lie outside the near plane. GX_CLIP_DISABLE sets XF 0x1005 bit 0
+//   only (clipping detection); trivial rejection stays on and drops a
+//   primitive wholly outside one plane. On the PICA every point of such a
+//   quad has w < 0, outside its [-w, 0] depth slab: the clip-disabled routes
+//   (PICA clipping, or the whole-draw behind-camera cull) draw none of it.
+// - Beyond one scissor edge: every corner in front of the camera, projected
+//   well inside the GX setup unit's coordinate range (no wrap) and past the
+//   same edge of the scissor box. With w > 0 a quad covers only the convex
+//   hull of its projected corners, and the scissor bounds every pixel on GX
+//   and on PICA alike (the raster plan clips to the same box).
+// Projection, viewport and scissor come from the GX registers in effect;
+// anything missing or unusual turns the matching test off. The margins (16
+// EFB pixels, depth relative to the size of the terms) are far above the
+// float32/float24 rounding of the renderer's own transform of the corners.
+struct KyrSnowCull {
+    f32 eye[3][4];                   // position matrix the quads are drawn with
+    f32 px, pxz, py, pyz;            // x_c = px*x + pxz*z, y_c = py*y + pyz*z, w = -z
+    f32 cx, sx, cy, sy;              // GX screen = c + s * x_c / w, EFB pixels
+    f32 left, right, top, bottom;    // scissor box, EFB pixels
+    bool behindTest, lateral;
+    u32 quads, behind, outside;
+    static bool readXf(const dusk::native::gx::CommandRegisters& regs, unsigned address, f32& value) {
+        if (!regs.xfValid[address]) {
+            return false;
+        }
+        std::memcpy(&value, &regs.xf[address], sizeof(f32));
+        return std::isfinite(value);
+    }
+    explicit KyrSnowCull(Mtx m) : behindTest(false), lateral(false), quads(0), behind(0), outside(0) {
+        for (int r = 0; r < 3; r++) {
+            for (int c = 0; c < 4; c++) {
+                eye[r][c] = m[r][c];
+            }
+        }
+        dusk::native::gx::CommandStream* stream = dusk::native::gx::commandStream();
+        if (stream == NULL || !stream->idle()) {
+            return;
+        }
+        const dusk::native::gx::CommandRegisters& regs = stream->registers();
+        if (!regs.xfValid[0x1026] || regs.xf[0x1026] != 0) {
+            return; // not perspective: w is not -z_eye
+        }
+        f32 pz, pzw;
+        if (readXf(regs, 0x1024, pz) && readXf(regs, 0x1025, pzw)) {
+            // (pz - 1) * z_eye + pzw < 0 for every z_eye > 1: outside the near plane.
+            behindTest = pz < 1.0f && pzw <= 0.0f;
+        }
+        const unsigned needed[] = {0x1020, 0x1021, 0x1022, 0x1023, 0x101a, 0x101b, 0x101d, 0x101e};
+        f32 value[8];
+        for (int n = 0; n < 8; n++) {
+            if (!readXf(regs, needed[n], value[n])) {
+                return;
+            }
+        }
+        // Default 342-pixel scissor offset only (the raster plan refuses others).
+        if (!regs.bpValid[0x20] || !regs.bpValid[0x21] ||
+            (regs.bpValid[0x59] && (regs.bp[0x59] & 0x3ffff) != (171u | (171u << 9)))) {
+            return;
+        }
+        px = value[0]; pxz = value[1]; py = value[2]; pyz = value[3];
+        sx = value[4]; sy = value[5]; cx = value[6] - 340.0f; cy = value[7] - 340.0f;
+        left = f32(int((regs.bp[0x20] >> 12) & 2047) - 342);
+        top = f32(int(regs.bp[0x20] & 2047) - 342);
+        right = f32(int((regs.bp[0x21] >> 12) & 2047) - 341);
+        bottom = f32(int(regs.bp[0x21] & 2047) - 341);
+        lateral = sx != 0.0f && sy != 0.0f;
+    }
+    // The corners as drawn: pos[n] + scale * add. NaN or infinity never cull.
+    bool skip(const cXyz* pos, f32 scale, const cXyz& add) {
+        ++quads;
+        if (!behindTest && !lateral) {
+            return false;
+        }
+        bool allBehind = behindTest;
+        unsigned side = lateral ? 15u : 0u; // edges every corner is beyond so far
+        for (int n = 0; n < 4; n++) {
+            const f32 x = pos[n].x + (scale * add.x), y = pos[n].y + (scale * add.y), z = pos[n].z + (scale * add.z);
+            f32 row[3], magnitude[3];
+            for (int r = 0; r < 3; r++) {
+                const f32 a = eye[r][0] * x, b = eye[r][1] * y, c = eye[r][2] * z;
+                row[r] = a + b + c + eye[r][3];
+                magnitude[r] = std::fabs(a) + std::fabs(b) + std::fabs(c) + std::fabs(eye[r][3]);
+            }
+            const f32 depth = row[2];
+            // w = -depth carries the rounding of the z row only.
+            allBehind = allBehind && depth > 1.0f + magnitude[2] * (1.0f / 1024.0f);
+            if (side != 0) {
+                // x_c / w carries the rounding of every row, divided by w.
+                const f32 w = -depth;
+                const f32 largest = std::fmax(magnitude[0], std::fmax(magnitude[1], magnitude[2]));
+                if (!(w > 1.0f + largest * (1.0f / 128.0f))) {
+                    side = 0;
+                } else {
+                    const f32 sxPos = cx + sx * ((px * row[0] + pxz * depth) / w);
+                    const f32 syPos = cy + sy * ((py * row[1] + pyz * depth) / w);
+                    // Far inside the setup unit's range: GX cannot wrap these.
+                    if (!(sxPos > -256.0f && sxPos < 1536.0f && syPos > -256.0f && syPos < 1536.0f)) {
+                        side = 0;
+                    } else {
+                        const f32 mx = 16.0f + std::fabs(sxPos - cx) * (1.0f / 256.0f);
+                        const f32 my = 16.0f + std::fabs(syPos - cy) * (1.0f / 256.0f);
+                        side &= (sxPos > right + mx ? 1u : 0u) | (sxPos < left - mx ? 2u : 0u) |
+                                (syPos > bottom + my ? 4u : 0u) | (syPos < top - my ? 8u : 0u);
+                    }
+                }
+            }
+            if (!allBehind && side == 0) {
+                return false;
+            }
+        }
+        if (allBehind) {
+            ++behind;
+        } else {
+            ++outside;
+        }
+        return true;
+    }
+};
+
+// The GX stream draws a fixed-count primitive larger than its 64 KiB scratch
+// in chunks (CommandStream split); the star list is still issued in
+// primitives that fit (4,095 of the 16-byte star vertices), sized so that the
+// 1,200 plain stars stay the one primitive they always were.
+static const int kyrStarPrimitiveVertices = 3600;
+#endif
+
 static void dKyr_draw_rev_moon(Mtx drawMtx, u8** tex) {
 #if !defined(DUSK_TARGET_3DS)
     ZoneScoped;
@@ -3601,6 +3737,10 @@ void dKyr_drawSibuki(Mtx drawMtx, u8** tex) {
     GXSetAlphaCompare(GX_GREATER, 0, GX_AOP_OR, GX_GREATER, 0);
     GXSetZMode(GX_TRUE, GX_GEQUAL, GX_FALSE);
     GXSetClipMode(GX_CLIP_DISABLE);
+#if defined(DUSK_TARGET_3DS)
+    // This pass samples TEXMAP0 directly even after an indirect material.
+    GXSetTevDirect(GX_TEVSTAGE0);
+#endif
     GXSetNumIndStages(0);
     dKr_cullVtx_Set();
     GXLoadPosMtxImm(drawMtx, GX_PNMTX0);
@@ -4182,6 +4322,9 @@ void dKyr_drawSnow(Mtx drawMtx, u8** tex) {
                     MTXConcat(camMtx, rotMtx, camMtx);
                     GXLoadPosMtxImm(drawMtx, GX_PNMTX0);
                     GXSetCurrentMtx(GX_PNMTX0);
+#if defined(DUSK_TARGET_3DS)
+                    KyrSnowCull snowCull(drawMtx);
+#endif
 
                     if (g_env_light.field_0xe92 == 0 && sp4C == 0) {
                         DUSK_DESKTOP_ORIGINAL(dusk::vdt::present_addCalc, cLib_addCalc)(
@@ -4296,6 +4439,11 @@ void dKyr_drawSnow(Mtx drawMtx, u8** tex) {
                                 pos[3].z = sp7C.z + sp88.z;
 
                                 for (int k = 0; k < spC; k++) {
+#if defined(DUSK_TARGET_3DS)
+                                    if (snowCull.skip(pos, temp_f31, add_table[k])) {
+                                        continue;
+                                    }
+#endif
                                     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
                                     GXPosition3f32(pos[0].x + (temp_f31 * add_table[k].x), pos[0].y + (temp_f31 * add_table[k].y), pos[0].z + (temp_f31 * add_table[k].z));
                                     IF_DUSK(GXColor4u8(color_reg0.r, color_reg0.g, color_reg0.b, color_reg0.a));
@@ -4367,6 +4515,10 @@ void dKyr_drawSnow(Mtx drawMtx, u8** tex) {
                                     pos[3].y = sp34 + sp88.y;
                                     pos[3].z = sp7C.z + sp88.z;
 
+#if defined(DUSK_TARGET_3DS)
+                                    if (!snowCull.skip(pos, temp_f31, add_table[0]))
+#endif
+                                    {
                                     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
                                     int var_r27 = 0;
                                     GXPosition3f32(pos[0].x + (temp_f31 * add_table[var_r27].x), pos[0].y + (temp_f31 * add_table[var_r27].y), pos[0].z + (temp_f31 * add_table[var_r27].z));
@@ -4382,6 +4534,7 @@ void dKyr_drawSnow(Mtx drawMtx, u8** tex) {
                                     IF_DUSK(GXColor4u8(color_reg0.r, color_reg0.g, color_reg0.b, color_reg0.a));
                                     GXTexCoord2s16(0, 0xFF);
                                     GXEnd();
+                                    }
                                 }
                             }
                         }
@@ -4389,11 +4542,147 @@ void dKyr_drawSnow(Mtx drawMtx, u8** tex) {
 
                     GXSetClipMode(GX_CLIP_ENABLE);
                     J3DShape::resetVcdVatCache();
+#if defined(DUSK_TARGET_3DS)
+                    // Profiled frame only: quads met, and quads left out
+                    // behind the camera or beyond a scissor edge.
+                    if (dusk::native::gxSparseVertexProfiling && snowCull.quads != 0) {
+                        OSReport("Native snow quads=%lu skipped behind-camera=%lu off-screen=%lu (tests behind=%d lateral=%d)\n",
+                                 static_cast<unsigned long>(snowCull.quads), static_cast<unsigned long>(snowCull.behind),
+                                 static_cast<unsigned long>(snowCull.outside), int(snowCull.behindTest), int(snowCull.lateral));
+                    }
+#endif
                 }
             }
         }
     }
 }
+
+#if defined(DUSK_TARGET_3DS)
+#include "../../platforms/3ds/runtime/gx_target_extent.hpp"
+#endif
+
+namespace {
+// The field always starts at the same angle and height, including on nights
+// when only a prefix is drawn. The first 13 stars are the fixed constellations.
+struct KyrStarSequence {
+    u32 angle, step;
+    f32 height;
+
+    Vec next(int index) {
+        const f32 radius = 1.0f - (0.004950495f * height);
+        const s16 azimuth = s16(angle - 0x8000);
+        const Vec offset = {radius * (300.0f * -cM_ssin(azimuth)), 45.0f + height,
+                            radius * (300.0f * cM_scos(azimuth))};
+        angle += step;
+        step += 2250;
+        f32 h = height / 200.0f;
+        h *= h * h;
+        height += 1.0f + (3.0f * h);
+        if (height > 200.0f) {
+            height = 20.0f * (index / 1200.0f);
+        }
+        return offset;
+    }
+};
+
+#if defined(DUSK_TARGET_3DS)
+// mDoLib_project's XY projection for the ordinary game viewport. Cache the
+// lookup of the matrix and viewport per packet. The Moon test discards Z.
+struct KyrStarProjection {
+    const Mtx44& matrix;
+    bool standard;
+    f32 width, height, left;
+
+    explicit KyrStarProjection(const view_port_class& port)
+        : matrix(*dComIfGd_getProjViewMtx()), standard(port.x_orig == 0 && port.y_orig == 0),
+          width(mDoGph_gInf_c::getWidthF()), height(port.height), left(mDoGph_gInf_c::getMinXF()) {}
+
+    void xy(Vec& point, Vec& screen) const {
+        if (!standard) {
+            mDoLib_project(&point, &screen);
+            return;
+        }
+        Vec clip;
+        cMtx_multVec(matrix, &point, &clip);
+        const f32 w = point.x * matrix[3][0] + point.y * matrix[3][1] +
+                      point.z * matrix[3][2] + matrix[3][3];
+        // mDoLib_project projects even a point on or behind the eye. This
+        // matters when only the reflected triangle is visible.
+        const f32 scale = w <= 0.0f ? 500000.0f : 0.5f / w;
+        screen.x = (0.5f + clip.x * scale) * width + left;
+        screen.y = (0.5f + clip.y * -scale) * height;
+    }
+};
+
+// Only the small procedural stars use this test. The whole triangle must
+// miss one homogeneous side of the actual PICA target, even after rounding
+// both dot products of the compact, origin-relative vertex path.
+struct KyrStarCull {
+    const f32 (*view)[4];
+    f32 px = 0.0f, py = 0.0f, slack = 0.0f, slackX = 0.0f, slackY = 0.0f;
+
+    void setup(dusk::native::gx::CommandStream& stream, const Vec& eye,
+               const cXyz (&corners)[4], f32 twinkle, f32 zoom) {
+        if (!stream.idle() || stream.capturing() || stream.nativePendingRun()) {
+            return;
+        }
+        const auto& r = stream.registers();
+        const auto& target = dusk::native::gx::currentTargetExtent;
+        if (!target.valid() || !r.xfValid[0x1026] || r.xf[0x1026] != GX_PERSPECTIVE) {
+            return;
+        }
+        const unsigned addresses[] = {0x1020, 0x1021, 0x1022, 0x1023, 0x101a, 0x101b, 0x101d, 0x101e};
+        f32 v[8];
+        for (unsigned i = 0; i < 8; ++i) {
+            const unsigned address = addresses[i];
+            if (!r.xfValid[address]) {
+                return;
+            }
+            std::memcpy(&v[i], &r.xf[address], sizeof(v[i]));
+        }
+        // For this viewport PICA's rotation just swaps the two clip tests.
+        // Off-centre projections and alternate viewports keep the whole sky.
+        if (v[1] != 0 || v[3] != 0 || !(v[0] > 0 && v[0] <= 16 && v[2] > 0 && v[2] <= 16) ||
+            2 * v[4] != target.logicalWidth || -2 * v[5] != target.logicalHeight ||
+            v[6] != 340.0f + v[4] || v[7] != 340.0f - v[5]) {
+            return;
+        }
+        const f32 maxEye = std::max({std::fabs(eye.x), std::fabs(eye.y), std::fabs(eye.z)});
+        if (!(maxEye <= 131072.0f && std::fabs(twinkle) <= 2.0f && zoom >= 0 && zoom <= 1)) {
+            return;
+        }
+        for (unsigned i = 0; i < 3; ++i) {
+            const auto& row = view[i];
+            const f32 atEye = (row[0] * eye.x + row[1] * eye.y + row[2] * eye.z) + row[3];
+            if (!(std::fabs(row[0]) + std::fabs(row[1]) + std::fabs(row[2]) <= 2 &&
+                  std::fabs(atEye) <= 1 && std::fabs(corners[i].x - eye.x) <= 0.5f &&
+                  std::fabs(corners[i].y - eye.y) <= 0.5f && std::fabs(corners[i].z - eye.z) <= 0.5f)) {
+                return;
+            }
+        }
+        // Regular offsets are <=300 per component. The first vertex, which
+        // anchors the renderer's 256-unit rebase grid, can be a constellation
+        // up to 32,200 units away. Each eye dot's absolute terms sum to at
+        // most ~4*max(34,000, |eye|) with or without rebasing. Allow 64
+        // float24 ulps at that scale, plus the eye residual and corner reach.
+        slack = 8.0f + std::max(34000.0f, maxEye) * (1.0f / 1024.0f);
+        px = v[0];
+        py = v[2];
+        slackX = slack * (1.0f + px);
+        slackY = slack * (1.0f + py);
+    }
+
+    bool outside(const Vec& p, f32 y) const {
+        const auto dot = [&](int row) {
+            return view[row][0] * p.x + view[row][1] * y + view[row][2] * p.z;
+        };
+        const f32 depth = -dot(2);
+        return depth < -slack || std::fabs(dot(0)) * px > depth + slackX ||
+                                 std::fabs(dot(1)) * py > depth + slackY;
+    }
+};
+#endif
+}  // namespace
 
 void dKyr_drawStar(Mtx drawMtx, u8** tex) {
 #if !defined(DUSK_TARGET_3DS)
@@ -4560,24 +4849,109 @@ void dKyr_drawStar(Mtx drawMtx, u8** tex) {
         pos[2].y = spBC.y + sp8C.y;
         pos[2].z = spBC.z + sp8C.z;
 
-        int sp48 = 0;
-        int sp44 = 0;
-        f32 var_f28 = 0.0f;
-
-#if TARGET_PC
-        // Dusk optimization: we submit a single large draw call, rather than a thousand.
-        u32 vertCount = 3 * star_packet->mEffectNum;
-        if (draw_mirrored) {
-            vertCount *= 2;
+        int weekday = dComIfGs_getDate() % 8;
+        if (g_env_light.getDaytime() < 180.0f) {
+            weekday = (weekday + 7) % 8;
         }
-        GXBegin(GX_TRIANGLES, GX_VTXFMT0, vertCount);
+        f32 moon_threshold = (gwolf_howl_stage ? 180.0f : 80.0f) + (700.0f * (var_f30 * var_f30));
+        if (weekday == 4 && !gwolf_howl_stage) {
+            moon_threshold = 0.0f;
+        }
+        moon_proj.z = 0.0f;
+
+        KyrStarSequence sequence = {};
+#if TARGET_PC
+#if defined(DUSK_TARGET_3DS)
+        constexpr int fieldLimit = 1200;
+        static Vec field[fieldLimit - 13];
+        static KyrStarSequence tail;
+        static int filled = 13;
+        const int count = star_packet->mEffectNum;
+        for (; filled < count && filled < fieldLimit; ++filled) {
+            field[filled - 13] = tail.next(filled);
+        }
+        sequence = tail; // Continue normally if a caller supplies a longer field.
+        const int chunkStars = kyrStarPrimitiveVertices / (draw_mirrored ? 6 : 3);
+        u8 hemispheres[kyrStarPrimitiveVertices / 3];
+        int chunkStart = 0, chunkEnd = 0;
+        int starPrimitives = 0;
+        unsigned submittedVertices = 0;
+        // The corners of the stars go to the GX stream in blocks, the bytes
+        // the vertex calls write (XYZ F32, RGBA8): 1,200 stars are 7,200
+        // calls otherwise, each a call chain (the night sky of Ordon Spring
+        // took 16 ms of a picture, 11 of them here).
+        u8 starBytes[16 * 6 * 32];
+        unsigned starUsed = 0;
+        dusk::native::gx::CommandStream* const starStream = dusk::native::gx::commandStream();
+        if (starStream == NULL) {
+            OSPanic(__FILE__, __LINE__, "Native star stream unavailable");
+        }
+        const KyrStarProjection project(*dComIfGd_getViewport());
+        KyrStarCull cull{drawMtx};
+        if (count > 13) {
+            cull.setup(*starStream, spBC, pos, star_packet->mEffect[0].field_0x28, var_f30);
+        }
+        const auto starFlush = [&]() {
+            if (starUsed != 0 && !starStream->write({starBytes, starUsed})) {
+                OSPanic(__FILE__, __LINE__, "Native star stream failed");
+            }
+            starUsed = 0;
+        };
+        const auto starVertex = [&](f32 x, f32 y, f32 z, const GXColor& color) {
+            const f32 position[3] = {x, y, z};
+            for (int c = 0; c < 3; c++) {
+                u32 bits;
+                std::memcpy(&bits, &position[c], 4);
+                bits = __builtin_bswap32(bits);
+                std::memcpy(starBytes + starUsed + 4 * c, &bits, 4);
+            }
+            starBytes[starUsed + 12] = color.r;
+            starBytes[starUsed + 13] = color.g;
+            starBytes[starUsed + 14] = color.b;
+            starBytes[starUsed + 15] = color.a;
+            starUsed += 16;
+        };
+#else
+        GXBegin(GX_TRIANGLES, GX_VTXFMT0, star_packet->mEffectNum * (draw_mirrored ? 6 : 3));
+#endif
 #endif
 
         for (int i = 0; i < star_packet->mEffectNum; i++) {
+#if TARGET_PC && defined(DUSK_TARGET_3DS)
+            if (i == chunkEnd) {
+                if (i != 0) {
+                    starFlush();
+                    GXEnd();
+                    // Smaller lists could now merge. Keep the original first
+                    // vertex of each list as its compact GPU position origin.
+                    if (!starStream->finish()) {
+                        OSPanic(__FILE__, __LINE__, "Native star primitive failed");
+                    }
+                }
+                chunkStart = i;
+                chunkEnd = std::min(i + chunkStars, count);
+                unsigned vertices = 0;
+                for (int n = i; n < chunkEnd; ++n) {
+                    bool upper = true, lower = draw_mirrored;
+                    if (cull.px != 0 && n >= 13 && n < fieldLimit && n != chunkStart) {
+                        const Vec& offset = field[n - 13];
+                        upper = !cull.outside(offset, offset.y);
+                        lower = lower && !cull.outside(offset, -offset.y);
+                    }
+                    hemispheres[n - i] = unsigned(upper) | (unsigned(lower) << 1);
+                    vertices += 3 * (unsigned(upper) + unsigned(lower));
+                }
+                GXBegin(GX_TRIANGLES, GX_VTXFMT0, vertices);
+                submittedVertices += vertices;
+                ++starPrimitives;
+            }
+            const u8 visible = hemispheres[i - chunkStart];
+            if (visible == 0) {
+                continue;
+            }
+#endif
             f32 var_f31;
-            cXyz star_pos;
-            f32 sp2C = 300.0f;
-
+            Vec star_pos;
             if (i < 13) {
                 star_pos.x = hokuto_position[i].x;
                 star_pos.y = hokuto_position[i].y;
@@ -4596,21 +4970,11 @@ void dKyr_drawStar(Mtx drawMtx, u8** tex) {
                 color_reg0.a = 0xC3;
             } else {
                 var_f31 = 0.8f + (star_packet->mEffect[0].field_0x28 * (0.03125f * (i & 31)));
-                f32 temp_f29 = 1.0f - (0.004950495f * var_f28);
-
-                star_pos.x = temp_f29 * (sp2C * -cM_ssin((sp48 - 0x8000)));
-                star_pos.y = 45.0f + var_f28;
-                star_pos.z = temp_f29 * (sp2C * cM_scos((sp48 - 0x8000)));
-
-                sp48 += sp44;
-                sp44 += 2250;
-
-                temp_f29 = var_f28 / 200.0f;
-                temp_f29 *= temp_f29 * temp_f29;
-                var_f28 += 1.0f + (3.0f * temp_f29);
-                if (var_f28 > 200.0f) {
-                    var_f28 = 20.0f * (i / 1200.0f);
-                }
+#if TARGET_PC && defined(DUSK_TARGET_3DS)
+                star_pos = i < fieldLimit ? field[i - 13] : sequence.next(i);
+#else
+                star_pos = sequence.next(i);
+#endif
 
                 static const GXColor star_col[] = {
                     /* red   */ {0xFF, 0xBE, 0xC8, 0xA0},
@@ -4625,39 +4989,20 @@ void dKyr_drawStar(Mtx drawMtx, u8** tex) {
 
             IF_NOT_DUSK(GXSetTevColor(GX_TEVREG0, color_reg0));
 
-            cXyz sp68;
-            cXyz sp5C;
-            u16 date = dComIfGs_getDate();
+            Vec sp68;
+            Vec sp5C;
             sp68.x = spBC.x + star_pos.x;
             sp68.y = spBC.y + star_pos.y;
             sp68.z = spBC.z + star_pos.z;
 
+#if TARGET_PC && defined(DUSK_TARGET_3DS)
+            project.xy(sp68, star_proj);
+#else
             mDoLib_project(&sp68, &star_proj);
+#endif
 
-            moon_proj.z = 0.0f;
             star_proj.z = 0.0f;
             f32 moon_dist_to_star = moon_proj.abs(star_proj);
-
-            f32 moon_threshold;
-            if (gwolf_howl_stage) {
-                moon_threshold = 180.0f + (700.0f * (var_f30 * var_f30));
-            } else {
-                moon_threshold = 80.0f + (700.0f * (var_f30 * var_f30));
-            }
-
-            int weekday = date % 8;
-            if (g_env_light.getDaytime() < 180.0f) {
-                if (weekday != 0) {
-                    weekday--;
-                } else {
-                    weekday = 7;
-                }
-            }
-
-            if (weekday == 4 && !gwolf_howl_stage) {
-                // it's a New Moon, so no threshold needed
-                moon_threshold = 0.0f;
-            }
 
             // if a star is too close to the moon then avoid drawing
 #if TARGET_PC
@@ -4667,6 +5012,26 @@ void dKyr_drawStar(Mtx drawMtx, u8** tex) {
                 color_reg0.a = 0;
             }
 
+#if defined(DUSK_TARGET_3DS)
+            if (starUsed + 16 * 6 > sizeof(starBytes)) {
+                starFlush();
+            }
+            if (visible & 1) {
+                for (int corner = 0; corner < 3; corner++) {
+                    starVertex(sp68.x + (var_f31 * (pos[corner].x - spBC.x)), sp68.y + (var_f31 * (pos[corner].y - spBC.y)),
+                               sp68.z + (var_f31 * (pos[corner].z - spBC.z)), color_reg0);
+                }
+            }
+            if (visible & 2) {
+                sp5C.x = spBC.x + star_pos.x;
+                sp5C.y = spBC.y - star_pos.y;
+                sp5C.z = spBC.z + star_pos.z;
+                for (int corner = 0; corner < 3; corner++) {
+                    starVertex(sp5C.x + (var_f31 * (pos[corner].x - spBC.x)), sp5C.y + (var_f31 * (pos[corner].y - spBC.y)),
+                               sp5C.z + (var_f31 * (pos[corner].z - spBC.z)), color_reg0);
+                }
+            }
+#else
             GXPosition3f32(sp68.x + (var_f31 * (pos[0].x - spBC.x)), sp68.y + (var_f31 * (pos[0].y - spBC.y)), sp68.z + (var_f31 * (pos[0].z - spBC.z)));
             GXColor4u8(color_reg0.r, color_reg0.g, color_reg0.b, color_reg0.a);
             GXPosition3f32(sp68.x + (var_f31 * (pos[1].x - spBC.x)), sp68.y + (var_f31 * (pos[1].y - spBC.y)), sp68.z + (var_f31 * (pos[1].z - spBC.z)));
@@ -4686,6 +5051,7 @@ void dKyr_drawStar(Mtx drawMtx, u8** tex) {
                 GXPosition3f32(sp5C.x + (var_f31 * (pos[2].x - spBC.x)), sp5C.y + (var_f31 * (pos[2].y - spBC.y)), sp5C.z + (var_f31 * (pos[2].z - spBC.z)));
                 GXColor4u8(color_reg0.r, color_reg0.g, color_reg0.b, color_reg0.a);
             }
+#endif
 #else
             if (moon_dist_to_star > moon_threshold) {
                 GXBegin(GX_TRIANGLES, GX_VTXFMT0, 3);
@@ -4710,8 +5076,20 @@ void dKyr_drawStar(Mtx drawMtx, u8** tex) {
         }
 
 #if TARGET_PC
+#if defined(DUSK_TARGET_3DS)
+        starFlush();
+#endif
         GXEnd();
         DUSK_DESKTOP_ONLY(GXPopDebugGroup());
+#endif
+#if TARGET_PC && defined(DUSK_TARGET_3DS)
+        // The first split star list, then the profiled frames.
+        static bool splitReported = false;
+        if ((starPrimitives > 1 && !splitReported) || dusk::native::gxSparseVertexProfiling) {
+            splitReported |= starPrimitives > 1;
+            OSReport("Native star draw: stars=%d mirrored=%d primitives=%d vertices=%u\n", int(star_packet->mEffectNum),
+                     int(draw_mirrored), starPrimitives, submittedVertices);
+        }
 #endif
 
         J3DShape::resetVcdVatCache();
@@ -6471,6 +6849,63 @@ static void dKyr_evil_draw2(Mtx drawMtx, u8** tex) {
         GXSetClipMode(GX_CLIP_DISABLE);
         GXSetNumIndStages(0);
 
+#if defined(DUSK_TARGET_3DS)
+        // Each quad set both TEV colours and drew alone: up to ~1000 draws a
+        // picture at about 0.2 ms each on the 3DS (D_MN08 r0: 660 immediate
+        // draws, 181 ms in the translucent BG list). Outside the wolf power-up
+        // both colours follow one value t per quad:
+        //   C0 = (255t, 159t^2, 135t^2), C1 = (255t, 120t^2, 20t^3),
+        // so C1 = C0 * K with K = (1, 120/159, ~0.09): red and green exact,
+        // blue (at most 20/255 in C1) within 8/255. C0 rides in the vertex
+        // colour and K in a konst colour, and every quad goes into one draw:
+        //   stage 0: lerp(K, 1, TEXC); stage 1: PREV * RASC; alpha TEXA * A0
+        // (A0 is 255 for every quad here).
+        const bool evilBatch2 = !daPy_py_c::checkNowWolfPowerUp();
+        struct Evil2Quad { cXyz pos[4]; GXColor color; };
+        static Evil2Quad evil2Batch[128];
+        int evil2Count = 0;
+        auto evil2Flush = [&]() {
+            if (evil2Count == 0) {
+                return;
+            }
+            static const s16 tc[4][2] = {{0, 0}, {0xFF, 0}, {0xFF, 0xFF}, {0, 0xFF}};
+            GXBegin(GX_QUADS, GX_VTXFMT0, u16(evil2Count * 4));
+            for (int q = 0; q < evil2Count; q++) {
+                const Evil2Quad& quad = evil2Batch[q];
+                for (int k = 0; k < 4; k++) {
+                    GXPosition3f32(quad.pos[k].x, quad.pos[k].y, quad.pos[k].z);
+                    GXColor4u8(quad.color.r, quad.color.g, quad.color.b, quad.color.a);
+                    GXTexCoord2s16(tc[k][0], tc[k][1]);
+                }
+            }
+            GXEnd();
+            evil2Count = 0;
+        };
+        if (evilBatch2) {
+            const GXColor k0 = {0xFF, 0xC0, 0x17, 0xFF};
+            GXSetTevKColor(GX_KCOLOR0, k0);
+            GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+            GXClearVtxDesc();
+            GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+            GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+            GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+            GXSetNumChans(1);
+            GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, 0, GX_DF_NONE, GX_AF_NONE);
+            GXSetNumTevStages(2);
+            GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+            GXSetTevKColorSel(GX_TEVSTAGE0, GX_TEV_KCSEL_K0);
+            GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_KONST, GX_CC_ONE, GX_CC_TEXC, GX_CC_ZERO);
+            GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+            GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+            GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_CPREV, GX_CC_RASC, GX_CC_ZERO);
+            GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_APREV, GX_CA_RASA, GX_CA_ZERO);
+            GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        }
+#endif
+
         for (int i = 0; i < g_env_light.field_0x1054; i++) {
             EF_EVIL_EFF* effect = &evil_packet->mEffect[i];
             camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
@@ -6558,8 +6993,15 @@ static void dKyr_evil_draw2(Mtx drawMtx, u8** tex) {
                         }
 
                         color_reg0.a = 0xFF;
+#if defined(DUSK_TARGET_3DS)
+                        if (!evilBatch2) {
+                            GXSetTevColor(GX_TEVREG0, color_reg0);
+                            GXSetTevColor(GX_TEVREG1, color_reg1);
+                        }
+#else
                         GXSetTevColor(GX_TEVREG0, color_reg0);
                         GXSetTevColor(GX_TEVREG1, color_reg1);
+#endif
 
                         spA0 = sp7C;
 
@@ -6595,6 +7037,20 @@ static void dKyr_evil_draw2(Mtx drawMtx, u8** tex) {
                         pos[3].y = spA0.y + sp88.y;
                         pos[3].z = spA0.z + sp88.z;
 
+#if defined(DUSK_TARGET_3DS)
+                        if (evilBatch2) {
+                            Evil2Quad& quad = evil2Batch[evil2Count];
+                            quad.pos[0] = pos[0];
+                            quad.pos[1] = pos[1];
+                            quad.pos[2] = pos[2];
+                            quad.pos[3] = pos[3];
+                            quad.color = color_reg0;
+                            if (++evil2Count == 128) {
+                                evil2Flush();
+                            }
+                            continue;
+                        }
+#endif
                         for (int j = 0; j < 1; j++) {
                             GXBegin(GX_QUADS, GX_VTXFMT0, 4);
                             GXPosition3f32(pos[0].x, pos[0].y, pos[0].z);
@@ -6612,6 +7068,9 @@ static void dKyr_evil_draw2(Mtx drawMtx, u8** tex) {
             }
         }
 
+#if defined(DUSK_TARGET_3DS)
+        evil2Flush();
+#endif
         DUSK_DESKTOP_ONLY(GXPopDebugGroup());
 
         GXSetClipMode(GX_CLIP_ENABLE);
@@ -6726,6 +7185,36 @@ void dKyr_evil_draw(Mtx drawMtx, u8** tex) {
 #endif
 
         dComIfG_Ccsp()->PrepareMass();
+
+#if defined(DUSK_TARGET_3DS)
+        // Up to 2000 quads, each its own GXBegin: about 0.19 ms each to
+        // translate on the 3DS (console Alpha 11, D_MN08 r1: 90 ms for this
+        // list). Consecutive quads with the same TEV register 1 (zero far from
+        // the boss lights, so nearly all of them) go into one GXBegin: same
+        // state, same order, so the same pixels; register 0 already rides in
+        // the vertex colour above.
+        struct EvilQuad { cXyz pos[4]; GXColor color; };
+        static EvilQuad evilBatch[128];
+        int evilCount = 0;
+        GXColor evilReg1 = color_reg1;
+        auto evilFlush = [&]() {
+            if (evilCount == 0) {
+                return;
+            }
+            static const s16 tc[4][2] = {{0, 0}, {0xFF, 0}, {0xFF, 0xFF}, {0, 0xFF}};
+            GXBegin(GX_QUADS, GX_VTXFMT0, u16(evilCount * 4));
+            for (int q = 0; q < evilCount; q++) {
+                const EvilQuad& quad = evilBatch[q];
+                for (int k = 0; k < 4; k++) {
+                    GXPosition3f32(quad.pos[k].x, quad.pos[k].y, quad.pos[k].z);
+                    GXColor4u8(quad.color.r, quad.color.g, quad.color.b, quad.color.a);
+                    GXTexCoord2s16(tc[k][0], tc[k][1]);
+                }
+            }
+            GXEnd();
+            evilCount = 0;
+        };
+#endif
 
         for (int i = 0; i < g_env_light.field_0x1054; i++) {
             EF_EVIL_EFF* effect = &evil_packet->mEffect[i];
@@ -6845,6 +7334,13 @@ void dKyr_evil_draw(Mtx drawMtx, u8** tex) {
                         }
 
                         IF_NOT_DUSK(GXSetTevColor(GX_TEVREG0, color_reg0));
+#if defined(DUSK_TARGET_3DS)
+                        if (color_reg1.r != evilReg1.r || color_reg1.g != evilReg1.g ||
+                            color_reg1.b != evilReg1.b || color_reg1.a != evilReg1.a) {
+                            evilFlush();
+                            evilReg1 = color_reg1;
+                        }
+#endif
                         GXSetTevColor(GX_TEVREG1, color_reg1);
 
                         spC8 = spA4;
@@ -6881,6 +7377,17 @@ void dKyr_evil_draw(Mtx drawMtx, u8** tex) {
                         pos[3].y = spC8.y + spB0.y;
                         pos[3].z = spC8.z + spB0.z;
 
+#if defined(DUSK_TARGET_3DS)
+                        evilBatch[evilCount].pos[0] = pos[0];
+                        evilBatch[evilCount].pos[1] = pos[1];
+                        evilBatch[evilCount].pos[2] = pos[2];
+                        evilBatch[evilCount].pos[3] = pos[3];
+                        evilBatch[evilCount].color = color_reg0;
+                        if (++evilCount == 128) {
+                            evilFlush();
+                        }
+                        continue;
+#endif
                         GXBegin(GX_QUADS, GX_VTXFMT0, 4);
                         GXPosition3f32(pos[0].x, pos[0].y, pos[0].z);
                         IF_DUSK(GXColor4u8(color_reg0.r, color_reg0.g, color_reg0.b, color_reg0.a));
@@ -6900,6 +7407,9 @@ void dKyr_evil_draw(Mtx drawMtx, u8** tex) {
             }
         }
 
+#if defined(DUSK_TARGET_3DS)
+        evilFlush();
+#endif
         DUSK_DESKTOP_ONLY(GXPopDebugGroup());
 
         J3DShape::resetVcdVatCache();

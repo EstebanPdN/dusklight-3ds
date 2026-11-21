@@ -1691,9 +1691,21 @@ void dMsgObject_c::talkStartInit() {
         bool local_98 = false;
         if (mpOutFont == NULL) {
             OS_REPORT("free size (0x%x)=====> %d\n", mDoExt_getCurrentHeap(), mDoExt_getCurrentHeap()->getTotalFreeSize());
+#if defined(DUSK_TARGET_3DS)
+            // The first message begins before _execute switches to mpTalkHeap.
+            JKRHeap* previousHeap = mDoExt_setCurrentHeap(mpTalkHeap);
+#endif
             mpOutFont = JKR_NEW COutFont_c(0);
+#if defined(DUSK_TARGET_3DS)
+            if (mpOutFont == NULL) {
+                OSPanic(__FILE__, __LINE__, "Original talk font allocation failed");
+            }
+#endif
             JUT_ASSERT(3035, mpOutFont != NULL);
             mpOutFont->createPane();
+#if defined(DUSK_TARGET_3DS)
+            mDoExt_setCurrentHeap(previousHeap);
+#endif
             mpRenProc->setOutFont(mpOutFont);
         }
         dMsgScrnBase_c* pData;

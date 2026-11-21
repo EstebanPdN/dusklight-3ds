@@ -709,6 +709,52 @@ dFlower_packet_c::dFlower_packet_c() {
 }
 
 #if TARGET_PC
+#if defined(DUSK_TARGET_3DS)
+// The batch on the 3DS, with one colour channel. The batch below needs two
+// (the lit colour, whose ambient is the flower's own and travels as a vertex
+// colour, times the colour of the leaf vertex), and the PICA rasterizes one:
+// a material that reads two is drawn on the CPU vertex route, where the
+// flowers of a Faron Woods room cost 46 ms of a picture (2,200 vertices lit
+// by four lights). Both colour tables hold white and one other colour, so
+// the vertex colour carries the ambient and, in its alpha, which of the two
+// the vertex has; the combiner makes the colour from it:
+//   stage 0: alpha * (white - second)        (zero for a white vertex)
+//   stage 1: (1 - stage 0) * lit colour      = vertex colour * lit colour
+//   stage 2: (texture * stage 1 + C0) * 4    as below
+// The product is taken per pixel in both forms.
+static bool batch_one_channel(const GXColor* colors) {
+    return colors[0].r == 0xFF && colors[0].g == 0xFF && colors[0].b == 0xFF;
+}
+static void batch_setup_tev(u32 lightMask, const GXColor* colors) {
+    GXSetCullMode(GX_CULL_NONE);
+
+    GXSetNumChans(1);
+    GXSetChanMatColor(GX_COLOR0A0, GXColor{0xFF, 0xFF, 0xFF, 0xFF});
+    GXSetChanCtrl(GX_COLOR0, GX_TRUE, GX_SRC_VTX, GX_SRC_REG, lightMask, GX_DF_CLAMP, GX_AF_SPOT);
+    GXSetChanCtrl(GX_ALPHA0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, 0, GX_DF_NONE, GX_AF_NONE);
+    GXSetTevColor(GX_TEVREG2, GXColor{u8(0xFF - colors[1].r), u8(0xFF - colors[1].g), u8(0xFF - colors[1].b), 0});
+
+    GXSetNumTevStages(3);
+
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_RASA, GX_CC_C2, GX_CC_ZERO);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+
+    GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+    GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_RASC, GX_CC_ZERO, GX_CC_CPREV, GX_CC_ZERO);
+    GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO);
+    GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+
+    GXSetTevOrder(GX_TEVSTAGE2, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+    GXSetTevColorIn(GX_TEVSTAGE2, GX_CC_ZERO, GX_CC_TEXC, GX_CC_CPREV, GX_CC_C0);
+    GXSetTevColorOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_4, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+    GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+}
+#endif
 static void batch_setup_tev(u32 lightMask) {
     GXSetCullMode(GX_CULL_NONE);
 
@@ -856,14 +902,40 @@ static GXColor hana01_amb_color(int idx, const dKy_tevstr_c* tevstr) {
     return amb;
 }
 
-static void flower_emit(const batch::LeafTemplate& tpl, const Vec* xformedPos, GXColor amb) {
+// `oneChannel` (3DS, batch_one_channel): one direct colour, the ambient with
+// the vertex's entry of the two-colour table in its alpha.
+static void flower_emit(const batch::LeafTemplate& tpl, const Vec* xformedPos, GXColor amb, bool oneChannel = false) {
+#if defined(DUSK_TARGET_3DS)
+    if (oneChannel) {
+        // The one-channel vertex has the layout of the grass batch: one write
+        // per leaf instead of seven vertex calls per vertex (blade_emit).
+        std::array<u8, 18 * batch::LeafTemplate::kMaxVtx> bytes;
+        auto* stream = dusk::native::gx::commandStream();
+        if (!stream || !stream->recordingAuto() || tpl.vtxCount > batch::LeafTemplate::kMaxVtx)
+            OSPanic(__FILE__, __LINE__, "Native flower leaf stream unavailable");
+        for (u32 i = 0; i < tpl.vtxCount; ++i) {
+            const auto& v = tpl.vtx[i];
+            const auto& p = xformedPos[v.pos];
+            const auto packed = dusk::native::gx::grassVertexWire(p.x, p.y, p.z, v.nrm,
+                {amb.r, amb.g, amb.b, u8(v.clr != 0 ? 0xFF : 0)}, v.tex);
+            std::memcpy(bytes.data() + 18 * i, packed.data(), packed.size());
+        }
+        if (!stream->write({bytes.data(), 18u * tpl.vtxCount}))
+            OSPanic(__FILE__, __LINE__, "Native flower leaf stream failed");
+        return;
+    }
+#endif
     for (u32 i = 0; i < tpl.vtxCount; i++) {
         const batch::LeafTemplate::Vtx& v = tpl.vtx[i];
         const Vec& p = xformedPos[v.pos];
         GXPosition3f32(p.x, p.y, p.z);
         GXNormal1x8(v.nrm);
-        GXColor1x8(v.clr);
-        GXColor4u8(amb.r, amb.g, amb.b, amb.a);
+        if (oneChannel) {
+            GXColor4u8(amb.r, amb.g, amb.b, v.clr != 0 ? 0xFF : 0);
+        } else {
+            GXColor1x8(v.clr);
+            GXColor4u8(amb.r, amb.g, amb.b, amb.a);
+        }
         GXTexCoord1x8(v.tex);
     }
 }
@@ -871,6 +943,9 @@ static void flower_emit(const batch::LeafTemplate& tpl, const Vec* xformedPos, G
 void dFlower_packet_c::draw() {
 #if !defined(DUSK_TARGET_3DS)
     ZoneScoped;
+#else
+    // The l_flower tables are converted once at start and only read here.
+    const dusk::native_effects::StableArrays stableArrays;
 #endif
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
     j3dSys.reinitGX();
@@ -904,6 +979,20 @@ void dFlower_packet_c::draw() {
         {GX_VA_TEX0, GX_INDEX8},
         {GX_VA_NULL, GX_NONE},
     };
+#if defined(DUSK_TARGET_3DS)
+    // The one-channel batch (batch_setup_tev above).
+    static GXVtxDescList oneChannelDescList[] = {
+        {GX_VA_POS, GX_DIRECT},
+        {GX_VA_NRM, GX_INDEX8},
+        {GX_VA_CLR0, GX_DIRECT},
+        {GX_VA_TEX0, GX_INDEX8},
+        {GX_VA_NULL, GX_NONE},
+    };
+    const bool oneChannel00 = batch_one_channel(reinterpret_cast<const GXColor*>(l_flowerColor));
+    const bool oneChannel01 = batch_one_channel(mp_colors);
+#else
+    const bool oneChannel00 = false, oneChannel01 = false;
+#endif
     static Vec xfPos[256];
     Mtx identity;
     MTXIdentity(identity);
@@ -944,10 +1033,19 @@ void dFlower_packet_c::draw() {
         dKy_setLight_nowroom_grass(tevstr->room_no, 1.0f);
 
         GXLoadTexObj(&mTexObj_l_J_Ohana00_64TEX, GX_TEXMAP0);
-        batch_setup_tev(lightCount <= 2 ? (GX_LIGHT1 | GX_LIGHT2 | GX_LIGHT3 | GX_LIGHT4) :
-                                          (GX_LIGHT1 | GX_LIGHT2 | GX_LIGHT3 | GX_LIGHT4 |
-                                              GX_LIGHT5 | GX_LIGHT6 | GX_LIGHT7));
-        GXSetVtxDescv(vtxDescList);
+        const u32 lightMask00 = lightCount <= 2 ? (GX_LIGHT1 | GX_LIGHT2 | GX_LIGHT3 | GX_LIGHT4) :
+                                                  (GX_LIGHT1 | GX_LIGHT2 | GX_LIGHT3 | GX_LIGHT4 |
+                                                      GX_LIGHT5 | GX_LIGHT6 | GX_LIGHT7);
+#if defined(DUSK_TARGET_3DS)
+        if (oneChannel00) {
+            batch_setup_tev(lightMask00, reinterpret_cast<const GXColor*>(l_flowerColor));
+            GXSetVtxDescv(oneChannelDescList);
+        } else
+#endif
+        {
+            batch_setup_tev(lightMask00);
+            GXSetVtxDescv(vtxDescList);
+        }
         GXLoadPosMtxImm(identity, GX_PNMTX0);
         GXLoadNrmMtxImm(j3dSys.getViewMtx(), 0);
 
@@ -976,7 +1074,7 @@ void dFlower_packet_c::draw() {
                 Mtx interpMtx;
                 MtxP mtx = get_model_mtx(flower->m_modelMtx, interpMtx);
                 transform_positions(tpl, reinterpret_cast<Vec*>(l_flowerPos), mtx, xfPos);
-                flower_emit(tpl, xfPos, hana00_amb_color(flower, tevstr));
+                flower_emit(tpl, xfPos, hana00_amb_color(flower, tevstr), oneChannel00);
             }
             if (open) {
                 GXEnd();
@@ -1025,10 +1123,19 @@ void dFlower_packet_c::draw() {
         dKy_setLight_nowroom_grass(tevstr->room_no, 1.0f);
 
         GXLoadTexObj(&mTexObj_l_J_Ohana01_64128_0419TEX, GX_TEXMAP0);
-        batch_setup_tev(lightCount <= 2 ? (GX_LIGHT1 | GX_LIGHT2 | GX_LIGHT3 | GX_LIGHT4) :
-                                          (GX_LIGHT1 | GX_LIGHT2 | GX_LIGHT3 | GX_LIGHT4 |
-                                              GX_LIGHT5 | GX_LIGHT6 | GX_LIGHT7));
-        GXSetVtxDescv(vtxDescList);
+        const u32 lightMask01 = lightCount <= 2 ? (GX_LIGHT1 | GX_LIGHT2 | GX_LIGHT3 | GX_LIGHT4) :
+                                                  (GX_LIGHT1 | GX_LIGHT2 | GX_LIGHT3 | GX_LIGHT4 |
+                                                      GX_LIGHT5 | GX_LIGHT6 | GX_LIGHT7);
+#if defined(DUSK_TARGET_3DS)
+        if (oneChannel01) {
+            batch_setup_tev(lightMask01, mp_colors);
+            GXSetVtxDescv(oneChannelDescList);
+        } else
+#endif
+        {
+            batch_setup_tev(lightMask01);
+            GXSetVtxDescv(vtxDescList);
+        }
         GXLoadPosMtxImm(identity, GX_PNMTX0);
         GXLoadNrmMtxImm(j3dSys.getViewMtx(), 0);
 
@@ -1062,7 +1169,7 @@ void dFlower_packet_c::draw() {
                 Mtx interpMtx;
                 MtxP mtx = get_model_mtx(flower->m_modelMtx, interpMtx);
                 transform_positions(tpl, mp_pos, mtx, xfPos);
-                flower_emit(tpl, xfPos, hana01_amb_color(idx, tevstr));
+                flower_emit(tpl, xfPos, hana01_amb_color(idx, tevstr), oneChannel01);
             }
             if (open) {
                 GXEnd();
@@ -1078,6 +1185,9 @@ void dFlower_packet_c::draw() {
 void dFlower_packet_c::draw() {
 #if !defined(DUSK_TARGET_3DS)
     ZoneScoped;
+#else
+    // The l_flower tables are converted once at start and only read here.
+    const dusk::native_effects::StableArrays stableArrays;
 #endif
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
     j3dSys.reinitGX();

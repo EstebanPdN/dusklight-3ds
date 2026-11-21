@@ -21,6 +21,9 @@
 #if defined(DUSK_TARGET_3DS)
 #include "../../platforms/3ds/runtime/gx_copy_images.hpp"
 #endif
+#if defined(DUSK_TARGET_3DS) && !DEBUG
+#include "d_map_native_area_cache.inc"
+#endif
 
 #if DEBUG
 void dMap_HIO_c::genMessage(JORMContext* mctx) {
@@ -382,6 +385,9 @@ void renderingAmap_c::draw() {
                                   dMap_HIO_prm_res_dst_s::m_res->field_0x1a7, tmp);
     setAmapPaletteColor(0x2E, temp_r31, temp_r30, temp_r29, temp_r28);
 
+#if defined(DUSK_TARGET_3DS) && !DEBUG
+    beginAreaMapDraw(*this);
+#endif
     GX_DEBUG_GROUP(renderingDAmap_c::draw);
 }
 
@@ -421,6 +427,11 @@ int renderingAmap_c::getDispType() const {
 }
 
 void renderingAmap_c::beforeDrawPath() {
+#if defined(DUSK_TARGET_3DS) && !DEBUG
+    if (tryAreaBase(*this)) {
+        return;
+    }
+#endif
     static const GXColor roomSizeColor = {92, 0, 0, 0};
 
 #if DEBUG
@@ -510,7 +521,11 @@ void renderingAmap_c::rendering(dDrawPath_c::room_class const* i_room) {
 }
 
 void renderingAmap_c::drawPath() {
+#if defined(DUSK_TARGET_3DS) && !DEBUG
+    drawNativeAreaPaths(*this);
+#else
     dDrawPath_c::drawPath();
+#endif
 }
 
 void renderingAmap_c::rendering(dDrawPath_c::line_class const* i_line) {
@@ -1261,6 +1276,9 @@ void dMap_c::_remove() {
     if (mImage_p != NULL) {
 #if TARGET_PC
         GXDestroyCopyTex(mImage_p);
+#if defined(DUSK_TARGET_3DS) && !DEBUG
+        releaseAreaBase(*this);  // GXDestroyCopyTex completed all GPU readers.
+#endif
 #endif
         JKR_DELETE_ARRAY(mImage_p);
         mImage_p = NULL;

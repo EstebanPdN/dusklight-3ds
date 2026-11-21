@@ -15,6 +15,9 @@
 #endif
 
 struct J3DTransformInfo;
+#if defined(DUSK_TARGET_3DS)
+struct J3DNativeJointTracks;
+#endif
 
 struct JUTDataBlockHeader {
     /* 0x0 */ BE(u32) mType;
@@ -556,6 +559,9 @@ public:
         mAnmTable = 0;
     }
 
+#if defined(DUSK_TARGET_3DS)
+    void prepareNativeTracks();
+#endif
     void calcTransform(f32, u16, J3DTransformInfo*) const;
 
     virtual ~J3DAnmTransformKey() {}
@@ -565,7 +571,12 @@ public:
     }
 
     /* 0x20 */ int mDecShift;
-    /* 0x24 */ J3DAnmTransformKeyTable* mAnmTable;
+#if defined(DUSK_TARGET_3DS)
+    typedef J3DNativeJointTracks JointTable;
+#else
+    typedef J3DAnmTransformKeyTable JointTable;
+#endif
+    /* 0x24 */ JointTable* mAnmTable;
 };  // Size: 0x28
 
 /**

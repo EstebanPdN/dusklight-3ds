@@ -1,4 +1,5 @@
 #include "d/dolzel.h" // IWYU pragma: keep
+#include "d/d_tick_profile.h"
 
 #include "JSystem/J2DGraph/J2DAnimation.h"
 #include "JSystem/J2DGraph/J2DGrafContext.h"
@@ -16,8 +17,12 @@
 #include "../../platforms/3ds/runtime/gx_framebuffer.hpp"
 #include "../../platforms/3ds/runtime/gx_copy_images.hpp"
 #include "../../platforms/3ds/runtime/shadow_casters.hpp"
+#include "../../platforms/3ds/runtime/perf_features.hpp"
 #include "../../platforms/3ds/runtime/gx_profile.hpp"
+#include "../../platforms/3ds/runtime/gpu_sync.hpp"
+#include "d/actor/d_a_alink.h"
 #include "helpers/native_effects.h"
+#include "d/d_native_lod.h"
 #include "JSystem/JUtility/JUTTexture.h"
 #include <dolphin/gx/GXAurora.h>
 #endif
@@ -1758,10 +1763,16 @@ void dDlst_shadowControl_c::imageDraw(Mtx param_0) {
     int tile = 0;
     for (dDlst_shadowReal_c* caster = field_0x4; caster != NULL; caster = caster->getZsortNext()) {
         if (caster->isUse() && tile < SHADOW_REAL_LIMIT) {
+            // The tile spans 0.8 x the caster's size (set: an orthographic box
+            // of half-width 0.4 x size): its pixels per world unit choose the
+            // caster's level of detail (d_native_lod.h "shadowlevels").
+            const f32 size = l_nativeShadowCaster[caster - mReal].size;
+            const f32 unitPixels = size > 0.0f ? l_nativeShadowTile[tile].size / (0.8f * size) : 0.0f;
             caster->field_0x3 = tile++;
             const u8 slot = (caster - mReal) + 1;
             for (u8 i = 0; i < caster->mModelNum; i++) {
                 caster->mpModels[i]->mNativeShadowSlot = slot;
+                caster->mpModels[i]->mNativeShadowUnitPixels = unitPixels;
             }
         }
     }
@@ -1866,6 +1877,8 @@ void dDlst_shadowControl_c::draw(Mtx param_0) {
         Mtx inverse;
         MTXInverse(param_0, inverse);
         bool tagged = false;
+        const auto* link = dusk::native::gpuShadowProfileMode != dusk::native::GpuShadowProfileMode::off
+                               ? daAlink_getAlinkActorClass() : nullptr;
         for (dDlst_shadowReal_c* i = field_0x4; i != NULL; i = i->getZsortNext()) {
             if (!i->isUse() || i->field_0x3 >= SHADOW_REAL_LIMIT) {
                 continue;
@@ -1873,6 +1886,7 @@ void dDlst_shadowControl_c::draw(Mtx param_0) {
             tagged = true;
             for (u8 n = 0; n < i->mModelNum; n++) {
                 i->mpModels[n]->mNativeShadowSlot = 0;
+                i->mpModels[n]->mNativeShadowUnitPixels = 0.0f;
             }
             if (i->mShadowRealPoly.mCount == 0) {
                 continue;
@@ -1882,6 +1896,20 @@ void dDlst_shadowControl_c::draw(Mtx param_0) {
             Mtx toTile;
             cMtx_concat(i->mReceiverProjMtx, inverse, toTile);
             view.used = true;
+            if (link) {
+                bool body = false;
+                bool other = false;
+                for (u8 n = 0; n < i->mModelNum; ++n) {
+                    const J3DModel* model = i->mpModels[n];
+                    const bool isBody = link->isShadowProfileBody(model);
+                    body |= isBody;
+                    other |= !isBody && !link->isShadowProfileEquipment(model);
+                }
+                if (body) {
+                    view.owner = other ? dusk::native::ShadowCasterOwner::shared
+                                       : dusk::native::ShadowCasterOwner::link;
+                }
+            }
             for (int c = 0; c < 4; c++) {
                 view.st[0][c] = toTile[0][c];
                 view.st[1][c] = toTile[1][c];
@@ -2123,6 +2151,7 @@ void dDlst_shadowControl_c::draw(Mtx param_0) {
 
 int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, cXyz* param_4,
                                        f32 param_5, f32 param_6, dKy_tevstr_c* param_7) {
+    DUSK_TICK_PROFILE(tick_profile, "draw.shadowReal");
     static Mtx mtx_adj = {
         {0.5f, 0.0f, 0.0f, 0.5f},
         {0.0f, -0.5f, 0.0f, 0.5f},
@@ -2168,6 +2197,11 @@ int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, c
         return g_envHIO.mOther.mShadowDensity * strength * (1.0f / 255.0f);
     };
     bool nativeFar = false;
+    // Link, Epona and every caster during an event keep the Alpha 13 depth.
+    const bool lodOwnCaster = dNativeLod::drawOwner == (const void*)dComIfGp_getPlayer(0) ||
+                              dNativeLod::drawOwner == (const void*)dComIfGp_getHorseActor() ||
+                              dComIfGp_event_runCheck();
+    const f32 lodFade = (dNativeLod::config().shadowDepth - 1000.0f) * 0.001f;
 #endif
 
     f32 fVar1;
@@ -2194,9 +2228,26 @@ int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, c
         // The original fades a model shadow out between 1000 and 2000 units
         // from the camera. Past 40% of that fade the shadow is a few faint
         // pixels: a blob of the same darkness replaces the caster's image.
-        nativeFar = param_2 != 0 && fVar1 > 0.4f;
+        // Level of detail "shadow" (d_native_lod.h): the casters other than
+        // Link and Epona become blobs from the configured depth on (their
+        // image costs a replay of every draw of their models).
+        nativeFar = param_2 != 0 &&
+                    fVar1 > (lodOwnCaster ? (lodFade > 0.4f ? lodFade : 0.4f) : lodFade);
+        dNativeLod::census.shadowBlobs += nativeFar && !lodOwnCaster;
 #endif
     }
+#if defined(DUSK_TARGET_3DS)
+    // Rule "shadowpx" (switch `shadow`): a caster other than Link and Epona
+    // whose shadow covers few pixels is a blob nearer than the shadow depth
+    // too (its tile image would be a few pixels as well).
+    if (!nativeFar && param_2 != 0 && !lodOwnCaster &&
+        dusk::native::features::on(dusk::native::features::Id::shadowLod) &&
+        dNativeLod::shadowTooSmall(param_5, -dVar17, dNativeLod::unitPixels, dNativeLod::config().shadowPixels))
+    {
+        nativeFar = true;
+        dNativeLod::census.shadowBlobs++;
+    }
+#endif
     if (param_2 == 0) {
         dVar17 = FLT_MAX;
     }
@@ -2259,6 +2310,7 @@ int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, c
     }
 #if defined(DUSK_TARGET_3DS)
     l_nativeShadowCaster[pdVar12 - mReal] = {*param_4, param_5, param_6};
+    dNativeLod::census.shadowKept += !lodOwnCaster;
 #endif
     mRealNum++;
     if (pdVar10 == NULL) {
@@ -2299,6 +2351,7 @@ bool dDlst_shadowControl_c::addReal(u32 i_key, J3DModel* param_1) {
 
 int dDlst_shadowControl_c::setSimple(cXyz* param_0, f32 param_1, f32 param_2, cXyz* param_3,
                                      s16 param_4, f32 param_5, TGXTexObj* param_6) {
+    DUSK_TICK_PROFILE(tick_profile, "draw.shadowSimple");
 #if defined(DUSK_TARGET_3DS)
     if (dusk::native_effects::shadows == 0) {
         return 0;

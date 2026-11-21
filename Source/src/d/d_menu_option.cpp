@@ -576,7 +576,7 @@ skip:
     }
 
     (this->*process[OPTION_PROC(field_0x3ef)])();
-    IF_NOT_DUSK(mpSelectScreen->animation());
+    DUSK_ORIGINAL_ONLY(mpSelectScreen->animation());
     if (oldValue != field_0x3ef) {
         (this->*init[OPTION_PROC(field_0x3ef)])();
     }
@@ -1044,13 +1044,13 @@ void dMenu_Option_c::change_move() {
 #endif
     switch (OPTION_PROC(field_0x3f5)) {
     case PROC_ATTEN_e:
-        IF_NOT_DUSK(index = field_0x3f5);
+        DUSK_ORIGINAL_ONLY(index = field_0x3f5);
         if (field_0x3da == 0) {
             setAttenString();
         }
         break;
     case PROC_RUBY_e:
-        IF_NOT_DUSK(index = field_0x3f5);
+        DUSK_ORIGINAL_ONLY(index = field_0x3f5);
         if (field_0x3da == 0) {
             IF_DUSK_BLOCK(dusk::version::isRegionJpn())
             setRubyString();
@@ -1058,13 +1058,13 @@ void dMenu_Option_c::change_move() {
         }
         break;
     case PROC_VIB_e:
-        IF_NOT_DUSK(index = field_0x3f5);
+        DUSK_ORIGINAL_ONLY(index = field_0x3f5);
         if (field_0x3da == 0) {
             setVibString();
         }
         break;
     case PROC_SOUND_e:
-        IF_NOT_DUSK(index = field_0x3f5);
+        DUSK_ORIGINAL_ONLY(index = field_0x3f5);
         if (field_0x3da == 0) {
             setSoundString();
         }
@@ -1137,7 +1137,7 @@ void dMenu_Option_c::confirm_open_move() {
         field_0x3ef = OPTION_SELECT(PROC_CONFIRM_MOVE_MOVE_e);
     }
     mpWarning->_move();
-    IF_NOT_DUSK(setAnimation());
+    DUSK_ORIGINAL_ONLY(setAnimation());
 }
 
 void dMenu_Option_c::confirm_move_init() {
@@ -1213,7 +1213,7 @@ void dMenu_Option_c::confirm_move_move() {
         }
     }
     mpWarning->_move();
-    IF_NOT_DUSK(setAnimation());
+    DUSK_ORIGINAL_ONLY(setAnimation());
 }
 
 void dMenu_Option_c::confirm_select_init() {
@@ -1252,7 +1252,7 @@ void dMenu_Option_c::confirm_select_move() {
         field_0x3ef = OPTION_SELECT(PROC_CONFIRM_MOVE_MOVE_e);
     }
     mpWarning->_move();
-    IF_NOT_DUSK(setAnimation());
+    DUSK_ORIGINAL_ONLY(setAnimation());
 }
 
 void dMenu_Option_c::confirm_close_init() {
@@ -1312,7 +1312,7 @@ void dMenu_Option_c::confirm_close_move() {
         }
     }
     mpWarning->_move();
-    IF_NOT_DUSK(setAnimation());
+    DUSK_ORIGINAL_ONLY(setAnimation());
 }
 
 void dMenu_Option_c::tv_open1_move() {

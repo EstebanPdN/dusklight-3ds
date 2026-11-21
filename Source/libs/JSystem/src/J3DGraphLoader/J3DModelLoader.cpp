@@ -17,6 +17,10 @@
 #include "SSystem/SComponent/c_xyz.h"
 #include <utility>
 
+#if defined(DUSK_TARGET_3DS)
+#include <cstring>
+#endif
+
 #if TARGET_PC
 static void AssignMaterialNames(const J3DModelLoader& loader) {
     auto table = loader.mpMaterialTable;
@@ -751,6 +755,18 @@ void J3DModelLoader::readTexture(J3DTextureBlock const* i_block) {
     } else {
         mpMaterialTable->mTextureName = NULL;
     }
+#if defined(DUSK_TARGET_3DS)
+    // Mip 1 of Midna's eyeball is solid yellow. Clamp before J3D initializes
+    // the GX texture objects and records the sampler in shared material lists.
+    if (const auto* names = mpMaterialTable->mTextureName) {
+        for (u16 i = 0; i < texture_num; ++i) {
+            const char* name = names->getName(i);
+            if (name != nullptr && std::strcmp(name, "midona_eyeball") == 0) {
+                texture_res[i].maxLOD = 0;
+            }
+        }
+    }
+#endif
     mpMaterialTable->mTexture = JKR_NEW J3DTexture(texture_num, texture_res);
     J3D_ASSERT_ALLOCMEM(1084, mpMaterialTable->mTexture);
 }

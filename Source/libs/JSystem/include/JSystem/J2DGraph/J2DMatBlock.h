@@ -1029,6 +1029,10 @@ public:
     void getTexMtx(u32, J2DTexMtx&);
 
     u32 getTexGenNum() const { return mTexGenNum; }
+#if defined(DUSK_TARGET_3DS)
+    // Retained 2D screens: the matrix object itself, for the fingerprint.
+    const J2DTexMtx* nativeTexMtx(u32 i) const { return i < 8 ? mTexMtx[i] : NULL; }
+#endif
     void setTexGenNum(u32 num) { mTexGenNum = num; }
     void setTexCoord(u32 i, J2DTexCoord coord) {
         J3D_PANIC(101, i < 8, "Error : range over.");

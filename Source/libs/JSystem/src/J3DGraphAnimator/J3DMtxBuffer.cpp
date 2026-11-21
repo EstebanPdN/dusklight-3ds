@@ -246,7 +246,135 @@ s32 J3DMtxBuffer::createBumpMtxArray(J3DModelData* i_modelData, u32 mtxNum) {
 
 static f32 J3DUnit01[] = { 0.0f, 1.0f };
 
+#if defined(DUSK_TARGET_3DS)
+#include "d/d_native_logic.h"
+#include <cstring>
+
+// Native New 3DS (logic.txt envelope): the skin matrices from each joint's
+// world x inverse-bind product made once per calculation. The original makes
+// that product (a byte-order conversion and a 3x4 concatenation) again for
+// every envelope that uses the joint: Link's 103 envelopes hold 2-4 joints
+// each from a few dozen joints. The weighted sums run in the original order
+// on the same products, so every matrix is bit-identical (VFPv2 has no fused
+// multiply-add: a*b+c rounds the product as the separate operations do).
+namespace {
+enum { kEnvelopeJoints = 512, kEnvelopeVerify = 256 };
+Mtx l_envelopeProduct[kEnvelopeJoints];
+u32 l_envelopeStamp[kEnvelopeJoints];
+u32 l_envelopeGeneration;
+}  // namespace
+
+static void nativeEnvelopeShared(J3DMtxBuffer* buffer) {
+    J3DJointTree* tree = buffer->mJointTree;
+    if (++l_envelopeGeneration == 0) {
+        std::memset(l_envelopeStamp, 0, sizeof(l_envelopeStamp));
+        l_envelopeGeneration = 1;
+    }
+    const u32 generation = l_envelopeGeneration;
+    const int max = tree->getWEvlpMtxNum();
+    const BE(u16)* indices = tree->getWEvlpMixMtxIndex();
+    const BE(f32)* weights = tree->getWEvlpMixWeight();
+    Mtx* anmMtx = buffer->mpAnmMtx;
+    const u8* scaleFlags = buffer->mpScaleFlagArr;
+    unsigned entries = 0, products = 0;
+    for (int i = 0; i < max; i++) {
+        MtxP weightAnmMtx = buffer->mpWeightEvlpMtx[i];
+        f32 m00 = 0.0f, m01 = 0.0f, m02 = 0.0f, m03 = 0.0f;
+        f32 m10 = 0.0f, m11 = 0.0f, m12 = 0.0f, m13 = 0.0f;
+        f32 m20 = 0.0f, m21 = 0.0f, m22 = 0.0f, m23 = 0.0f;
+        u8 scale = 1;
+        const int mixNum = tree->getWEvlpMixMtxNum(i);
+        int j = 0;
+        // do/while as the original: an envelope always reads one entry.
+        do {
+            const u16 idx = *indices++;
+            Mtx local;
+            MtxP mtx;
+            if (idx < kEnvelopeJoints) {
+                mtx = l_envelopeProduct[idx];
+                if (l_envelopeStamp[idx] != generation) {
+                    l_envelopeStamp[idx] = generation;
+                    Mtx invMtx;
+                    tree->getInvJointMtx(idx).to_host(invMtx);
+                    MTXConcat(anmMtx[idx], invMtx, mtx);
+                    products++;
+                }
+            } else {
+                Mtx invMtx;
+                tree->getInvJointMtx(idx).to_host(invMtx);
+                MTXConcat(anmMtx[idx], invMtx, local);
+                mtx = local;
+                products++;
+            }
+            const f32 weight = *weights++;
+            m00 += mtx[0][0] * weight;
+            m01 += mtx[0][1] * weight;
+            m02 += mtx[0][2] * weight;
+            m03 += mtx[0][3] * weight;
+            m10 += mtx[1][0] * weight;
+            m11 += mtx[1][1] * weight;
+            m12 += mtx[1][2] * weight;
+            m13 += mtx[1][3] * weight;
+            m20 += mtx[2][0] * weight;
+            m21 += mtx[2][1] * weight;
+            m22 += mtx[2][2] * weight;
+            m23 += mtx[2][3] * weight;
+            scale &= scaleFlags[idx];
+            entries++;
+        } while (++j < mixNum);
+        weightAnmMtx[0][0] = m00;
+        weightAnmMtx[0][1] = m01;
+        weightAnmMtx[0][2] = m02;
+        weightAnmMtx[0][3] = m03;
+        weightAnmMtx[1][0] = m10;
+        weightAnmMtx[1][1] = m11;
+        weightAnmMtx[1][2] = m12;
+        weightAnmMtx[1][3] = m13;
+        weightAnmMtx[2][0] = m20;
+        weightAnmMtx[2][1] = m21;
+        weightAnmMtx[2][2] = m22;
+        weightAnmMtx[2][3] = m23;
+        buffer->mpEvlpScaleFlagArr[i] = scale;
+    }
+    dNativeLogic::Census& census = dNativeLogic::census;
+    census.envelopeModels++;
+    census.envelopeEntries += entries;
+    census.envelopeProducts += products;
+}
+
+static Mtx l_envelopeVerifyMtx[kEnvelopeVerify];
+static u8 l_envelopeVerifyScale[kEnvelopeVerify];
+
 void J3DMtxBuffer::calcWeightEnvelopeMtx() {
+    const unsigned mode = dNativeLogic::config().envelope;
+    if (mode == dNativeLogic::Off) {
+        calcWeightEnvelopeMtxOriginal();
+        return;
+    }
+    nativeEnvelopeShared(this);
+    const int count = mJointTree->getWEvlpMtxNum();
+    if (mode != dNativeLogic::Verify || count > kEnvelopeVerify) {
+        return;
+    }
+    // Verify: keep the original's matrices, count envelopes that differ.
+    std::memcpy(l_envelopeVerifyMtx, mpWeightEvlpMtx, count * sizeof(Mtx));
+    std::memcpy(l_envelopeVerifyScale, mpEvlpScaleFlagArr, count);
+    calcWeightEnvelopeMtxOriginal();
+    dNativeLogic::Census& census = dNativeLogic::census;
+    for (int i = 0; i < count; i++) {
+        census.envelopeChecks++;
+        if (std::memcmp(l_envelopeVerifyMtx[i], mpWeightEvlpMtx[i], sizeof(Mtx)) != 0 ||
+            l_envelopeVerifyScale[i] != mpEvlpScaleFlagArr[i])
+        {
+            census.envelopeMismatches++;
+        }
+    }
+}
+
+void J3DMtxBuffer::calcWeightEnvelopeMtxOriginal() {
+#else
+void J3DMtxBuffer::calcWeightEnvelopeMtx() {
+#endif
     __REGISTER MtxP weightAnmMtx;
     __REGISTER Mtx* worldMtx;
     __REGISTER Mtx invMtx;

@@ -44,6 +44,10 @@ public:
     virtual ~dPa_simpleEcallBack() {}
     virtual void executeAfter(JPABaseEmitter*);
     virtual void draw(JPABaseEmitter*);
+#if defined(DUSK_TARGET_3DS)
+    // draw() tests the group and does nothing either way; no drawAfter().
+    virtual bool drawsNothing() const { return true; }
+#endif
 
     void removeEmitter() { mEmitter = NULL; }
     u16 getID() { return mID; }
@@ -162,6 +166,10 @@ public:
     virtual ~dPa_followEcallBack() {}
     virtual void execute(JPABaseEmitter*);
     virtual void draw(JPABaseEmitter*);
+#if defined(DUSK_TARGET_3DS)
+    // draw() tests the group and does nothing either way; no drawAfter().
+    virtual bool drawsNothing() const { return true; }
+#endif
     virtual void setup(JPABaseEmitter*, cXyz const*, csXyz const*, s8);
     virtual void cleanup() { end(); }
     virtual void end();

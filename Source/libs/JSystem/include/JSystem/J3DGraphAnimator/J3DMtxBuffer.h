@@ -22,6 +22,9 @@ public:
     s32 createDoubleDrawMtx(J3DModelData*, u32);
     s32 createBumpMtxArray(J3DModelData*, u32);
     void calcWeightEnvelopeMtx();
+#if defined(DUSK_TARGET_3DS)
+    void calcWeightEnvelopeMtxOriginal();  // logic.txt envelope=0 and verify
+#endif
     void calcDrawMtx(u32, Vec const&, f32 const (&)[3][4]);
     void calcNrmMtx();
     void calcBBoardMtx();

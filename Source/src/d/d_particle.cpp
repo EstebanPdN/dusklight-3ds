@@ -26,6 +26,8 @@
 #include "SSystem/SComponent/c_math.h"
 #if defined(DUSK_TARGET_3DS)
 #include "helpers/native_effects.h"
+#include "../../platforms/3ds/runtime/texture_resources.hpp"
+void JPANativeParticleLogReset(); // JPAResource.cpp
 #endif
 
 #if TARGET_PC
@@ -1298,6 +1300,32 @@ bool dPa_control_c::removeRoomScene(bool param_0) {
     }
 
     mEmitterMng->clearResourceManager(true);
+#if defined(DUSK_TARGET_3DS)
+    // Native: destroying the heap runs no destructors, so the scene's
+    // JPATexture objects (allocated in it) keep their retained images. The
+    // next scene's particle textures, loaded at the same addresses, then
+    // conflict with them and draw with the previously bound image (Alpha 6:
+    // 1,578 conflicts in F_SP110 room 1 after F_SP111). Release every
+    // retention owned inside the heap before it goes.
+    {
+        const std::size_t owners = dusk::native::releaseTextureResourcesInRange(
+            mSceneHeap->getStartAddr(), mSceneHeap->getEndAddr());
+        // One line per scene change; a 94-zone tour reached that stage at the
+        // 72nd, so the cap leaves room for long tours. conflicts is the whole
+        // session's count of refused retains: it must stay 0 across scenes.
+        static unsigned reports;
+        if (reports < 256 && ++reports) {
+            const dusk::native::TextureResourceStatistics t = dusk::native::textureResourceStatistics();
+            OSReport("Native particle scene heap #%u destroyed: %u texture owners released (%u textures) heap=%p-%p; "
+                     "retention conflicts=%lu images=%u owners=%u\n",
+                     reports, unsigned(owners), mSceneResMng != NULL ? unsigned(mSceneResMng->texRegNum) : 0u,
+                     mSceneHeap->getStartAddr(), mSceneHeap->getEndAddr(), t.conflicts, t.images, t.owners);
+        }
+        // The per-resource particle lines (JPAResource.cpp) start again for
+        // the next scene.
+        JPANativeParticleLogReset();
+    }
+#endif
     mDoExt_destroySolidHeap(mSceneHeap);
     mSceneHeap = NULL;
     mSceneResMng = NULL;

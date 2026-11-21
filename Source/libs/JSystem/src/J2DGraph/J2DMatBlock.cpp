@@ -8,6 +8,9 @@
 #include <gx.h>
 
 #include "JSystem/JKernel/JKRHeap.h"
+#if defined(DUSK_TARGET_3DS)
+#include "../../../../platforms/3ds/runtime/gx_stream.hpp"
+#endif
 
 void J2DColorBlock::initialize() {
     for (int i = 0; i < 2; i++) {
@@ -43,6 +46,27 @@ void J2DTexGenBlock::initialize() {
     }
 }
 
+#if defined(DUSK_TARGET_3DS)
+namespace {
+// Native PICA engine: the J2D material memo (J2DMaterial.cpp) keys a
+// material on its own bytes, but a texture matrix lives in its own J2DTexMtx
+// object. While a recording runs, each load first names that object and the
+// matrix it sends (the matrix follows the info, as the size check proves),
+// so a replay can require the same object bytes instead of refusing the
+// material.
+void nativeTexMtxSource(const J2DTexMtx& texMtx) {
+    static_assert(sizeof(J2DTexMtx) == sizeof(J2DTexMtxInfo) + sizeof(Mtx), "J2DTexMtx: info, then the matrix");
+    if (!dusk::native::gx::materialMemoRecording()) {
+        return;
+    }
+    if (dusk::native::gx::CommandStream* stream = dusk::native::gx::commandStream()) {
+        dusk::native::gx::materialMemoSource(stream->registers(), &texMtx, sizeof(texMtx),
+                                             reinterpret_cast<const u8*>(&texMtx) + sizeof(J2DTexMtxInfo));
+    }
+}
+}  // namespace
+#endif
+
 void J2DTexGenBlock::setGX() {
     GXSetNumTexGens(mTexGenNum);
     for (int i = 0; i < mTexGenNum; i++) {
@@ -51,6 +75,9 @@ void J2DTexGenBlock::setGX() {
     
     for (u8 i = 0; i < 8; i++) {
         if (mTexMtx[i]) {
+#if defined(DUSK_TARGET_3DS)
+            nativeTexMtxSource(*mTexMtx[i]);
+#endif
             mTexMtx[i]->load(i);
         }
     }
