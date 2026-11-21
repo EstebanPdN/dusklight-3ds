@@ -31,11 +31,41 @@ Windows compatibility is not claimed by this guide.
 This is a developer data-preparation route. It does not install an application
 and no ready-to-install package accompanies this source publication.
 
+### Desktop converter
+
+[Tools/converter](../Tools/converter/README.md) holds the source of Forge 3DS
+Converter, a desktop app (Electron, with a packaged Python) for macOS, Windows
+and Linux. For DuskLight it runs the same `twilight_pack.py` on a dropped or
+chosen disc image and saves `zelda.twilight` beside the input; the same app has
+screens for two other 3DS ports. It runs offline. Build it locally with
+`npm ci` and `npm run build` in that folder (see its README); no package of it
+is published.
+
+### Optional levels of detail
+
+`zelda.lod` holds reduced index lists for the models of the disc, used by the
+`lod` and `shadow` improvements (far models and shadow casters drawn with
+fewer triangles). It is made on a Mac from your own `zelda.twilight`:
+
+```sh
+python3 -I Tools/3ds/model_lod.py --disc /path/to/private/zelda.twilight \
+  --out /path/to/private/lod
+```
+
+The tool builds its converter with the host compiler, reads the bundle only,
+never overwrites a file and writes `zelda.lod` (about 14.5 MiB for the whole
+disc), `report.json` and `shapes.txt`. `--test` adds the proof that it cuts
+every display list exactly as the runtime does. Copy `zelda.lod` next to
+`zelda.twilight`. Without it, or with a store made for another runtime
+(it is checked model by model), the game draws every model as before. The file
+is derived from game data and must remain private.
+
 ## SD paths
 
 | Purpose | Source-defined path |
 | --- | --- |
 | Native game data | `sdmc:/3ds/DuskLight/zelda.twilight` |
+| Optional levels of detail | `sdmc:/3ds/DuskLight/zelda.lod` |
 | Save container | `sdmc:/3ds/dusklight/saves/native-card0.bin` |
 | Pending save write | `sdmc:/3ds/dusklight/saves/native-card0.pending` |
 

@@ -68,7 +68,8 @@ This repository publishes the current source. **There is no GitHub release,
 prerelease, installation QR or supported end-user download.** Build instructions
 are available for developers in [Building](docs/BUILDING.md). Development builds
 are tested privately on a New 3DS; dated results are in
-[Verification status](docs/STATUS.md).
+[Verification status](docs/STATUS.md). The newest source state is Alpha 21
+(2026-11-20); its figures so far come from the emulator, not a console.
 
 The port targets **New Nintendo 3DS, New Nintendo 3DS XL and New Nintendo 2DS XL**.
 Old Nintendo 3DS and Old Nintendo 2DS are outside the current target.
@@ -76,7 +77,9 @@ Old Nintendo 3DS and Old Nintendo 2DS are outside the current target.
 A user-supplied **GameCube USA or European/PAL revision 0** game image
 (`GZ2E01` or `GZ2P01`) is required for runtime data preparation. No disc image,
 extracted game data, save or private memory capture is included.
-See [Game data](docs/GAME_DATA.md).
+See [Game data](docs/GAME_DATA.md); the source of a desktop converter that
+prepares `zelda.twilight` from your own disc image is in
+[Tools/converter](Tools/converter/README.md).
 
 ## Documentation
 
