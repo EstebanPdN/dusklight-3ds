@@ -2,8 +2,10 @@
 """List original player start points per stage room from the private disc.
 
 Reads the owner's ISO read-only and saves only stage/room names, start point
-numbers and positions; no archive payload is written. Used to choose valid
-boot-stage.txt entries for the multi-location Azahar test matrix.
+numbers, positions, start modes and arrival-event numbers (with the raw
+parameter word); no archive payload is written. Used to choose valid
+boot-stage.txt entries for the multi-location Azahar test matrix and, through
+generate_zone_table.py, the start points of the automatic test.
 """
 import argparse
 import json
@@ -99,10 +101,15 @@ def player_points(dzr):
             name = dzr[at:at + 8].split(b'\0')[0].decode('ascii', 'replace')
             x, y, z = struct.unpack_from('>fff', dzr, at + 12)
             angle_z = struct.unpack_from('>h', dzr, at + 28)[0]
+            params = be32(dzr, at + 8)
             # Player start mode (bits 12-16 of the actor parameters): 2 starts on the horse.
-            mode = (be32(dzr, at + 8) >> 12) & 0x1f
-            points.append({'point': angle_z & 0xff, 'mode': mode, 'name': name,
-                           'position': [round(x, 1), round(y, 1), round(z, 1)]})
+            mode = (params >> 12) & 0x1f
+            # Room map event started on arrival (top byte, 0xff = none): a
+            # cutscene or a camera event whose exit can take Link elsewhere
+            # (Alpha 6: the Fanadi vision exits of zones 35 and 74).
+            event = params >> 24
+            points.append({'point': angle_z & 0xff, 'mode': mode, 'event': event, 'params': f'{params:08x}',
+                           'name': name, 'position': [round(x, 1), round(y, 1), round(z, 1)]})
     return points
 
 

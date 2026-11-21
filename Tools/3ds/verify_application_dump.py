@@ -273,7 +273,7 @@ def inspect_packed(path, extract=None):
     # Since Alpha 2: recent frame times and the small shared/kernel pages
     # (page-<address>) ride along as extra blobs; Alpha 2 dumps may also hold
     # PICA hardware registers. Since Alpha 3: the last GPU jobs (gpu-jobs).
-    extras = {'pica-registers', 'pica-uniforms', 'gpu-hw-registers', 'frames-csv', 'gpu-jobs'}
+    extras = {'pica-registers', 'pica-uniforms', 'gpu-hw-registers', 'frames-csv', 'gpu-jobs', 'gpu-job-owners'}
     def known(name):
         if name in sizes or name in extras: return True
         return (len(name) == 13 and name.startswith('page-')
