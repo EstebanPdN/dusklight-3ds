@@ -24,38 +24,59 @@ static constexpr u16 Coefficient1[] = {
 
 constexpr int AdpcmFrameSize = 9;
 
-static s16 Clamp16(s32 value) {
-    if (value > 0x7FFF) return 0x7FFF;
-    if (value < -0x8000) return -0x8000;
+// One decoded sample: the nibble scaled by 2^(e+11) plus the two-tap
+// prediction, >> 11, saturated to 16 bits (ARMv6: SSAT with the shift).
+static inline s32 AdpcmSample(s32 nibble, int shift, s32 coef0, s32 coef1, s32 hist1, s32 hist2) {
+    const s32 sum = (nibble << shift) + coef0 * hist1 + coef1 * hist2;
+#if defined(__arm__) && !defined(__thumb__) && defined(__ARM_ARCH) && __ARM_ARCH >= 6
+    s32 value;
+    __asm__("ssat %0, #16, %1, asr #11" : "=r"(value) : "r"(sum));
     return value;
+#else
+    const s32 value = sum >> 11;
+    return value < -0x8000 ? -0x8000 : value > 0x7FFF ? 0x7FFF : value;
+#endif
 }
 
+// The same samples as the original loop (one sample at a time through the
+// caller's history references, a branch per nibble): the histories stay in
+// registers and each byte gives its two nibbles, high first.
 void dusk::audio::Adpcm4ToPcm16(const u8* adpcm, size_t adpcmLength, s16* pcm, size_t pcmLength, s16& hist2, s16& hist1) {
     assert (adpcmLength % AdpcmFrameSize == 0 && "ADPCM must be divisible by frame size");
 
-    auto endPtr = pcm + pcmLength;
+    s32 h1 = hist1, h2 = hist2;
+    size_t left = pcmLength;
 
-    for (int i = 0; i < adpcmLength; i += AdpcmFrameSize) {
-        u8 header = adpcm[i];
+    for (size_t i = 0; i < adpcmLength && left != 0; i += AdpcmFrameSize) {
+        const u8 header = adpcm[i];
+        const int shift = (header >> 4) + 11;
+        const u8 coefIndex = header & 0xF;
+        const s32 coef0 = (s16)Coefficient0[coefIndex];
+        const s32 coef1 = (s16)Coefficient1[coefIndex];
+        const u8* bytes = adpcm + i + 1;
 
-        s32 scale = 1 << (header >> 4);
-        u8 coefIndex = header & 0xF;
-
-        s16 coef0 = (s16)Coefficient0[coefIndex];
-        s16 coef1 = (s16)Coefficient1[coefIndex];
-
-        for (int sampleIdx = 0; sampleIdx < 16; sampleIdx++) {
-            u8 adpcmValue = adpcm[i + 1 + sampleIdx / 2];
-            u8 unsignedNibble = sampleIdx % 2 == 0 ? adpcmValue >> 4 : adpcmValue & 0xF;
-            s8 signedNibble = ((s8)(unsignedNibble << 4)) >> 4;
-            s16 sample = Clamp16((((signedNibble * scale) << 11) + (coef0 * hist1 + coef1 * hist2)) >> 11);
-
-            hist2 = hist1;
-            hist1 = sample;
-
-            *pcm++ = sample;
-            if (endPtr == pcm)
-                return;
+        const size_t count = left < 16 ? left : 16;
+        left -= count;
+        const size_t pairs = count / 2;
+        for (size_t b = 0; b < pairs; b++) {
+            const u32 byte = bytes[b];
+            const s32 first = AdpcmSample(static_cast<s32>(byte << 24) >> 28, shift, coef0, coef1, h1, h2);
+            const s32 second = AdpcmSample(static_cast<s32>(byte << 28) >> 28, shift, coef0, coef1, first, h1);
+            pcm[0] = static_cast<s16>(first);
+            pcm[1] = static_cast<s16>(second);
+            pcm += 2;
+            h2 = first;
+            h1 = second;
+        }
+        if (count & 1) {
+            const u32 byte = bytes[pairs];
+            const s32 sample = AdpcmSample(static_cast<s32>(byte << 24) >> 28, shift, coef0, coef1, h1, h2);
+            *pcm++ = static_cast<s16>(sample);
+            h2 = h1;
+            h1 = sample;
         }
     }
+
+    hist2 = static_cast<s16>(h2);
+    hist1 = static_cast<s16>(h1);
 }

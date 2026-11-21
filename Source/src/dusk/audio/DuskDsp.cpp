@@ -25,6 +25,7 @@
 #include <span>
 #include <numbers>
 #include <optional>
+#include <cstddef>
 #include <cstring>
 
 using namespace dusk::audio;
@@ -54,6 +55,7 @@ static void CloseChannelDumpFiles() {
     }
 }
 
+int dusk::audio::RenderRate = SampleRate;
 f32 dusk::audio::MasterVolume = 1.0f;
 f32 dusk::audio::PrevMasterVolume = 1.0f;
 bool dusk::audio::EnableReverb = true;
@@ -263,6 +265,8 @@ static void RenderOscChannel(
         break;
     }
     default:
+        // Silence: the caller hands in an uncleared buffer.
+        buf.fill(0.0f);
 #if defined(DUSK_TARGET_3DS)
         OSReport("RenderOscChannel: unimplemented oscillator type %u\n",channel.mBytesPerBlock);
 #else
@@ -343,6 +347,22 @@ static int ReadChannelSamplesChunk(
 
     u32 renderSamples = std::min(channel.mSamplesLeft, static_cast<u32>(desiredSamples));
 
+    if (skipSamples == 0 && renderSamples <= static_cast<u32>(outBufSize)) {
+        // The usual case: no samples to drop and room for all of them. The
+        // decoders write every sample they are asked for, so decoding in
+        // place gives the bytes the cleared scratch buffer and copy gave.
+        ReadSampleData(
+            channel,
+            aux,
+            aramBase + dataPosition,
+            ConvertSamplesToDataLength(channel, renderSamples),
+            outBuf,
+            renderSamples);
+        channel.mSamplesLeft -= renderSamples;
+        channel.mSamplePosition += renderSamples;
+        return static_cast<int>(renderSamples);
+    }
+
     int renderSize = static_cast<int>(sizeof(s16) * renderSamples);
     auto renderData = static_cast<s16*>(alloca(renderSize));
     memset(renderData, 0, renderSize);
@@ -404,20 +424,25 @@ static void FillDecodeBuf(JASDsp::TChannel& channel, ChannelAuxData& aux, int ne
 }
 
 /**
- * Adapts IIR biquad filter coeffs for fs = 32kHz -> 48kHz, Hz-preserving.
+ * Adapts IIR biquad filter coeffs for fs = 32kHz -> RenderRate, Hz-preserving.
+ * At 32 kHz (the 3DS) the GameCube's own coefficients are used as they are.
  */
 static BiquadCoeffs RemapBiquad32to48(float b1, float b2, float a1, float a2) {
     using cplx = std::complex<f64>;
 
+    if (RenderRate == 32000) {
+        return {b1, b2, a1, a2};
+    }
+
     constexpr auto kOldRate = 32000.0;
-    constexpr auto kNewRate = f64(SampleRate);
-    constexpr auto kGamma = kOldRate / kNewRate;
+    const auto kNewRate = f64(RenderRate);
+    const auto kGamma = kOldRate / kNewRate;
 
     if (b1 == 0 && b2 == 0 && a1 == 0 && a2 == 0) {
         return {0, 0, 0, 0};
     }
 
-    auto mapPoint = [](cplx z) {
+    auto mapPoint = [kGamma](cplx z) {
         if (std::abs(z.imag()) < 1e-9 * std::max(std::abs(z.real()), 1.0)) {
             f64 r = z.real();
             f64 sign = (r >= 0.0) ? 1.0 : -1.0;
@@ -494,15 +519,23 @@ static void RenderChannel(
     s16 next = aux.decodeBufCount > 0 ? aux.decodeBuf[0] : prev;
     int srcIdx = 0;
 
-    // linear resampling and f32 conversion
+    // linear resampling and f32 conversion. The two source samples are
+    // converted when the source position moves, not for every output sample
+    // (the same values: an s16 and a difference of two are exact in f32).
+    f32 prevF = static_cast<f32>(prev);
+    f32 diffF = static_cast<f32>(next - prev);
     for (int i = 0; i < DSP_SUBFRAME_SIZE; i++) {
-        buf[i] = (prev + pos * (next - prev)) / 32768.0f;
+        buf[i] = (prevF + pos * diffF) / 32768.0f;
         pos += step;
-        while (pos >= 1.0f) {
-            pos -= 1.0f;
-            prev = next;
-            srcIdx++;
-            next = srcIdx < aux.decodeBufCount ? aux.decodeBuf[srcIdx] : prev;
+        if (pos >= 1.0f) {
+            do {
+                pos -= 1.0f;
+                prev = next;
+                srcIdx++;
+                next = srcIdx < aux.decodeBufCount ? aux.decodeBuf[srcIdx] : prev;
+            } while (pos >= 1.0f);
+            prevF = static_cast<f32>(prev);
+            diffF = static_cast<f32>(next - prev);
         }
     }
 
@@ -576,6 +609,33 @@ static void ApplyVolume(
         const f32 step = (endVolume - startVolume) / static_cast<f32>(src.size());
         for (int i = 0; i < (int)src.size(); i++) {
             dst[i] = src[i] * (startVolume + i * step);
+        }
+    }
+}
+
+// The same products added to dst instead of stored: a voice mixed straight
+// into the output (plain stereo, DspRender). Each product is rounded to f32
+// before the addition, as when it went through a buffer of its own.
+static void ApplyVolumeAdd(
+    std::span<f32> dst,
+    std::span<const f32> src,
+    const f32 startVolume,
+    const f32 endVolume) {
+    assert(dst.size() >= src.size());
+
+    if (startVolume == endVolume) {
+        for (int i = 0; i < (int)src.size(); i++) {
+            const f32 scaled = src[i] * startVolume;
+            dst[i] += scaled;
+        }
+    } else {
+        const f32 step = (endVolume - startVolume) / static_cast<f32>(src.size());
+        // The sample number as f32 (exact), without a conversion per sample.
+        f32 number = 0.0f;
+        for (int i = 0; i < (int)src.size(); i++) {
+            const f32 scaled = src[i] * (startVolume + number * step);
+            dst[i] += scaled;
+            number += 1.0f;
         }
     }
 }
@@ -695,14 +755,8 @@ static void CalcSurroundChannelVolumes(
     }
 }
 
-static void ApplyPanning(
-    const JASDsp::TChannel& voice,
-    ChannelAuxData& aux,
-    const DspSubframe& input,
-    OutputSubframe& output)
-{
-    VolumeArray volumes = {};
-
+// The start and target volume of every output channel for this subframe.
+static void CalcVoiceVolumes(const JASDsp::TChannel& voice, VolumeArray& volumes) {
     if (voice.mAutoMixerBeenSet) {
         if (OutChannelCount > 2) {
             CalcSurroundChannelVolumes(voice, volumes);
@@ -731,6 +785,19 @@ static void ApplyPanning(
             }
         }
     }
+}
+
+// `add`: the voice is added to `output` (the mix itself) instead of written
+// into it (a cleared buffer of its own).
+static void ApplyPanning(
+    const JASDsp::TChannel& voice,
+    ChannelAuxData& aux,
+    const DspSubframe& input,
+    OutputSubframe& output,
+    bool add = false)
+{
+    VolumeArray volumes = {};
+    CalcVoiceVolumes(voice, volumes);
 
     for (size_t i = 0; i < OutChannelCount; i++) {
         const auto ch = static_cast<OutputChannel>(i);
@@ -752,7 +819,11 @@ static void ApplyPanning(
             continue;
         }
 
-        ApplyVolume(output[ch], input, prevVolume, targetVolume);
+        if (add) {
+            ApplyVolumeAdd(output[ch], input, prevVolume, targetVolume);
+        } else {
+            ApplyVolume(output[ch], input, prevVolume, targetVolume);
+        }
         prevVolume = targetVolume;
     }
 }
@@ -820,8 +891,12 @@ void dusk::audio::DspInit() {
     SharedReverb.mute();
 }
 
-void dusk::audio::DspRender(OutputSubframe& subframe) {
-    ZoneScoped;
+// One subframe of every voice into `subframe`. `direct`: plain stereo with
+// no reverb, surround bus or per-voice dump (the 3DS): each voice is added
+// straight to the two output channels. Otherwise it is rendered into a
+// cleared eight-channel buffer first (2.5 KB) and that buffer is added: the
+// same sums, at twice the memory traffic per voice.
+static void SyncChannelDumpFiles() {
     if (DumpAudio != sDumpWasActive) {
         sDumpWasActive = DumpAudio;
         if (DumpAudio) {
@@ -830,6 +905,11 @@ void dusk::audio::DspRender(OutputSubframe& subframe) {
             CloseChannelDumpFiles();
         }
     }
+}
+
+static void RenderSubframe(OutputSubframe& subframe, bool direct) {
+    ZoneScoped;
+    SyncChannelDumpFiles();
 
     GenerateEvolvingHarmonic();
 
@@ -859,12 +939,18 @@ void dusk::audio::DspRender(OutputSubframe& subframe) {
             continue;
         }
 
-        DspSubframe monoBuf = {};
+        // Both renderers write every sample.
+        DspSubframe monoBuf;
         if (voice.mWaveAramAddress == 0 && !voice.mAramBaseAddress) {
             RenderOscChannel(voice, aux, monoBuf);
         } else {
             ValidateChannel(voice);
             RenderChannel(voice, aux, monoBuf);
+        }
+
+        if (direct) {
+            ApplyPanning(voice, aux, monoBuf, subframe, true);
+            continue;
         }
 
         OutputSubframe buf = {};
@@ -966,4 +1052,325 @@ void dusk::audio::DspRender(OutputSubframe& subframe) {
         ApplyVolume(channel, channel, PrevMasterVolume, MasterVolume);
     }
     PrevMasterVolume = MasterVolume;
+}
+
+// ---- Fixed-point plain stereo mix (DspFixedMix) ----
+//
+// A volume of 1.0 is 2^26 and an interpolated sample s (-32768..32767, with
+// 12 fraction bits from the 1/4096 position) is s * 2^16. The high word of
+// their product is s * volume * 2^10: one step of the 16-bit output is 1024
+// units, and 64 voices at full volume and full scale stay inside 32 bits.
+
+static constexpr f32 kFixedVolumeOne = 67108864.0f;                       // 2^26
+static constexpr f32 kFixedRampScale = kFixedVolumeOne / DSP_SUBFRAME_SIZE;
+static constexpr f32 kFixedToFloat = 1.0f / 33554432.0f;                  // 2^-25 = 2^-10 / 32768
+// Largest source index one subframe can read: pitch below 0x8000 (8 input
+// samples per output sample), a start below one sample, and the next sample.
+static constexpr int kFixedSourceSamples = DSP_SUBFRAME_SIZE * 8 + 4;
+
+// acc + round(a * b / 2^32): one ARMv6 SMMLAR (no 64-bit accumulator).
+static inline s32 MulHighRoundAdd(s32 acc, s32 a, s32 b) {
+#if defined(__arm__) && !defined(__thumb__) && defined(__ARM_ARCH) && __ARM_ARCH >= 6
+    s32 result;
+    __asm__("smmlar %0, %1, %2, %3" : "=r"(result) : "r"(a), "r"(b), "r"(acc));
+    return result;
+#else
+    return static_cast<s32>(static_cast<u32>(acc) +
+                            static_cast<u32>((static_cast<s64>(a) * b + 0x80000000LL) >> 32));
+#endif
+}
+
+// 80 output samples of one voice added to the interleaved stereo
+// accumulator. `source[0]` is the sample before the first decoded one;
+// `position` is in 1/4096 of a source sample (below 4096), `pitch` the step.
+// The volumes move by `leftStep`/`rightStep` per sample (the float path's
+// linear ramp from the previous volume to the target).
+static void MixVoiceFixed(s32* mix, const s32* source, u32 position, u32 pitch,
+                          s32 left, s32 leftStep, s32 right, s32 rightStep) {
+    // The position as a source index and a fraction in the top 12 bits: the
+    // carry out of the fraction is the next source sample (ADDS/ADC).
+    u32 index = 0;
+    u32 fraction = position << 20;
+    const u32 fractionStep = pitch << 20;
+    const u32 indexStep = pitch >> 12;
+    for (int i = 0; i < DSP_SUBFRAME_SIZE; i++) {
+        const s32 first = source[index];
+        const u32 diff = static_cast<u32>(source[index + 1] - first);
+        // first * 65536 + diff * fraction * 16: the float path's
+        // prev + pos * (next - prev), times 65536. The products may wrap in
+        // 32 bits; the sum lies between the two samples, so it is exact.
+        const s32 sample = static_cast<s32>((static_cast<u32>(first) << 16) + diff * (fraction >> 16));
+        const s32 mixedLeft = mix[0];
+        const s32 mixedRight = mix[1];
+        mix[0] = MulHighRoundAdd(mixedLeft, sample, left);
+        mix[1] = MulHighRoundAdd(mixedRight, sample, right);
+        mix += 2;
+        left += leftStep;
+        right += rightStep;
+        const u32 next = fraction + fractionStep;
+        index += indexStep + (next < fraction ? 1u : 0u);
+        fraction = next;
+    }
+}
+
+// One ADPCM/PCM voice without a biquad: RenderChannel and ApplyPanning in
+// fixed point. The decoder calls, finish flag, resampler position, previous
+// sample and decode buffer end exactly as in RenderChannel (the float path
+// keeps its position in exact multiples of 1/4096 too). `mix` is null for a
+// voice whose two volumes stay zero: it only advances.
+static void RenderChannelFixed(JASDsp::TChannel& channel, ChannelAuxData& aux, s32* mix,
+                               const s32 start[2], const s32 step[2]) {
+    const u32 pitch = channel.mPitch;
+    const u32 from = static_cast<u32>(aux.resamplePos * 4096.0f);
+    const u32 to = from + DSP_SUBFRAME_SIZE * pitch;
+    const int advance = static_cast<int>(to >> 12);
+    const int needed = advance + 2;
+
+    FillDecodeBuf(channel, aux, needed);
+    const int count = aux.decodeBufCount;
+    if (count < needed) {
+        channel.mIsFinished = true;
+    }
+
+    if (mix) {
+        // source[k] is the k-th sample after resamplePrev; past the end of a
+        // source that ran dry the last sample repeats (RenderChannel's
+        // `next = prev`). Every index up to needed - 1 is read at most.
+        s32 source[kFixedSourceSamples];
+        source[0] = aux.resamplePrev;
+        const int copied = std::min(count, needed);
+        for (int k = 0; k < copied; k++) {
+            source[k + 1] = aux.decodeBuf[k];
+        }
+        for (int k = copied + 1; k <= needed; k++) {
+            source[k] = source[k - 1];
+        }
+        MixVoiceFixed(mix, source, from, pitch, start[0], step[0], start[1], step[1]);
+    }
+
+    aux.resamplePos = static_cast<f32>(to & 0xFFF) * (1.0f / 4096.0f);
+    if (advance > 0) {
+        if (advance <= count) {
+            aux.resamplePrev = aux.decodeBuf[advance - 1];
+        } else if (count > 0) {
+            aux.resamplePrev = aux.decodeBuf[count - 1];
+        }
+    }
+
+    const int remainingDecodeBuf = count - advance;
+    if (remainingDecodeBuf > 0) {
+        memmove(aux.decodeBuf, aux.decodeBuf + advance, remainingDecodeBuf * sizeof(s16));
+    }
+    aux.decodeBufCount = std::max(0, remainingDecodeBuf);
+}
+
+// RenderSubframe(subframe, true) with the ADPCM/PCM voices mixed in fixed
+// point. Oscillators, biquad voices, pitches above 0x7FFF and volumes
+// outside 0..1 take the float path into `subframe`; the fixed sum is added
+// to it before the master volume, which both paths apply the same way.
+static void RenderSubframeFixed(OutputSubframe& subframe) {
+    ZoneScoped;
+    SyncChannelDumpFiles();
+
+    GenerateEvolvingHarmonic();
+
+    alignas(8) s32 mix[DSP_SUBFRAME_SIZE * 2] = {};
+    bool anyFixed = false;
+
+    std::span voices(JASDsp::CH_BUF, DSP_CHANNELS);
+    for (int i = 0; i < voices.size(); i++) {
+        auto& voice = voices[i];
+        auto& aux = ChannelAux[i];
+
+        if (!voice.mIsActive) {
+            continue;
+        } else if (voice.mPauseFlag) {
+            continue;
+        } else if (voice.mForcedStop) {
+            voice.mIsFinished = true;
+            continue;
+        }
+
+        const bool oscillator = voice.mWaveAramAddress == 0 && !voice.mAramBaseAddress;
+        if (oscillator || (voice.mFilterMode & 0x20) != 0 || voice.mPitch > 0x7FFF) {
+            DspSubframe monoBuf;
+            if (oscillator) {
+                RenderOscChannel(voice, aux, monoBuf);
+            } else {
+                ValidateChannel(voice);
+                RenderChannel(voice, aux, monoBuf);
+            }
+            ApplyPanning(voice, aux, monoBuf, subframe, true);
+            continue;
+        }
+
+        ValidateChannel(voice);
+        if (voice.mResetFlag) {
+            ResetChannel(voice, aux);
+        }
+
+        // ApplyPanning's volumes (they depend on the channel table only),
+        // with the first render's NaN resolved and stored as it does.
+        VolumeArray volumes = {};
+        CalcVoiceVolumes(voice, volumes);
+        f32 from[2], to[2];
+        bool silent = true, inRange = true;
+        for (int c = 0; c < 2; c++) {
+            f32& previous = aux.prevVolume[c];
+            if (std::isnan(previous)) {
+                previous = volumes[c].Init;
+            }
+            from[c] = previous;
+            to[c] = volumes[c].Target;
+            silent = silent && from[c] == 0 && to[c] == 0;
+            inRange = inRange && from[c] >= 0.0f && from[c] <= 1.0f && to[c] >= 0.0f && to[c] <= 1.0f;
+        }
+        if (!inRange) {
+            DspSubframe monoBuf;
+            RenderChannel(voice, aux, monoBuf);
+            ApplyPanning(voice, aux, monoBuf, subframe, true);
+            continue;
+        }
+
+        s32 start[2], step[2];
+        for (int c = 0; c < 2; c++) {
+            start[c] = static_cast<s32>(from[c] * kFixedVolumeOne + 0.5f);
+            step[c] = from[c] == to[c] ? 0 : static_cast<s32>(lrintf((to[c] - from[c]) * kFixedRampScale));
+        }
+        RenderChannelFixed(voice, aux, silent ? nullptr : mix, start, step);
+        // A channel at zero before and after keeps its value (ApplyPanning
+        // skips it); every other one ends at its target.
+        for (int c = 0; c < 2; c++) {
+            if (!(from[c] == 0 && to[c] == 0)) {
+                aux.prevVolume[c] = to[c];
+            }
+        }
+        anyFixed = anyFixed || !silent;
+    }
+
+    if (anyFixed) {
+        auto& left = subframe.channels[0];
+        auto& right = subframe.channels[1];
+        for (int i = 0; i < DSP_SUBFRAME_SIZE; i++) {
+            left[i] += static_cast<f32>(mix[i * 2]) * kFixedToFloat;
+            right[i] += static_cast<f32>(mix[i * 2 + 1]) * kFixedToFloat;
+        }
+    }
+
+    for (int i = 0; i < OutChannelCount; i++) {
+        auto& channel = subframe.channels[i];
+        ApplyVolume(channel, channel, PrevMasterVolume, MasterVolume);
+    }
+    PrevMasterVolume = MasterVolume;
+}
+
+bool dusk::audio::DspPlainMix = false;
+bool dusk::audio::DspVerifyMix = false;
+u64 dusk::audio::DspVerifiedSubframes = 0;
+u64 dusk::audio::DspVerifyMismatches = 0;
+bool dusk::audio::DspFixedMix = false;
+f32 dusk::audio::DspVerifyLargestStep = 0.0f;
+u64 dusk::audio::DspVerifySamplesOverStep = 0;
+
+// Mixer state a render changes, for the verify modes: the DSP channel table,
+// the active voices' aux data (the decode buffer only up to its count; the
+// rest is written before it is read), the evolving harmonic and the master
+// volume ramp. Inactive voices are not touched by a render.
+struct MixerState {
+    JASDsp::TChannel voices[DSP_CHANNELS];
+    ChannelAuxData aux[DSP_CHANNELS];
+    s16 harmonic[64];
+    f32 prevMaster;
+};
+
+static void CopyAux(ChannelAuxData& to, const ChannelAuxData& from) {
+    constexpr size_t head = offsetof(ChannelAuxData, decodeBuf);
+    constexpr size_t tail = offsetof(ChannelAuxData, decodeBufCount);
+    memcpy(reinterpret_cast<u8*>(&to), reinterpret_cast<const u8*>(&from), head);
+    memcpy(reinterpret_cast<u8*>(&to) + tail, reinterpret_cast<const u8*>(&from) + tail, sizeof(ChannelAuxData) - tail);
+    const int count = std::clamp(from.decodeBufCount, 0, ChannelAuxData::DECODE_BUF_SIZE);
+    memcpy(to.decodeBuf, from.decodeBuf, count * sizeof(s16));
+}
+
+static void SaveMixerState(MixerState& state) {
+    memcpy(static_cast<void*>(state.voices), JASDsp::CH_BUF, sizeof(state.voices));
+    for (int i = 0; i < DSP_CHANNELS; i++) {
+        if (state.voices[i].mIsActive) {
+            CopyAux(state.aux[i], ChannelAux[i]);
+        }
+    }
+    memcpy(state.harmonic, gEvolvingHarmonic, sizeof(state.harmonic));
+    state.prevMaster = PrevMasterVolume;
+}
+
+static void RestoreMixerState(const MixerState& state) {
+    memcpy(static_cast<void*>(JASDsp::CH_BUF), state.voices, sizeof(state.voices));
+    for (int i = 0; i < DSP_CHANNELS; i++) {
+        if (state.voices[i].mIsActive) {
+            CopyAux(ChannelAux[i], state.aux[i]);
+        }
+    }
+    memcpy(gEvolvingHarmonic, state.harmonic, sizeof(state.harmonic));
+    PrevMasterVolume = state.prevMaster;
+}
+
+void dusk::audio::DspRender(OutputSubframe& subframe) {
+    const bool direct = !DspPlainMix && OutChannelCount == 2 && !EnableReverb && !EnableHrtf && !DumpAudio;
+    const bool fixed = direct && DspFixedMix;
+    if (!direct || !DspVerifyMix) {
+        if (fixed) {
+            RenderSubframeFixed(subframe);
+        } else {
+            RenderSubframe(subframe, direct);
+        }
+        return;
+    }
+    static MixerState* before = nullptr;
+    if (!before) {
+        before = static_cast<MixerState*>(malloc(sizeof(MixerState)));
+    }
+    if (!before) {
+        if (fixed) {
+            RenderSubframeFixed(subframe);
+        } else {
+            RenderSubframe(subframe, direct);
+        }
+        return;
+    }
+    // Verify: the same subframe through both paths, from the same state.
+    // Fixed point against the float direct path (bounded rounding difference),
+    // or the float direct path against the buffered one (equal samples).
+    SaveMixerState(*before);
+    OutputSubframe reference = subframe;
+    RenderSubframe(reference, fixed);
+    RestoreMixerState(*before);
+    if (fixed) {
+        RenderSubframeFixed(subframe);
+    } else {
+        RenderSubframe(subframe, true);
+    }
+    ++DspVerifiedSubframes;
+    bool differs = false;
+    for (int channel = 0; channel < 2; channel++) {
+        for (int i = 0; i < DSP_SUBFRAME_SIZE; i++) {
+            // Equal values (a zero of either sign is the same sample).
+            if (reference.channels[channel][i] == subframe.channels[channel][i]) {
+                continue;
+            }
+            differs = true;
+            if (!fixed) {
+                break;
+            }
+            const f32 steps = fabsf(reference.channels[channel][i] - subframe.channels[channel][i]) * 32768.0f;
+            if (!(steps <= DspVerifyLargestStep)) {
+                DspVerifyLargestStep = steps;
+            }
+            if (!(steps <= 1.0f)) {
+                ++DspVerifySamplesOverStep;
+            }
+        }
+    }
+    if (differs) {
+        ++DspVerifyMismatches;
+    }
 }
