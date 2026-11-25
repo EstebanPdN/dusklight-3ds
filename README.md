@@ -6,6 +6,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/EstebanPdN/dusklight-3ds/releases/tag/beta-01.1">Download beta-01.1</a> ·
   <a href="#project-status">Status</a> ·
   <a href="#features">Features</a> ·
   <a href="#documentation">Documentation</a> ·
@@ -15,7 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="docs/STATUS.md"><img src="docs/badges/status.svg" alt="Status: source only" height="22"></a>
+  <a href="docs/STATUS.md"><img src="docs/badges/status.svg" alt="Status: public beta" height="22"></a>
   <a href="docs/COMPATIBILITY.md"><img src="docs/badges/platform.svg" alt="Target: New Nintendo 3DS" height="22"></a>
   <a href="docs/STATUS.md"><img src="docs/badges/development.svg" alt="Experimental development" height="22"></a>
   <a href="docs/legal/THIRD_PARTY_NOTICES.md"><img src="docs/badges/license.svg" alt="Component-specific licenses" height="22"></a>
@@ -38,12 +39,30 @@ based on [Dusklight](https://github.com/TwilitRealm/dusklight) and the
 
 This project was developed with the help of [OpenAI Codex](https://openai.com/codex/). Learn more about the development process [here](AI_DEVELOPMENT.md).
 
-**Experimental source publication in active development. No release or playable
-binary is published.** The goal is a complete native port; full-game progression,
-reliable save/reload and physical New3DS performance remain under development.
-The new renderer and its game integration are work in progress; the current
-native model route is not a playable build. See the
-[native renderer roadmap](docs/NATIVE_RENDERER.md).
+The [public beta](https://github.com/EstebanPdN/dusklight-3ds/releases/tag/beta-01.1) is available for New Nintendo 3DS. Expect frame rate drops and occasional graphical glitches. I'm still working on performance, graphics, and reliable save/reload.
+
+## Requirements
+
+- **New Nintendo 3DS, New Nintendo 3DS XL, or New Nintendo 2DS XL**.
+- Your own *Twilight Princess* GameCube disc, USA (`GZ2E01`) or European/PAL (`GZ2P01`), revision 0.
+- For audio, a local DSP component at `sdmc:/3ds/dspfirm.cdc`. The beta also runs muted without it.
+
+## Installation
+
+1. Open [Forge 3DS Converter 1.2.0](https://github.com/EstebanPdN/estebanpdn.github.io/releases/tag/forge-3ds-converter-v1.2.0), select **DuskLight**, and choose the ISO dumped from your own disc.
+2. Copy the generated `zelda.twilight` to `sdmc:/3ds/DuskLight/zelda.twilight`.
+3. For a HOME Menu install, use FBI to install the CIA from the SD card, or go to **Remote Install → Scan QR Code** in FBI and scan the release QR.
+
+## Verify the download
+
+Compare the SHA-256 of your download with [`SHA256SUMS.txt`](https://github.com/EstebanPdN/dusklight-3ds/releases/download/beta-01.1/SHA256SUMS.txt).
+
+## Beta feedback
+
+Include your console model, region, beta version and the steps to reproduce the issue.
+If the problem is visible, tap **DUMP** on the lower screen and wait for **DONE**.
+ZIP one completed folder from `sdmc:/3ds/DuskLight/dumps/`, including `dump.dpk`, and use the private [beta feedback form](https://estebanpdn.github.io/dusklight-beta-01.html#report-title). The form accepts one ZIP up to 50 MB. Keep game files, saves and dumps out of public issues.
+
 
 ## Features
 
@@ -64,19 +83,9 @@ sustained 30 FPS on physical hardware has not been established.
 
 ## Project status
 
-This repository publishes the current source. **There is no GitHub release,
-prerelease, installation QR or supported end-user download.** Build instructions
-are available for developers in [Building](docs/BUILDING.md). Development builds
-are tested privately on a New 3DS; dated results are in
-[Verification status](docs/STATUS.md).
+The [public beta](https://github.com/EstebanPdN/dusklight-3ds/releases/tag/beta-01.1) uses the retained GX compatibility renderer. The native model renderer is still in development. See the [native renderer roadmap](docs/NATIVE_RENDERER.md).
 
-The port targets **New Nintendo 3DS, New Nintendo 3DS XL and New Nintendo 2DS XL**.
-Old Nintendo 3DS and Old Nintendo 2DS are outside the current target.
-
-A user-supplied **GameCube USA or European/PAL revision 0** game image
-(`GZ2E01` or `GZ2P01`) is required for runtime data preparation. No disc image,
-extracted game data, save or private memory capture is included.
-See [Game data](docs/GAME_DATA.md).
+[Building](docs/BUILDING.md) covers the development builds. [Verification status](docs/STATUS.md) has dated results, and [Game data](docs/GAME_DATA.md) covers compatible discs, SD paths, saves and controls.
 
 ## Documentation
 
