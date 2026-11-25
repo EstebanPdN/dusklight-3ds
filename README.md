@@ -28,7 +28,7 @@
 
 <p align="center">
   <a href="https://estebanpdn.github.io/dusklight.html"><img src="docs/images/website.svg" alt="Visit Esteban’s Forge" width="142" height="46"></a>
-  <a href="https://discord.gg/BjbzfRYpV"><img src="docs/images/discord-official.svg" alt="Join our Discord community" width="166" height="46"></a>
+  <a href="https://discord.com/servers/esteban-s-forge-1533248895663210506"><img src="docs/images/discord-official.svg" alt="Join our Discord community" width="166" height="46"></a>
   <!-- <a href="https://ko-fi.com/estebanpdn"><img src="docs/images/kofi.svg" alt="Support EstebanPdN on Ko-fi" width="190" height="46"></a> -->
   <a href="https://www.patreon.com/c/EstebanPdN"><img src="docs/images/patreon.svg" alt="Support EstebanPdN on Patreon" width="216" height="46"></a>
 </p>
@@ -136,7 +136,7 @@ configuration, prerequisites and current limitations.
 
 ## Community and bug reports
 
-[Join the project Discord](https://discord.gg/BjbzfRYpV) for discussion and
+[Join the project Discord](https://discord.com/servers/esteban-s-forge-1533248895663210506) for discussion and
 [open a GitHub issue](https://github.com/EstebanPdN/dusklight-3ds/issues) for a
 reproducible source problem. Include the commit, build profile, toolchain,
 console or emulator version and concise reproduction steps.
@@ -169,7 +169,7 @@ See [Third-party notices](docs/legal/THIRD_PARTY_NOTICES.md) and
 
 <p align="center">
   <a href="https://estebanpdn.github.io/">Esteban’s Forge</a> ·
-  <a href="https://discord.gg/BjbzfRYpV">Discord</a> ·
+  <a href="https://discord.com/servers/esteban-s-forge-1533248895663210506">Discord</a> ·
   <a href="docs/README.md">Documentation</a> ·
   <a href="docs/legal/THIRD_PARTY_NOTICES.md">Credits and notices</a><br>
   <sub>Twilight Princess belongs to Nintendo. This is an independent fan project.</sub>
