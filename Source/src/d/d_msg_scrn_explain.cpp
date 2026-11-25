@@ -328,7 +328,7 @@ dMsgScrnExplain_c::~dMsgScrnExplain_c() {
 void dMsgScrnExplain_c::move() {
     u8 currentStatus = mStatus;
 
-#if !TARGET_PC
+#if !TARGET_PC || defined(DUSK_TARGET_3DS)
     f32 y_offset = 0.0f;
     if (field_0x66 == 2) {
         y_offset = -35.0f;
@@ -472,7 +472,7 @@ void dMsgScrnExplain_c::open_init() {
 }
 
 void dMsgScrnExplain_c::open_proc() {
-    IF_NOT_DUSK(field_0x5a++);
+    DUSK_ORIGINAL_ONLY(field_0x5a++);
     if (field_0x5a >= 5) {
         field_0x5a = 5;
         if (field_0x64 == 1 || field_0x64 == 2) {
@@ -654,7 +654,7 @@ void dMsgScrnExplain_c::close_proc() {
         iVar1 = true;
     }
 
-    IF_NOT_DUSK(field_0x5a--);
+    DUSK_ORIGINAL_ONLY(field_0x5a--);
     if (field_0x5a <= 0) {
         field_0x5a = 0;
         if (iVar1) {

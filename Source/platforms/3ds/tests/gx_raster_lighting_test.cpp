@@ -23,7 +23,9 @@ int main(){
     word(0x100e,2|64|1024);word(0x1010,1|2|1024);
     v.present=1u<<GX_VA_CLR0;v.color[0][0]=.25;v.color[0][1]=.5;v.color[0][2]=.75;v.color[0][3]=.5;
     assert(planRasterColor(r,material,p)&&evaluateRasterColor(p,v,out));near(out[0],.25f*128/255);near(out[3],.5f*16/255);
-    v.present=0;assert(!evaluateRasterColor(p,v,out,&error)&&error==RasterColorError::vertex);
+    // No vertex colour: the vertex sources read Dolphin's missing colour,
+    // opaque white (rasterVertexColor): white ambient RGB, white material alpha.
+    v.present=0;assert(evaluateRasterColor(p,v,out,&error));near(out[0],128.f/255);near(out[3],16.f/255);
     // Constant lights do not require positions, normals, direction or attenuation.
     word(0x100e,2|4|1024);word(0x1010,0);word(0x603,0x402010ff);
     assert(planRasterColor(r,material,p)&&!p.needsPosition&&!p.needsNormal);
@@ -54,7 +56,10 @@ int main(){
     // Missing consumed data, invalid scalar and undefined attenuation fail cleanly.
     r.xfValid.reset(0x60f);assert(!planRasterColor(r,material,p,&error)&&error==RasterColorError::missingState);
     scalar(0x60f,std::numeric_limits<float>::quiet_NaN());assert(!planRasterColor(r,material,p,&error)&&error==RasterColorError::nonfinite);
-    scalar(0x60f,1);scalar(0x607,0);assert(planRasterColor(r,material,p));assert(!evaluateRasterColor(p,v,out,&error,&t)&&error==RasterColorError::lighting);
+    // All-zero distance coefficients: GX divides by zero, n/0 is one for
+    // n > 0 (evaluateRasterColor, Hyrule Castle lights), not a failure.
+    scalar(0x60f,1);scalar(0x607,0);assert(planRasterColor(r,material,p));
+    assert(evaluateRasterColor(p,v,out,&error,&t));for(float c:out)assert(std::isfinite(c));
     // No-light channels ignore all unused corrupt light records.
     word(0x100e,2|1024);assert(planRasterColor(r,material,p)&&evaluateRasterColor(p,v,out));
     // Transform the normal by the selected palette matrix, normalize once.

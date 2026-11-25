@@ -14,6 +14,10 @@
 #include "../../../../platforms/3ds/runtime/gx_profile.hpp"
 #endif
 
+#if defined(DUSK_TARGET_3DS)
+const J2DPane::NativeScreenHooks* J2DPane::sNativeHooks = NULL;
+#endif
+
 J2DPane::J2DPane() : mBounds(), mGlobalBounds(), mClipRect(), mPaneTree(this) {
     mTransform = NULL;
     mKind = 'PAN1';
@@ -250,6 +254,11 @@ bool J2DPane::insertChild(J2DPane* p_prev, J2DPane* p_child) {
 }
 
 void J2DPane::draw(f32 x, f32 y, J2DGrafContext const* p_grafCtx, bool isOrthoGraf, bool param_4) {
+#if defined(DUSK_TARGET_3DS)
+    // Hidden by an ancestor: nothing of this pane can be drawn, and nothing
+    // of it is measured (the ancestor's own bytes say so).
+    const bool nativeReachable = param_4;
+#endif
     param_4 = param_4 && mVisible;
     if (p_grafCtx->getGrafType() != 1) {
         isOrthoGraf = false;
@@ -328,14 +337,19 @@ void J2DPane::draw(f32 x, f32 y, J2DGrafContext const* p_grafCtx, bool isOrthoGr
 #endif
         }
 
-        JGeometry::TBox2<f32> scissorBounds(0, 0, 0, 0);
-        if (param_4 && isOrthoGraf) {
-            ((J2DOrthoGraph*)p_grafCtx)->scissorBounds(&scissorBounds, &mClipRect);
-        }
-
+#if defined(DUSK_TARGET_3DS)
+        const NativeScreenHooks* const nativeHooks = sNativeHooks;
+        if (nativeHooks != NULL && nativeHooks->measure != NULL) {
+            if (nativeReachable) {
+                nativeHooks->measure(this, param_4 && (mClipRect.isValid() || !isOrthoGraf), nativeHooks->context);
+            }
+        } else
+#endif
         if (param_4 && (mClipRect.isValid() || !isOrthoGraf)) {
             J2DGrafContext tmpGraf(*p_grafCtx);
             if (isOrthoGraf) {
+                JGeometry::TBox2<f32> scissorBounds;
+                ((J2DOrthoGraph*)p_grafCtx)->scissorBounds(&scissorBounds, &mClipRect);
                 tmpGraf.scissor(scissorBounds);
                 tmpGraf.setScissor();
             }
@@ -347,10 +361,29 @@ void J2DPane::draw(f32 x, f32 y, J2DGrafContext const* p_grafCtx, bool isOrthoGr
             drawSelf(x, y, &tmpGraf.mPosMtx);
         }
 
+#if defined(DUSK_TARGET_3DS)
+        if (nativeHooks != NULL && nativeHooks->split(this, nativeHooks->context)) {
+            for (JSUTreeIterator<J2DPane> iter = mPaneTree.getFirstChild(); iter != mPaneTree.getEndChild(); ++iter) {
+                J2DPane* const child = iter.getObject();
+                const int begun = nativeHooks->childBegin(child, nativeHooks->context);
+                if (begun != 2) {
+                    child->draw(0, 0, p_grafCtx, isOrthoGraf, param_4);
+                }
+                nativeHooks->childEnd(child, begun, nativeHooks->context);
+            }
+        } else
+#endif
         for (JSUTreeIterator<J2DPane> iter = mPaneTree.getFirstChild(); iter != mPaneTree.getEndChild(); ++iter) {
             iter->draw(0, 0, p_grafCtx, isOrthoGraf, param_4);
         }
     }
+#if defined(DUSK_TARGET_3DS)
+    else if (nativeReachable && sNativeHooks != NULL && sNativeHooks->measure != NULL) {
+        // Not drawn, and its children are not visited: its own bytes still
+        // decide that (the bounds becoming valid changes the fingerprint).
+        sNativeHooks->measure(this, false, sNativeHooks->context);
+    }
+#endif
 }
 
 void J2DPane::place(JGeometry::TBox2<f32> const& box) {
@@ -516,6 +549,20 @@ bool J2DPane::isUsed(const ResFONT* p_font) {
 void J2DPane::makeMatrix(f32 param_0, f32 param_1, f32 param_2, f32 param_3) {
     f32 tmpX = mRotateOffsetX - param_2;
     f32 tmpY = mRotateOffsetY - param_3;
+#if defined(DUSK_TARGET_3DS)
+    if (mRotateX == 0.0f && mRotateY == 0.0f && mRotateZ == 0.0f) {
+        const f32 pivotX = -tmpX * mScaleX;
+        const f32 pivotY = -tmpY * mScaleY;
+        if (std::isfinite(pivotX) && std::isfinite(pivotY)) {
+            // Concatenating identity produces positive zero for a zero scale or
+            // pivot. Keep both rounding steps in the translation about the pivot.
+            MTXScale(mPositionMtx, 0.0f + mScaleX, 0.0f + mScaleY, 1.0f);
+            mPositionMtx[0][3] = (0.0f + pivotX) + (param_0 + tmpX);
+            mPositionMtx[1][3] = (0.0f + pivotY) + (param_1 + tmpY);
+            return;
+        }
+    }
+#endif
     Mtx rotX, rotY, rotZ, rotMtx, mtx, tmp;
     MTXTrans(mtx, -tmpX, -tmpY, 0);
     MTXRotRad(rotX, 'x', DEG_TO_RAD(mRotateX));

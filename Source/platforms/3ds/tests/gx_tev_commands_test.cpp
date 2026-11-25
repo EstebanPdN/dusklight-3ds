@@ -1,5 +1,6 @@
 #include "../runtime/gx_tev_commands.hpp"
 #include "../runtime/gx_stream.hpp"
+#include "../runtime/gx_compact_cache.hpp"
 #include <dolphin/gx.h>
 #include <dolphin/gd.h>
 #include <dolphin/os.h>
@@ -8,6 +9,9 @@
 #include <cstdio>
 #include <limits>
 #include <stdexcept>
+// gx_commands.cpp reads the static geometry hint (gx_compact_cache.hpp);
+// these cases never set it.
+thread_local dusk::native::gx::StaticGeometryHint dusk::native::gx::staticGeometryHint{};
 using namespace dusk::native::gx;
 extern "C" void OSPanic(const char*,int,const char* message,...){throw std::runtime_error(message);}
 extern "C" void DCFlushRange(void*,u32){}

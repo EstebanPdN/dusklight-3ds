@@ -3,6 +3,8 @@
 #include <3ds.h>
 #include <citro3d.h>
 #include "gpu_sync.hpp"
+#include "gpu_list_capture.hpp"
+#include <filesystem>
 #include "clock.hpp"
 #include <cassert>
 #include <cstdio>
@@ -14,9 +16,13 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdarg>
+#include <string>
+#include <vector>
 
 extern "C" void __wrap_GX_BindQueue(gxCmdQueue_s*);
 extern "C" void gxCmdQueueInterrupt(GSPGPU_Event);
+extern "C" unsigned duskGxJobRingCopy(u32*, unsigned, u32*);
 struct OSThread { unsigned id; };
 namespace {
 OSThread owner{1}, foreign{2};
@@ -27,9 +33,14 @@ std::deque<unsigned> device;
 u32 commands[16384]{}, offset{};
 u64 tick{};
 unsigned submitted{}, completed{}, slept{}, flushes{};
+// Sleep lengths of the GPU waits, and a device that finishes nothing before holdUntil.
+std::vector<s64> sleeps; u64 holdUntil{};
+// Every report line since the last clear (the console keeps 255 characters per line).
+std::string lastReport;
 u32 retraces{}; unsigned retraceWaits{};
 bool stalled{}, flushOkay = true, unrelatedIrq{};
 std::atomic<bool> callbackActive{},releaseCallback{},callbackWaitMode{};
+std::atomic<bool> captureWaiting{}, captureProgress{};
 bool inFrame{},tailAssembled{};
 std::mutex registry;struct LockSlot{LightLock* p{};std::mutex mutex;};LockSlot locks[16];
 std::mutex& mutexFor(LightLock* p){std::lock_guard guard(registry);for(auto& s:locks)if(s.p==p)return s.mutex;for(auto& s:locks)if(!s.p){s.p=p;return s.mutex;}std::abort();}
@@ -37,7 +48,7 @@ void callback(gxCmdQueue_s*){callbackActive=true;while(!releaseCallback)std::thi
 
 void add(unsigned type) { gxCmdEntry_s e{}; e.type = type; gxCmdQueueAdd(&queue, &e); }
 void event() {
-    if (stalled || device.empty()) return;
+    if (stalled || device.empty() || tick < holdUntil) return;
     if (unrelatedIrq) {
         // Inject a DMA IRQ while only a PPF transfer belongs to this queue.
         gxCmdQueueInterrupt(GSPGPU_EVENT_DMA);
@@ -48,12 +59,16 @@ void event() {
 }
 }
 extern "C" OSThread* OSGetCurrentThread() { return current; }
-extern "C" void OSReport(const char*, ...) {}
+extern "C" void OSReport(const char* format, ...) {
+    char text[1024]; va_list args; va_start(args, format); std::vsnprintf(text, sizeof(text), format, args); va_end(args);
+    lastReport += text;
+}
 extern "C" void __real_GX_BindQueue(gxCmdQueue_s*) {}
 extern "C" u64 svcGetSystemTick() { tick += 268; return tick; }
 extern "C" void svcSleepThread(s64 ns) {
-    assert(ns == 1000000); ++slept;
-    tick += dusk::native::nativeTickFrequency / 1000;
+    // GPU waits poll in 100 us steps for their first 2 ms, then in 1 ms steps.
+    assert(ns == 100000 || ns == 1000000); ++slept; sleeps.push_back(ns);
+    tick += u64(ns) * dusk::native::nativeTickFrequency / 1000000000;
     if(callbackWaitMode)std::this_thread::sleep_for(std::chrono::milliseconds(1));else event();
 }
 extern "C" void svcBreak(int) { std::abort(); }
@@ -94,6 +109,16 @@ namespace dusk::native {
 bool flushGxGeometry() { ++flushes; return flushOkay; }
 // GPU guard hooks (gpu_canary_ctru.cpp); no case here reaches a hang.
 void gpuCanaryListSubmitted(const u32*, u32) {}
+bool kickNativeSdWriterAsync(){return true;} // This fixture drives the consumer explicitly.
+void waitForNativeCaptureProgress(){
+    captureWaiting.store(true);captureWaiting.notify_one();
+    while(!captureProgress.exchange(false))captureProgress.wait(false);
+}
+void signalNativeCaptureProgress(){captureProgress.store(true);captureProgress.notify_one();}
+void gpuCanaryShadowState(const u32*& regs,size_t& regCount,const u32*& uniforms,size_t& uniformCount){
+    static u32 registerBank[0x300]{},uniformBank[96*4]{};
+    regs=registerBank;regCount=0x300;uniforms=uniformBank;uniformCount=96*4;
+}
 void gpuSlowJob(const std::uint32_t*, unsigned) {}
 // A command list silent past the patience window is a hang: the guard saves
 // evidence and never returns. Here it reports the silent job's type instead.
@@ -240,6 +265,150 @@ int main(int argc, char** argv) {
         platformSetGpuChunkDraws(0);
         offset=8;assert(platformPrepareGpuDraw()&&platformPrepareGpuDraw()&&submitted==1);
         assert(platformCompleteGpu(500000000)==GpuCompletion::complete);
+    } else if (!std::strcmp(name,"poll-step")) {
+        // A completion 0.5 ms into the wait is seen within one 100 us step; one
+        // 5 ms in, within one 1 ms step. The old 1 ms steps rounded both up.
+        const u64 ms = nativeTickFrequency / 1000;
+        add(1); u64 start = tick; holdUntil = start + ms / 2;
+        result = platformCompleteGpu(500000000);
+        assert(result == GpuCompletion::complete && completed == 1 && tick - holdUntil < ms / 5);
+        for (const auto step : sleeps) assert(step == 100000);
+        sleeps.clear(); add(1); start = tick; holdUntil = start + 5 * ms;
+        assert(platformCompleteGpu(500000000) == GpuCompletion::complete && completed == 2);
+        assert(tick - holdUntil <= ms + ms / 10 && sleeps.front() == 100000 && sleeps.back() == 1000000);
+    } else if (!std::strcmp(name,"complete-reasons")) {
+        // A command-arena reclaim is counted apart from other full drains, and
+        // the periodic line names the reasons and the calling sites.
+        assert(platformBeginGpuFrame(0)&&platformBeginGpuCommands());
+        offset=16384-100;assert(platformPrepareGpuDraw()&&offset==0);
+        offset=8;assert(platformCompleteGpu(500000000)==GpuCompletion::complete);
+        const auto telemetry=platformTakeGpuTelemetry();
+        assert(telemetry.reclaims==1&&telemetry.completes==2&&telemetry.reclaimWaitTicks>0&&telemetry.reclaimWaitTicks<telemetry.completeWaitTicks);
+        // The arena a frame really gets is logged once (Alpha 6 logged 65536 words).
+        assert(lastReport.find("Native GPU command arena in frame: 16384 words (64 KiB)\n")!=std::string::npos);
+        lastReport.clear();
+        for(unsigned frame=1;frame<300;++frame)(void)platformTakeGpuTelemetry();
+        assert(lastReport.find("Native GPU completes, last 300 pictures: reclaim 1")==0&&lastReport.find("other 1")!=std::string::npos);
+        assert(lastReport.find("; wait polls 100us ")!=std::string::npos);
+        const auto callers=lastReport.find("\nNative GPU complete callers: ");
+        assert(callers!=std::string::npos&&lastReport.find(" x1 ",callers)!=std::string::npos);
+        for(std::size_t at=0,end;at<lastReport.size();at=end+1){end=lastReport.find('\n',at);assert(end!=std::string::npos&&end-at<255);}
+        lastReport.clear();
+        for(unsigned frame=0;frame<300;++frame)(void)platformTakeGpuTelemetry();
+        assert(lastReport.empty()); // nothing to report: no line
+    } else if(!std::strcmp(name,"gpu-time")){
+        // The GPU's own time (ctru_gxqueue.c): a command list from its
+        // submission to its event is busy time, the time with nothing queued
+        // idle; each picture takes the sums since the previous one.
+        assert(platformBeginGpuFrame(0)&&platformBeginGpuCommands());
+        (void)platformTakeGpuTelemetry();
+        offset=8;assert(platformSubmitGpu());
+        holdUntil=tick+nativeTickFrequency/1000; // the list takes 1 ms
+        assert(platformCompleteGpu(500000000)==GpuCompletion::complete);
+        auto t=platformTakeGpuTelemetry();
+        assert(t.gpuLists==1&&t.gpuJobs==1&&t.gpuListTicks>=nativeTickFrequency/1000&&t.gpuLongestListTicks==t.gpuListTicks);
+        assert(t.gpuCopyTicks==0&&t.gpuFillTicks==0);
+        for(unsigned n=0;n<100;++n)(void)svcGetSystemTick(); // nothing queued
+        t=platformTakeGpuTelemetry();
+        assert(t.gpuListTicks==0&&t.gpuJobs==0&&t.gpuIdleTicks>=100*268);
+        // The first part of a picture: 8 draws, then 16, 32 and the chunk size.
+        platformSetGpuChunkDraws(64);platformSetGpuFirstPart(8);
+        assert(platformBeginGpuFrame(0)&&platformBeginGpuCommands());
+        unsigned splits[4]{};
+        for(unsigned draw=1;draw<=8+16+32+64;++draw){
+            offset=8;assert(platformPrepareGpuDraw());
+            if(offset==0){for(auto& at:splits)if(!at){at=draw;break;}}
+            while(!device.empty())event(); // the PICA keeps up (no two-ahead skip)
+        }
+        assert(splits[0]==8&&splits[1]==8+16&&splits[2]==8+16+32&&splits[3]==8+16+32+64);
+        // The next picture starts again with 8.
+        assert(platformBeginGpuFrame(0));
+        for(unsigned draw=1;draw<=8;++draw){offset=8;assert(platformPrepareGpuDraw());assert((offset==0)==(draw==8));while(!device.empty())event();}
+        platformSetGpuFirstPart(0);
+        // A painter phase mark (gpu-phases.txt) splits the list even with two
+        // lists ahead of the PICA, and a repeated mark of the same phase does not.
+        platformSetGpuDiagnostics(true,false);
+        assert(platformBeginGpuFrame(0)&&platformBeginGpuCommands());
+        offset=8;assert(platformSubmitGpu());offset=8;assert(platformSubmitGpu());
+        const auto before=queue.numEntries;
+        offset=8;assert(platformSubmitGpu()&&queue.numEntries==before&&offset==8); // two ahead: no split
+        markGpuPhase(gpuPhaseWorld);assert(queue.numEntries==before+1&&offset==0);
+        offset=8;markGpuPhase(gpuPhaseWorld);assert(queue.numEntries==before+1&&offset==8);
+        markGpuPhase(gpuPhaseNone);assert(offset==8);
+        platformSetGpuDiagnostics(false,false);
+        markGpuPhase(gpuPhase2D);assert(offset==8);
+        assert(platformCompleteGpu(500000000)==GpuCompletion::complete);
+    } else if(!std::strcmp(name,"shadow-gpu-time")){
+        gpuShadowProfileMode=GpuShadowProfileMode::pass;
+        assert(platformBeginGpuFrame(0)&&platformBeginGpuCommands());
+        for(unsigned n=0;n<2;++n){offset=8;assert(platformSubmitGpu());}
+        offset=8;
+        assert(platformSubmitGpu()&&offset==8);
+        assert(platformSubmitGpuShadowBoundary()&&offset==0);
+        platformSetGpuShadowTag(DUSK_SHADOW_GPU_LINK_PASS);
+        for(unsigned n=0;n<2;++n){offset=8;assert(platformSubmitGpuShadowBoundary());}
+        platformSetGpuShadowTag(0);
+        offset=8;assert(platformSubmitGpuShadowBoundary());
+        assert(queue.numEntries==6&&submitted==1&&slept==0);
+        for(unsigned n=0;n<3;++n)event(); // now the first tagged list is in flight
+        for(unsigned n=0;n<300;++n)(void)platformTakeGpuTelemetry();
+        assert(lastReport.find("Native shadow GPU jobs:")==std::string::npos);
+        lastReport.clear();
+        while(!device.empty()){tick+=nativeTickFrequency/1000;event();}
+        u32 jobs[6][14]{};
+        assert(duskGxJobRingCopy(jobs[0],6,nullptr)==6);
+        const auto duration=[&](unsigned n){return ((u64(jobs[n][11])<<32)|jobs[n][10])-((u64(jobs[n][9])<<32)|jobs[n][8]);};
+        for(unsigned n=0;n<300;++n)(void)platformTakeGpuTelemetry();
+        const auto exact=std::to_string(duration(3)+duration(4));
+        assert(lastReport.find("group=link_pass lists=2 ticks="+exact+" ")!=std::string::npos);
+    } else if (!std::strcmp(name,"gpu-list-capture")) {
+        const std::filesystem::path root="gpu-list-case";
+        assert(std::filesystem::create_directory(root));
+        const u32 initial[4]={5,0x000f0000,0,0x000f0001};
+        const char* phases[]={"camera","bad-job","occupied","still"};
+        for(const char* phase:phases){
+            u32 payload[4];
+            std::memcpy(payload,initial,sizeof(payload));
+            const bool badJob=!std::strcmp(phase,"bad-job"),occupied=!std::strcmp(phase,"occupied");
+            requestGpuListCapture(root.c_str(),phase,"F_SP114",1);
+            assert(gpuListCaptureBoundary(60));
+            gxCmdQueueStop(&queue);gxCmdQueueClear(&queue);
+            add(2);
+            gxCmdEntry_s list{};
+            list.type=1;list.args[0]=u32(reinterpret_cast<uintptr_t>(payload));list.args[1]=sizeof(payload);
+            recordSubmittedGpuList(payload,sizeof(payload));
+            payload[0]=91; // command arena has already been reused when the file is written
+            if(badJob)list.args[1]+=16;
+            gxCmdQueueAdd(&queue,&list);add(3);
+            gxCmdQueueRun(&queue);
+            for(auto irq:{GSPGPU_EVENT_PSC1,GSPGPU_EVENT_P3D,GSPGPU_EVENT_PPF}){
+                assert(!device.empty());
+                device.pop_front();gxCmdQueueInterrupt(irq);
+            }
+            closeGpuListCapture(60,1234,"F_SP114",1);
+            assert(gpuListCaptureBoundary(61));
+            const auto path=root/(std::string("gpu-")+phase+".bin");
+            assert(!std::filesystem::exists(path));
+            assert(gpuListCaptureWritePending()==!badJob);
+            if(occupied)assert(std::filesystem::create_directory(path));
+            if(!std::strcmp(phase,"camera")){
+                assert(!gpuListCaptureBoundary(62)); // An idle writer slot is not required for normal frames.
+                assert(gpuListCaptureWritePending()&&!captureWaiting);
+                std::thread delayed([]{captureWaiting.wait(false);writePendingGpuListCapture();});
+                waitForGpuListCaptureWrite();
+                delayed.join();
+            }else writePendingGpuListCapture();
+            assert(!gpuListCaptureWritePending());
+            assert(!std::filesystem::exists(path.string()+".tmp"));
+            if(badJob){assert(!std::filesystem::exists(path));continue;}
+            if(occupied){assert(std::filesystem::is_directory(path));std::filesystem::remove(path);continue;}
+            auto* saved=std::fopen(path.c_str(),"rb");
+            assert(saved && std::fseek(saved,-long(sizeof(payload)),SEEK_END)==0);
+            assert(std::fread(payload,1,sizeof(payload),saved)==sizeof(payload));
+            assert(!std::memcmp(initial,payload,sizeof(initial)));
+            std::fclose(saved);std::filesystem::remove(path);
+        }
+        assert(!gpuListCaptureBoundary(62));std::filesystem::remove(root);
     } else std::abort();
     std::printf("%s result=%d submitted=%u completed=%u remaining=%zu queue=%u/%u/%u polls=%u\n",
                 name, int(result), submitted, completed, device.size(), queue.lastEntry, queue.curEntry, queue.numEntries, slept);

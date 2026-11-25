@@ -37,6 +37,7 @@ static void callGrassMaterialDisplayList(const void* data, u32 size) {
 #endif
 }
 
+#include "helpers/native_effects.h"
 #include "d/actor/d_grass.inc" // IWYU pragma: keep
 #include "d/actor/d_flower.inc"
 

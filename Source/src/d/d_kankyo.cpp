@@ -1,4 +1,5 @@
 #include "d/dolzel.h" // IWYU pragma: keep
+#include "d/d_tick_profile.h"
 #include "d/d_native_lod.h"
 
 #include "d/d_kankyo.h"
@@ -3672,6 +3673,7 @@ void dScnKy_env_light_c::settingTevStruct_plightcol_plus(cXyz* pos_p, dKy_tevstr
 }
 
 void dScnKy_env_light_c::settingTevStruct(int tevstrType, cXyz* pos_p, dKy_tevstr_c* tevstr_p) {
+    DUSK_TICK_PROFILE(tick_profile, "draw.tevstr");
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
 

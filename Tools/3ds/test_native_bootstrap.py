@@ -16,7 +16,7 @@ def main():
     global OUT, BUILD
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path)
-    parser.add_argument('--case', action='append', choices=['bootstrap-asan','bootstrap-tsan','diagnostics-arm','disc'])
+    parser.add_argument('--case', action='append', choices=['bootstrap-asan','bootstrap-tsan','diagnostics-arm','disc','boot-options'])
     args = parser.parse_args()
     if args.output: OUT=args.output; BUILD=OUT/'bin'
     OUT.mkdir(parents=True,exist_ok=True); BUILD.mkdir(parents=True,exist_ok=True)
@@ -37,13 +37,14 @@ def main():
     kernel += ['libs/JSystem/src/JKernel/' + p + '.cpp' for p in
                ['JKRHeap', 'JKRExpHeap', 'JKRSolidHeap', 'JKRDisposer']]
     cases = [('bootstrap-asan', 'address,undefined', game, kernel, []),
+             ('boot-options', 'address,undefined', [], ['platforms/3ds/tests/boot_options_test.cpp'], []),
              ('bootstrap-tsan', 'thread', game, kernel, []),
              ('diagnostics-arm', 'address,undefined', [], ['platforms/3ds/tests/diagnostics_test.cpp'], []),
              ('disc', 'address,undefined', [], ['platforms/3ds/runtime/disc.cpp',
                                               'platforms/3ds/tests/disc_test.cpp'], [str(BUILD)])]
     if args.case: cases=[c for c in cases if c[0] in args.case]
     inputs=[Path(__file__).resolve(),*[SOURCE/p for p in set(s for c in cases for s in c[3])],
-            *[SOURCE/'platforms/3ds/runtime'/p for p in ['bootstrap.hpp','clock.hpp','os_sync.hpp','primitives.hpp']]]
+            *[SOURCE/'platforms/3ds/runtime'/p for p in ['bootstrap.hpp','boot_options.hpp','clock.hpp','os_sync.hpp','primitives.hpp']]]
     hashes={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest()for p in inputs}
     (OUT/'bootstrap-tests.json').write_text(json.dumps({'status':'running','input_sha256':hashes})+'\n')
     for name, sanitizer, extra, sources, run_args in cases:

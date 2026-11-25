@@ -27,6 +27,11 @@
 #if defined(DUSK_TARGET_3DS)
 #include "helpers/native_effects.h"
 #endif
+#if defined(DUSK_TARGET_3DS)
+// Scene change log (Source/platforms/3ds/runtime/game_startup.cpp).
+extern "C" int duskNativeSceneExit;
+extern "C" const void* duskNativeSceneCaller;
+#endif
 
 
 #if TARGET_PC
@@ -1458,6 +1463,12 @@ void dComIfGp_setNextStage(char const* i_stage, s16 i_point, s8 i_roomNo, s8 i_l
         }
         return;
     }
+    // Scene change log: the code that asked, unless dStage_changeScene or
+    // the four-argument form below already named it (event exits of
+    // d_event_data.cpp and actors' direct requests come through here).
+    if (!duskNativeSceneCaller) {
+        duskNativeSceneCaller = __builtin_return_address(0);
+    }
 #endif
     if (i_layer >= 15) {
         i_layer = -1;
@@ -1517,6 +1528,11 @@ void dComIfGp_setNextStage(char const* i_stage, s16 i_point, s8 i_roomNo, s8 i_l
 }
 
 void dComIfGp_setNextStage(char const* i_stage, s16 i_point, s8 i_roomNo, s8 i_layer) {
+#if defined(DUSK_TARGET_3DS)
+    if (!duskNativeSceneCaller) {
+        duskNativeSceneCaller = __builtin_return_address(0);
+    }
+#endif
     dComIfGp_setNextStage(i_stage, i_point, i_roomNo, i_layer, 0.0f, 0, 1, 0, 0, 1, 0);
 }
 

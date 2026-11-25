@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstring>
 namespace dusk::native {
 namespace {
@@ -22,6 +23,13 @@ Color rgb5a3(unsigned value){
     const unsigned a=value>>12,r=(value>>8)&15,g=(value>>4)&15,b=value&15;
     return {u8(r*17),u8(g*17),u8(b*17),u8((a<<5)|(a<<2)|(a>>1))};
 }
+// 8-bit channel to 5/6 bits, rounded. Exact inverse of the bit-replicated
+// expansion GX and PICA both use, so 5/6-bit sources survive unchanged.
+inline unsigned to5(unsigned c){return (c*31+127)/255;}
+inline unsigned to6(unsigned c){return (c*63+127)/255;}
+inline void store16(u8* o,unsigned v){o[0]=u8(v);o[1]=u8(v>>8);}
+inline void storeRgb565(u8* o,const Color& c){store16(o,(to5(c.r)<<11)|(to6(c.g)<<5)|to5(c.b));}
+inline void storeRgba5551(u8* o,const Color& c){store16(o,(to5(c.r)<<11)|(to5(c.g)<<6)|(to5(c.b)<<1)|(c.a>=128?1u:0u));}
 using Palette=std::array<Color,4>;
 Palette cmpr(const u8* block){
     const unsigned a=half(block),b=half(block+2);Palette p{rgb565(a),rgb565(b),{}, {}};
@@ -52,8 +60,17 @@ bool opaqueCmpr(std::span<const u8> b,std::size_t offset,unsigned w,unsigned h,u
     }
     return true;
 }
+// RGB5A3: every texel of every level has the opaque bit.
+bool opaqueRgb5a3(std::span<const u8> b,std::size_t offset,std::size_t bytes){
+    for(std::size_t n=0;n+1<bytes;n+=2)if(!(b[offset+n]&0x80))return false;
+    return true;
 }
-bool inspectNativeTexture(std::span<const u8> b,NativeTexturePlan& out,bool rgb565Rgba8Reference,bool halfResolution){
+bool opaquePalette(std::span<const u8> b,std::size_t palette,unsigned colors){
+    for(unsigned n=0;n<colors;++n)if(!(b[palette+2*n]&0x80))return false;
+    return true;
+}
+}
+bool inspectNativeTexture(std::span<const u8> b,NativeTexturePlan& out,bool rgb565Rgba8Reference,bool halfResolution,bool compact){
     out={};if(b.size()<32||!b[24]||b[24]>8)return false;
     const bool indexed=b[0]==8||b[0]==9||b[0]==10;
     const unsigned colors=half(b.data()+10);
@@ -79,6 +96,23 @@ bool inspectNativeTexture(std::span<const u8> b,NativeTexturePlan& out,bool rgb5
     case 9:bh=4;break;
     case 10:bw=bh=4;break;
     default:return false;
+    }
+    if(compact){
+        // Source size first (the scans read every level): formats 5, 8, 9, 14.
+        std::size_t source=0;
+        for(unsigned level=0;level<b[24];++level){
+            const auto lw=std::max(1u,w>>level),lh=std::max(1u,h>>level);
+            source+=((lw+bw-1)/bw)*((lh+bh-1)/bh)*blockBytes;
+        }
+        if(source<=b.size()-offset){
+            if(b[0]==5&&opaqueRgb5a3(b,offset,source)){format=NativeTextureFormat::rgba5551;bpp=2;}
+            else if(b[0]==14){format=opaqueCmpr(b,offset,w,h,b[24])?NativeTextureFormat::rgb565:NativeTextureFormat::rgba5551;bpp=2;}
+            else if((b[0]==8&&colors>=16)||(b[0]==9&&colors>=256)){
+                if(b[9]==0){format=NativeTextureFormat::la8;bpp=2;}
+                else if(b[9]==1){format=NativeTextureFormat::rgb565;bpp=2;}
+                else if(opaquePalette(b,palette,colors)){format=NativeTextureFormat::rgba5551;bpp=2;}
+            }
+        }
     }
     std::size_t bytes=0,output=0;
     if(b[24]>1&&(w!=padded(w)||h!=padded(h)||(w>>(b[24]-1))<8||(h>>(b[24]-1))<8))return false;
@@ -158,16 +192,47 @@ static void decodeInteriorTile(const u8* data,u8* output,const std::array<unsign
             }else{output[m*2]=data[at+1];output[m*2+1]=data[at];}
         }else if constexpr(Format==5){
             const Color c=rgb5a3(half(data+at));
-            output[m*4]=c.a;output[m*4+1]=c.b;output[m*4+2]=c.g;output[m*4+3]=c.r;
+            if constexpr(Rgba565)storeRgba5551(output+m*2,c); // compact: all texels opaque
+            else{output[m*4]=c.a;output[m*4+1]=c.b;output[m*4+2]=c.g;output[m*4+3]=c.r;}
         }else if constexpr(Format==8||Format==9){
             const unsigned index=Format==8?(data[at]>>((m&1)?0:4))&15:data[at];
-            std::memcpy(output+m*4,(*palette)[index].data(),4);
+            if constexpr(Rgba565)std::memcpy(output+m*2,(*palette)[index].data(),2); // compact: 2-byte entries
+            else std::memcpy(output+m*4,(*palette)[index].data(),4);
         }
     }
 }
 template<unsigned Bpp>
 static void copyPaddingTile(const u8* source,u8* target,unsigned mask,unsigned edge){
     for(unsigned m=0;m<64;++m)std::memcpy(target+m*Bpp,source+((m&mask)|edge)*Bpp,Bpp);
+}
+template<NativeTextureFormat Format>
+static void decodeInteriorCmprTile(const u8* tile,u8* target){
+    constexpr unsigned bytesPerTexel=nativeTextureBytesPerPixel(Format);
+    for(unsigned block=0;block<4;++block){
+        const auto* source=tile+block*8;
+        const Palette colors=cmpr(source);
+        std::array<std::array<u8,bytesPerTexel>,4> packed;
+        for(unsigned i=0;i<4;++i){
+            const auto& c=colors[i];
+            if constexpr(Format==NativeTextureFormat::rgb565)storeRgb565(packed[i].data(),c);
+            else if constexpr(Format==NativeTextureFormat::rgba5551)storeRgba5551(packed[i].data(),c);
+            else packed[i]={c.a,c.b,c.g,c.r};
+        }
+        const auto writePair=[&](u8* out,unsigned selectors){
+            std::memcpy(out,packed[(selectors>>2)&3].data(),bytesPerTexel);
+            std::memcpy(out+bytesPerTexel,packed[selectors&3].data(),bytesPerTexel);
+        };
+        // GX orders the four 4x4 blocks like the PICA tile's quadrants.
+        // Within each quadrant, interleave row pairs in Morton order.
+        for(unsigned y=0;y<4;y+=2){
+            const unsigned top=source[4+y],bottom=source[5+y];
+            writePair(target,top>>4);
+            writePair(target+2*bytesPerTexel,bottom>>4);
+            writePair(target+4*bytesPerTexel,top);
+            writePair(target+6*bytesPerTexel,bottom);
+            target+=8*bytesPerTexel;
+        }
+    }
 }
 static bool decodeLevel(std::span<const u8> b,const NativeTexturePlan& p,std::span<u8> output,bool lean){
     const auto* data=b.data()+p.dataOffset;std::size_t destination=0;
@@ -187,6 +252,14 @@ static bool decodeLevel(std::span<const u8> b,const NativeTexturePlan& p,std::sp
         if(p.paletteFormat==0)c={entry[1],entry[1],entry[1],entry[0]};
         else c=p.paletteFormat==1?rgb565(half(entry)):rgb5a3(half(entry));
         palette[n]={c.a,c.b,c.g,c.r};
+        if(bpp==2){
+            // Compact palettes hold the 2-byte PICA texel in the first bytes.
+            u8 t[2];
+            if(p.format==NativeTextureFormat::la8){t[0]=c.a;t[1]=c.r;}
+            else if(p.format==NativeTextureFormat::rgb565)storeRgb565(t,c);
+            else storeRgba5551(t,c);
+            palette[n][0]=t[0];palette[n][1]=t[1];
+        }
     }
     std::array<unsigned,64> offsets{};
     if(mapped)for(unsigned m=0;m<64;++m){
@@ -225,11 +298,19 @@ static bool decodeLevel(std::span<const u8> b,const NativeTexturePlan& p,std::sp
                 if(p.format==NativeTextureFormat::rgba8)decodeInteriorTile<4,true>(tile,target,offsets);
                 else decodeInteriorTile<4>(tile,target,offsets);
                 break;
-            case 5:decodeInteriorTile<5>(tile,target,offsets);break;
+            case 5:if(bpp==2)decodeInteriorTile<5,true>(tile,target,offsets);else decodeInteriorTile<5>(tile,target,offsets);break;
             case 6:decodeInteriorTile<6>(tile,target,offsets);break;
-            case 8:decodeInteriorTile<8>(tile,target,offsets,&palette);break;
-            case 9:decodeInteriorTile<9>(tile,target,offsets,&palette);break;
+            case 8:if(bpp==2)decodeInteriorTile<8,true>(tile,target,offsets,&palette);else decodeInteriorTile<8>(tile,target,offsets,&palette);break;
+            case 9:if(bpp==2)decodeInteriorTile<9,true>(tile,target,offsets,&palette);else decodeInteriorTile<9>(tile,target,offsets,&palette);break;
             }
+            destination+=64*bpp;continue;
+        }
+        if(p.gxFormat==14&&tx+8<=p.width&&ty+8<=p.height){
+            const auto* tile=data+(ty/8*blocksWide+tx/8)*32;
+            auto* target=output.data()+destination;
+            if(p.format==NativeTextureFormat::rgb565)decodeInteriorCmprTile<NativeTextureFormat::rgb565>(tile,target);
+            else if(p.format==NativeTextureFormat::rgba5551)decodeInteriorCmprTile<NativeTextureFormat::rgba5551>(tile,target);
+            else decodeInteriorCmprTile<NativeTextureFormat::rgba8>(tile,target);
             destination+=64*bpp;continue;
         }
         std::array<Palette,4> palettes{};const u8* compressed=nullptr;
@@ -289,6 +370,8 @@ static bool decodeLevel(std::span<const u8> b,const NativeTexturePlan& p,std::sp
             }
             if(p.format==NativeTextureFormat::la4)output[destination++]=(c.r&0xf0)|(c.a>>4);
             else if(p.format==NativeTextureFormat::la8){output[destination++]=c.a;output[destination++]=c.r;}
+            else if(p.format==NativeTextureFormat::rgb565){storeRgb565(output.data()+destination,c);destination+=2;}
+            else if(p.format==NativeTextureFormat::rgba5551){storeRgba5551(output.data()+destination,c);destination+=2;}
             else{output[destination++]=c.a;output[destination++]=c.b;output[destination++]=c.g;output[destination++]=c.r;}
         }
     }
@@ -332,11 +415,178 @@ bool decodeBoxHalf(std::span<const u8> b,const NativeTexturePlan& p,std::span<u8
     }
     std::free(scratch);return ok;
 }
+// Generated levels work on channels with 6 fraction bits (an 8-bit value
+// times 64): a level made from the one above loses nothing to rounding, so
+// every level is the exact box average of its base-level footprint.
+constexpr unsigned unit=64,full=255*unit;
+bool hasAlpha(NativeTextureFormat f){return f!=NativeTextureFormat::rgb565;}
+// The 8-bit RGBA the PICA expands a stored texel to. The generator is made
+// once per storage format: a format test per texel cost more than the sums.
+template<NativeTextureFormat F> std::array<unsigned,4> storedTexel(const u8* t){
+    if constexpr(F==NativeTextureFormat::rgba8)return {t[3],t[2],t[1],t[0]};
+    else if constexpr(F==NativeTextureFormat::la8)return {t[1],t[1],t[1],t[0]};
+    else if constexpr(F==NativeTextureFormat::la4){const unsigned l=t[0]>>4,a=t[0]&15;return {l*17,l*17,l*17,a*17};}
+    else if constexpr(F==NativeTextureFormat::rgb565){const Color c=rgb565(unsigned(t[0])|(unsigned(t[1])<<8));return {c.r,c.g,c.b,255};}
+    else{
+        const unsigned v=unsigned(t[0])|(unsigned(t[1])<<8),r=v>>11,g=(v>>6)&31,b=(v>>1)&31;
+        return {(r<<3)|(r>>2),(g<<3)|(g>>2),(b<<3)|(b>>2),(v&1)?255u:0u};
+    }
+}
+// floor(numerator / denominator) for the integers here (both under 2^53): a
+// double division is exact for them, and the ARM11 has no integer divider.
+inline unsigned quotient(double numerator,double denominator){return unsigned(std::floor(numerator/denominator));}
+// A channel with 6 fraction bits rounded to n bits.
+unsigned toBits(unsigned v,unsigned bits){const unsigned top=(1u<<bits)-1;return (v*top+full/2)/full;}
+template<NativeTextureFormat F> void storeTexel(u8* t,const std::array<unsigned,4>& c,bool opaque){
+    if constexpr(F==NativeTextureFormat::rgba8){t[0]=u8(toBits(c[3],8));t[1]=u8(toBits(c[2],8));t[2]=u8(toBits(c[1],8));t[3]=u8(toBits(c[0],8));}
+    else if constexpr(F==NativeTextureFormat::la8){t[0]=u8(toBits(c[3],8));t[1]=u8(toBits(c[0],8));}
+    else if constexpr(F==NativeTextureFormat::la4)t[0]=u8((toBits(c[0],4)<<4)|toBits(c[3],4));
+    else if constexpr(F==NativeTextureFormat::rgb565)store16(t,(toBits(c[0],5)<<11)|(toBits(c[1],6)<<5)|toBits(c[2],5));
+    else store16(t,(toBits(c[0],5)<<11)|(toBits(c[1],5)<<6)|(toBits(c[2],5)<<1)|(opaque?1u:0u));
+}
+// Which texels of a level pass the alpha test so that `target` of them do:
+// every alpha above `value`, and of those equal to it an ordered-dither share
+// (a 1-texel fence averages to the same alpha everywhere; a threshold alone
+// would keep all of it or none).
+struct PassSet {
+    unsigned value=256,needed=0,ties=1;
+    bool passes(unsigned alpha,unsigned x,unsigned y)const{
+        static constexpr std::uint8_t bayer[4][4]{{0,8,2,10},{12,4,14,6},{3,11,1,9},{15,7,13,5}};
+        return alpha>value||(alpha==value&&(2u*bayer[y&3][x&3]+1)*ties<32u*needed);
+    }
+};
+PassSet passSet(const std::array<unsigned,257>& atLeast,unsigned target){
+    PassSet set;
+    if(!target)return set;
+    unsigned v=255;while(v&&atLeast[v]<target)--v;
+    set.value=v;set.needed=target-atLeast[v+1];set.ties=std::max(1u,atLeast[v]-atLeast[v+1]);
+    return set;
+}
+template<NativeTextureFormat F> bool generateLevelsOf(const NativeTexturePlan& p,std::span<u8> output){
+    constexpr unsigned bpp=nativeTextureBytesPerPixel(F);
+    constexpr bool alpha=F!=NativeTextureFormat::rgb565,oneBit=F==NativeTextureFormat::rgba5551;
+    const unsigned reference=p.mipAlphaReference;
+    unsigned w=p.width/2,h=p.height/2;
+    // The level being made, row-major RGBA with 6 fraction bits; each next
+    // level is made in place (it reads only entries after the ones it writes).
+    auto* level=static_cast<std::uint16_t*>(std::malloc(std::size_t(w)*h*4*sizeof(std::uint16_t)));
+    if(!level)return false;
+    // The base level's coverage: opaque texels (1-bit) or texels passing the
+    // reference (multi-bit), out of all of them.
+    std::uint64_t passing=0;const std::uint64_t baseTexels=std::uint64_t(p.width)*p.height;
+    // The base level in its stored order: in a PICA tile (Morton order) every
+    // four consecutive texels are one 2x2 block, and the sixteen blocks of a
+    // tile are a 4x4 square of the next level.
+    const unsigned tilesWide=p.paddedWidth/8;
+    for(unsigned tile=0;tile<tilesWide*(p.paddedHeight/8);++tile){
+        const u8* stored=output.data()+std::size_t(tile)*64*bpp;
+        const unsigned tx=tile%tilesWide,ty=tile/tilesWide;
+        for(unsigned g=0;g<16;++g){
+            const unsigned x=tx*4+(g&1)+((g>>1)&2),y=ty*4+((g>>1)&1)+((g>>2)&2);
+            std::array<std::array<unsigned,4>,4> t;
+            for(unsigned n=0;n<4;++n){
+                t[n]=storedTexel<F>(stored+(4*g+n)*bpp);
+                passing+=oneBit?t[n][3]>=128:reference&&t[n][3]>=reference;
+            }
+            unsigned weight=0;for(const auto& c:t)weight+=alpha?c[3]:255;
+            auto* out=level+(std::size_t(y)*w+x)*4;
+            for(unsigned c=0;c<3;++c){
+                unsigned sum=0;
+                for(const auto& texel:t)sum+=texel[c]*(alpha&&weight?texel[3]:1);
+                out[c]=std::uint16_t(alpha&&weight?quotient(double(sum)*unit+weight/2,weight):(sum*unit+2)/4);
+            }
+            out[3]=std::uint16_t(((t[0][3]+t[1][3]+t[2][3]+t[3][3])*unit+2)/4);
+        }
+    }
+    std::size_t at=std::size_t(p.paddedWidth)*p.paddedHeight*bpp;
+    for(unsigned n=1;n<p.mipCount;++n){
+        if(n>1){
+            // From the previous level in the scratch: the same averages.
+            const unsigned pw=w;w/=2;h/=2;
+            for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x){
+                const std::uint16_t* q[4]={level+(std::size_t(2*y)*pw+2*x)*4,level+(std::size_t(2*y)*pw+2*x+1)*4,
+                                           level+(std::size_t(2*y+1)*pw+2*x)*4,level+(std::size_t(2*y+1)*pw+2*x+1)*4};
+                const std::uint64_t weight=alpha?std::uint64_t(q[0][3])+q[1][3]+q[2][3]+q[3][3]:0;
+                std::array<std::uint16_t,4> made;
+                for(unsigned c=0;c<3;++c){
+                    if(alpha&&weight){std::uint64_t sum=0;for(auto* v:q)sum+=std::uint64_t(v[c])*v[3];made[c]=std::uint16_t(quotient(double(sum+weight/2),double(weight)));}
+                    else made[c]=std::uint16_t((unsigned(q[0][c])+q[1][c]+q[2][c]+q[3][c]+2)/4);
+                }
+                made[3]=std::uint16_t((unsigned(q[0][3])+q[1][3]+q[2][3]+q[3][3]+2)/4);
+                std::memcpy(level+(std::size_t(y)*w+x)*4,made.data(),sizeof made);
+            }
+        }
+        const std::size_t texels=std::size_t(w)*h;
+        // Alpha that keeps the base level's coverage (texture_gx.hpp): the
+        // texels that pass are chosen to match it, and multi-bit alpha is
+        // scaled so that the boundary value lands on the reference (the
+        // gradients bilinear filtering reads stay as they were).
+        const bool coverage=alpha&&(oneBit||reference);
+        PassSet pass;std::uint64_t scale=unit; // alpha x scale / unit
+        if(coverage){
+            std::array<unsigned,257> atLeast{};
+            for(std::size_t i=0;i<texels;++i)++atLeast[toBits(level[i*4+3],8)];
+            for(int v=255;v>=0;--v)atLeast[v]+=atLeast[v+1];
+            pass=passSet(atLeast,unsigned((passing*texels+baseTexels/2)/baseTexels));
+            if(!oneBit&&pass.value<=255)scale=pass.value?(std::uint64_t(reference)*unit+pass.value/2)/pass.value:255*unit;
+        }
+        if(output.size()<at+texels*bpp){std::free(level);return false;}
+        for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x){
+            std::array<unsigned,4> c;const auto* v=level+(std::size_t(y)*w+x)*4;
+            for(unsigned k=0;k<4;++k)c[k]=v[k];
+            const bool passes=coverage&&pass.passes(toBits(c[3],8),x,y);
+            if(coverage&&!oneBit){
+                const unsigned scaled=unsigned(std::min<std::uint64_t>(full,(std::uint64_t(c[3])*scale+unit/2)/unit));
+                c[3]=passes?std::max(scaled,reference*unit):std::min(scaled,(reference-1)*unit);
+            }
+            storeTexel<F>(output.data()+at+picaTexel(x,y,w)*bpp,c,passes);
+        }
+        at+=texels*bpp;
+    }
+    std::free(level);
+    return at==p.outputBytes;
+}
+bool generateLevels(const NativeTexturePlan& p,std::span<u8> output){
+    switch(p.format){
+    case NativeTextureFormat::rgba8:return generateLevelsOf<NativeTextureFormat::rgba8>(p,output);
+    case NativeTextureFormat::la8:return generateLevelsOf<NativeTextureFormat::la8>(p,output);
+    case NativeTextureFormat::la4:return generateLevelsOf<NativeTextureFormat::la4>(p,output);
+    case NativeTextureFormat::rgb565:return generateLevelsOf<NativeTextureFormat::rgb565>(p,output);
+    case NativeTextureFormat::rgba5551:return generateLevelsOf<NativeTextureFormat::rgba5551>(p,output);
+    }
+    return false;
+}
+}
+unsigned nativeTextureChainLevels(const NativeTexturePlan& p){
+    if(p.sourceMip||p.originalMipCount!=1||p.mipCount!=1||p.width!=p.paddedWidth||p.height!=p.paddedHeight)return 1;
+    unsigned levels=1;
+    for(unsigned w=p.width,h=p.height;w>=16&&h>=16&&levels<8;w/=2,h/=2)++levels;
+    return levels;
+}
+std::size_t nativeTextureGeneratedBytes(const NativeTexturePlan& p){
+    if(!nativeTextureGeneratedMips(p))return 0;
+    return p.outputBytes-std::size_t(p.paddedWidth)*p.paddedHeight*nativeTextureBytesPerPixel(p.format);
+}
+bool planGeneratedMips(NativeTexturePlan& p,std::uint8_t alphaReference){
+    const unsigned levels=nativeTextureChainLevels(p);
+    if(levels<2)return false;
+    std::size_t extra=0;
+    for(unsigned n=1;n<levels;++n)extra+=std::size_t(p.width>>n)*(p.height>>n)*nativeTextureBytesPerPixel(p.format);
+    p.mipCount=std::uint8_t(levels);p.outputBytes+=extra;p.mipAlphaReference=hasAlpha(p.format)?alphaReference:0;
+    return true;
 }
 bool decodeNativeTexture(std::span<const u8> b,const NativeTexturePlan& p,std::span<u8> output,bool leanPadding){
     if(p.sourceMip==2)return decodeBoxHalf(b,p,output);
+    if(nativeTextureGeneratedMips(p)){
+        // The base level exactly as without levels, then the levels after it.
+        auto base=p;base.mipCount=p.originalMipCount;base.mipAlphaReference=0;
+        base.outputBytes=std::size_t(p.paddedWidth)*p.paddedHeight*nativeTextureBytesPerPixel(p.format);
+        auto check=base;
+        if(!planGeneratedMips(check,p.mipAlphaReference)||check!=p||output.size()<p.outputBytes)return false;
+        return decodeNativeTexture(b,base,output.first(base.outputBytes),leanPadding)&&generateLevels(p,output.first(p.outputBytes));
+    }
     NativeTexturePlan checked;
-    if(!inspectNativeTexture(b,checked,p.gxFormat==4&&p.format==NativeTextureFormat::rgba8,p.sourceMip==1)||p!=checked||output.size()<p.outputBytes)return false;
+    if(!inspectNativeTexture(b,checked,p.gxFormat==4&&p.format==NativeTextureFormat::rgba8,p.sourceMip==1,nativeTexturePlanCompact(p))||p!=checked||output.size()<p.outputBytes)return false;
     const auto in=reinterpret_cast<std::uintptr_t>(b.data()),out=reinterpret_cast<std::uintptr_t>(output.data());
     if((out>=in&&out-in<b.size())||(in>=out&&in-out<p.outputBytes))return false;
     unsigned bw=8,bh=8,blockBytes=32,bpp=nativeTextureBytesPerPixel(p.format);

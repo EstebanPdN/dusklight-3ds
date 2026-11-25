@@ -1,6 +1,7 @@
 #include "gx_framebuffer.hpp"
 #include "../gx_pica.hpp"
 #include "gx_stream.hpp"
+#include "gx_worker_sync.hpp"
 #include <dolphin/gx/GXAurora.h>
 #include <dolphin/gx/GXCpu2Efb.h>
 #include <dolphin/os.h>
@@ -11,7 +12,9 @@
 #endif
 namespace {
 using dusk::native::gx::CommandStream;
-CommandStream& finish(const char* name){if(!dusk::native::alphaIntervalCopySafe())OSPanic(__FILE__,__LINE__,"Alpha interval unsafe framebuffer boundary: %s",name);auto* stream=dusk::native::gx::commandStream();if(!stream||!stream->finish())OSPanic(__FILE__,__LINE__,"Native framebuffer command boundary: %s",name);return *stream;}
+// Every entry point below starts here: what is queued for the second-core
+// worker was issued for the target and the pixels as they are now.
+CommandStream& finish(const char* name){dusk::native::syncGxWorker();if(!dusk::native::alphaIntervalCopySafe())OSPanic(__FILE__,__LINE__,"Alpha interval unsafe framebuffer boundary: %s",name);auto* stream=dusk::native::gx::commandStream();if(!stream||!stream->finish())OSPanic(__FILE__,__LINE__,"Native framebuffer command boundary: %s",name);return *stream;}
 void check(bool okay,const char* name){if(!okay)OSPanic(__FILE__,__LINE__,"Native framebuffer lifecycle: %s",name);}
 struct RasterState {
     std::array<u32,6> viewport{};

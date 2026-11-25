@@ -88,9 +88,15 @@ static void publishNativeSceneCamera(const Mtx44 projection, const view_port_cla
 #include "../../platforms/3ds/runtime/screen_effects.hpp"
 #include "helpers/native_effects.h"
 #include "../../platforms/3ds/runtime/gx_profile.hpp"
+#include "../../platforms/3ds/runtime/hud_tape.hpp"
+#include "../../platforms/3ds/runtime/gpu_sync.hpp"
 #undef GX_DEBUG_GROUP
+// Each painter call is a CPU profile scope and, with gpu-phases.txt, the
+// start of a GPU phase (gpu_sync.hpp markGpuPhase; one test when off).
 #define GX_DEBUG_GROUP(name, ...) do { \
     static const unsigned profileIndex=dusk::native::registerGxNamedProfile(#name); \
+    static const unsigned gpuPhase=dusk::native::gpuPhaseForPainterCall(#name); \
+    dusk::native::markGpuPhase(gpuPhase); \
     dusk::native::GxNamedProfileScope profile(profileIndex); name(__VA_ARGS__); \
 } while(0)
 #endif
@@ -2457,6 +2463,11 @@ int mDoGph_Painter() {
                 dKy_setLight_again();
             }
 #endif
+#if defined(DUSK_TARGET_3DS)
+            // From the sky to the translucent lists: draws that are not J3D
+            // shapes may go to the second-core worker too (gx_worker.hpp).
+            duskNativeDeferRuns(1);
+#endif
             GX_DEBUG_GROUP(dComIfGd_drawOpaListSky);
             GX_DEBUG_GROUP(dComIfGd_drawXluListSky);
 
@@ -2567,6 +2578,12 @@ int mDoGph_Painter() {
             } else {
                 GX_DEBUG_GROUP(dComIfGd_drawXluListDark);
             }
+#if defined(DUSK_TARGET_3DS)
+            // The end of the 3D lists: with late runs the 3D passes behind
+            // them (projection and screen particles, filters) may still go to
+            // the worker; the call before the bloom ends that.
+            duskNativeDeferRuns(2);
+#endif
 
             #if DEBUG
             // "drawing up to Object (Translucent)"
@@ -2777,6 +2794,9 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
+#if defined(DUSK_TARGET_3DS)
+                duskNativeDeferRuns(0);
+#endif
                 GX_DEBUG_GROUP(mDoGph_gInf_c::getBloom()->draw);
                 j3dSys.setViewMtx(camera_p->view.viewMtx);
                 GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
@@ -2837,6 +2857,10 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::stopCpuTimer("カラーフェード描画（レンダリング）");
                 #endif
             }
+#if defined(DUSK_TARGET_3DS)
+            // Paused: the late runs end here (before any 2D pass).
+            duskNativeDeferRuns(0);
+#endif
         }
     }
 
@@ -2934,7 +2958,20 @@ int mDoGph_Painter() {
         captureScreenSetPort();
         #endif
 
+#if defined(DUSK_TARGET_3DS)
+        // HUD tape (platforms/3ds/runtime/hud_tape.hpp): in the pictures
+        // between two recordings the PICA commands of the last recorded pass
+        // are run again and the list is not walked.
+        {
+            static const unsigned tapeProfile=dusk::native::registerGxNamedProfile("hud.tape");
+            int hudTape;
+            {dusk::native::GxNamedProfileScope profile(tapeProfile);hudTape=duskHudTapeBegin();}
+            if(hudTape!=2){GX_DEBUG_GROUP(dComIfGd_draw2DOpaTop);}
+            if(hudTape==1){dusk::native::GxNamedProfileScope profile(tapeProfile);duskHudTapeEnd();}
+        }
+#else
         GX_DEBUG_GROUP(dComIfGd_draw2DOpaTop);
+#endif
         GX_DEBUG_GROUP(dComIfGd_draw2DXlu);
 
         if (dComIfGp_isPauseFlag()) {

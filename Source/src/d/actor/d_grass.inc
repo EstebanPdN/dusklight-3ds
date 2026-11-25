@@ -735,6 +735,9 @@ static void blade_emit(const batch::LeafTemplate& tpl, const Vec* xformedPos,
 void dGrass_packet_c::draw() {
 #if !defined(DUSK_TARGET_3DS)
     ZoneScoped;
+#else
+    // l_pos, l_normal, l_color and l_texCoord are converted once at start and only read here.
+    const dusk::native_effects::StableArrays stableArrays;
 #endif
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
 
@@ -988,6 +991,9 @@ void dGrass_packet_c::draw() {
 void dGrass_packet_c::draw() {
 #if !defined(DUSK_TARGET_3DS)
     ZoneScoped;
+#else
+    // l_pos, l_normal, l_color and l_texCoord are converted once at start and only read here.
+    const dusk::native_effects::StableArrays stableArrays;
 #endif
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
     cXyz spB4;

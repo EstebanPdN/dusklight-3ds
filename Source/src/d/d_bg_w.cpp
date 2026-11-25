@@ -3,6 +3,7 @@
  * DZB Collision handling
  */
 
+#include <cstring>
 #include "d/dolzel.h" // IWYU pragma: keep
 
 #include "d/d_bg_w.h"
@@ -11,6 +12,7 @@
 #include "SSystem/SComponent/c_math.h"
 #include "d/d_bg_s_capt_poly.h"
 #include "d/d_bg_s_sph_chk.h"
+#include "d/d_tick_profile.h"
 #include "d/d_com_inf_game.h"
 #include "d/actor/d_a_horse.h"
 
@@ -81,6 +83,7 @@ cBgW::~cBgW() {
 }
 
 void cBgW::FreeArea() {
+    DUSK_BG_NOTE(this, "FreeArea");
     pm_tri = NULL;
     pm_rwg = NULL;
     pm_node_tree = NULL;
@@ -90,6 +93,7 @@ void cBgW::FreeArea() {
 }
 
 void cBgW::GlobalVtx() {
+    DUSK_BG_NOTE(this, "GlobalVtx");
     if (pm_base != NULL) {
         if (!mNeedsFullTransform) {
             for (int i = 0; i < pm_bgd->m_v_num; i++) {
@@ -409,6 +413,7 @@ bool cBgW::ChkMemoryError() {
 }
 
 bool cBgW::Set(cBgD_t* pbgd, u32 flags, Mtx* pbase_mtx) {
+    DUSK_BG_NOTE(this, "Set");
     #if DEBUG
     ASSERT_SOLDHEAP();
     #endif
@@ -600,6 +605,7 @@ bool cBgW::LineCheckGrpRp(cBgS_LinChk* plinchk, int g, int depth) {
 }
 
 bool cBgW::LineCheck(cBgS_LinChk* plinchk) {
+    DUSK_TICK_PROFILE_INNER(tick_profile, "bg.dzb.line");
     return LineCheckGrpRp(plinchk, m_rootGrpIdx, 1);
 }
 
@@ -743,17 +749,29 @@ bool cBgW::GroundCrossGrpRp(cBgS_GndChk* pgndchk, int g, int depth) {
 }
 
 bool cBgW::GroundCross(cBgS_GndChk* pgndchk) {
+    DUSK_TICK_PROFILE_INNER(tick_profile, "bg.dzb.gnd");
     return GroundCrossGrpRp(pgndchk, m_rootGrpIdx, 1);
 }
 
 void cBgW::CopyOldMtx() {
     if (pm_base != NULL) {
+#if defined(DUSK_TARGET_3DS)
+        // Both matrices are read by the moving-BG corrections: a note only when
+        // one of them takes a different value.
+        if (std::memcmp(m_mtx, m_inv_mtx, sizeof(Mtx)) != 0 ||
+            std::memcmp(*pm_base, m_mtx, sizeof(Mtx)) != 0)
+        {
+            DUSK_BG_NOTE(this, "CopyOldMtx");
+        }
+#endif
         PSMTXCopy(m_mtx, m_inv_mtx);
         PSMTXCopy(*pm_base, m_mtx);
     }
 }
 
 void cBgW::Move() {
+    // Native New 3DS (crrskip): Move notes through what it changes:
+    // GlobalVtx (vertices), CopyOldMtx (matrices) and the early return below.
     if (!ChkLock() && (mFlags & MOVE_BG_e)) {
         if (!ChkNoCalcVtx()) {
             if (mMoveCounter >= 0xFF || m_mtx[0][0] != (*pm_base)[0][0] ||
@@ -766,6 +784,11 @@ void cBgW::Move() {
             } else if (m_mtx[0][3] == (*pm_base)[0][3] && m_mtx[1][3] == (*pm_base)[1][3] &&
                        m_mtx[2][3] == (*pm_base)[2][3])
             {
+#if defined(DUSK_TARGET_3DS)
+                if (std::memcmp(*pm_base, m_inv_mtx, sizeof(Mtx)) != 0) {
+                    DUSK_BG_NOTE(this, "Move(same matrix)");
+                }
+#endif
                 PSMTXCopy(*pm_base, m_inv_mtx);
                 if (!ChkFlush()) {
                     return;
@@ -1535,6 +1558,7 @@ bool dBgW::WallCorrectGrpRp(dBgS_Acch* pwi, int g, int depth) {
 }
 
 bool dBgW::WallCorrect(dBgS_Acch* pwi) {
+    DUSK_TICK_PROFILE_INNER(tick_profile, "bg.dzb.wall");
     return WallCorrectGrpRp(pwi, m_rootGrpIdx, 1);
 }
 
@@ -1711,6 +1735,7 @@ bool dBgW::WallCorrectGrpRpSort(dBgS_Acch* pwi, int g, int depth) {
 }
 
 bool dBgW::WallCorrectSort(dBgS_Acch* pwi) {
+    DUSK_TICK_PROFILE_INNER(tick_profile, "bg.dzb.wallSort");
     l_start = NULL;
     l_wcsbuf_num = 0;
 
@@ -2024,6 +2049,7 @@ bool dBgW::RoofChkGrpRp(dBgS_RoofChk* proofchk, int g, int depth) {
 }
 
 bool dBgW::RoofChk(dBgS_RoofChk* proofchk) {
+    DUSK_TICK_PROFILE_INNER(tick_profile, "bg.dzb.roof");
     return RoofChkGrpRp(proofchk, m_rootGrpIdx, 1);
 }
 
@@ -2132,6 +2158,7 @@ bool dBgW::SplGrpChkGrpRp(dBgS_SplGrpChk* psplchk, int g, int depth) {
 }
 
 bool dBgW::SplGrpChk(dBgS_SplGrpChk* psplchk) {
+    DUSK_TICK_PROFILE_INNER(tick_profile, "bg.dzb.spl");
     return SplGrpChkGrpRp(psplchk, m_rootGrpIdx, 1);
 }
 
@@ -2308,6 +2335,7 @@ bool dBgW::SphChkGrpRp(dBgS_SphChk* psphchk, void* i_data, int node_index, int d
 }
 
 bool dBgW::SphChk(dBgS_SphChk* psphchk, void* i_data) {
+    DUSK_TICK_PROFILE_INNER(tick_profile, "bg.dzb.sph");
     return SphChkGrpRp(psphchk, i_data, m_rootGrpIdx, 1);
 }
 

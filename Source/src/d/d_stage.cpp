@@ -34,6 +34,12 @@
 #include <fmt/ranges.h>
 #endif
 
+#if defined(DUSK_TARGET_3DS)
+// Scene change log (Source/platforms/3ds/runtime/game_startup.cpp).
+extern "C" int duskNativeSceneExit;
+extern "C" const void* duskNativeSceneCaller;
+#endif
+
 void dStage_nextStage_c::set(const char* i_stage, s8 i_roomId, s16 i_point, s8 i_layer, s8 i_wipe,
                              u8 i_speed) {
     if (!enabled) {
@@ -3030,6 +3036,13 @@ int dStage_RoomCheck(cBgS_GndChk* gndChk) {
 
 int dStage_changeSceneExitId(cBgS_PolyInfo& param_0, f32 speed, u32 mode, s8 roomNo, s16 angle) {
     s32 exit_id = dComIfG_Bgsp().GetExitId(param_0);
+#if defined(DUSK_TARGET_3DS)
+    // Scene change log: the exit polygon and the actor that stepped on it.
+    if (!duskNativeSceneCaller) {
+        duskNativeSceneExit = exit_id;
+        duskNativeSceneCaller = __builtin_return_address(0);
+    }
+#endif
     return dStage_changeScene(exit_id, speed, mode, roomNo, angle, -1);
 }
 
@@ -3068,6 +3081,13 @@ int dStage_changeScene(int i_exitId, f32 speed, u32 mode, s8 room_no, s16 angle,
         dKy_set_nexttime(15.0f * timeH);
     }
 
+#if defined(DUSK_TARGET_3DS)
+    // Scene change log: this exit and the code that took it.
+    if (!duskNativeSceneCaller) {
+        duskNativeSceneExit = i_exitId;
+        duskNativeSceneCaller = __builtin_return_address(0);
+    }
+#endif
     dComIfGp_setNextStage(scls_info->mStage, scls_info->mStart, (s8)scls_info->mRoom, (s8)layer,
                           speed, mode, 1, wipe == 15 ? 0 : wipe, angle, 1, wipe_time);
     return 1;
@@ -3117,6 +3137,13 @@ int dStage_changeScene4Event(int i_exitId, s8 room_no, int i_wipe, bool param_3,
         dKy_set_nexttime(15.0f * timeH);
     }
 
+#if defined(DUSK_TARGET_3DS)
+    // Scene change log: this exit and the event code that took it.
+    if (!duskNativeSceneCaller) {
+        duskNativeSceneExit = i_exitId;
+        duskNativeSceneCaller = __builtin_return_address(0);
+    }
+#endif
     dComIfGp_setNextStage(scls_info->mStage, scls_info->mStart, (s8)scls_info->mRoom, layer,
                           speed, mode, 1, wipe == 15 ? 0 : wipe, angle, param_3 ? 1 : 0,
                           wipe_time);

@@ -5,6 +5,10 @@
 #define PROCS_DUMP_NAMES 1
 
 #include "f_pc/f_pc_base.h"
+#if defined(DUSK_TARGET_3DS)
+#include "../../platforms/3ds/runtime/tour_load_cost.hpp"
+#include "../../platforms/3ds/runtime/gx_profile.hpp"
+#endif
 #include "SSystem/SComponent/c_malloc.h"
 #include "SSystem/SComponent/c_phase.h"
 #include "SSystem/SStandard/s_basic.h"
@@ -181,7 +185,21 @@ base_process_class* fpcBs_Create(s16 i_profname, fpc_ProcID i_procID, void* i_ap
 }
 
 int fpcBs_SubCreate(base_process_class* i_proc) {
-    switch (fpcMtd_Create(i_proc->methods, i_proc)) {
+#if defined(DUSK_TARGET_3DS)
+    const auto start = dusk::native::measureTourLoads ? dusk::native::gxProfileTick() : 0;
+#endif
+    const auto result = fpcMtd_Create(i_proc->methods, i_proc);
+#if defined(DUSK_TARGET_3DS)
+    if (start) {
+        const auto elapsed = dusk::native::gxProfileTick() - start;
+        auto& cost = dusk::native::tourLoadCost;
+        if (elapsed > cost.longestCreateTicks) {
+            cost.longestCreateTicks = elapsed;
+            cost.process = i_proc->profname;
+        }
+    }
+#endif
+    switch (result) {
     case cPhs_NEXT_e:
     case cPhs_COMPLEATE_e:
         fpcBs_DeleteAppend(i_proc);

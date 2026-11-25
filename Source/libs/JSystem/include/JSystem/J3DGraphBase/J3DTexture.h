@@ -60,6 +60,11 @@ public:
             mpTlutDataPtr[i] = (u8*)(&mpRes[i]) + mpRes[i].paletteOffset;
             loadGXTexObj(i);
 #if defined(DUSK_TARGET_3DS)
+            // This storage was just allocated. An owner record at the same
+            // address belongs to a texture whose heap was freed without its
+            // destructor (Link's item heap is a solid heap reset with
+            // freeAll); keeping it would bind the previous item's image.
+            releaseNativeTexture(i);
             if (mpRes[i].imageOffset != 0) retainNativeTexture(i, mpRes[i]);
 #endif
         }

@@ -30,6 +30,7 @@ Source/
   docs/                      original upstream documentation
 Tools/
   3ds/                       build helpers, tests, data and diagnostic tools
+  converter/                 desktop converter (disc image -> zelda.twilight)
 assets/
   images/                    supplied project wordmark and icon
   3ds/                       small icon and banner packaging inputs

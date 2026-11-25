@@ -10,12 +10,15 @@
 #include "../runtime/gx_indirect.hpp"
 #include "../runtime/gx_early_alpha.hpp"
 #include "../runtime/gx_clip_geometry.hpp"
+#include "../runtime/gx_compact_cache.hpp"
+#include "../runtime/gx_framebuffer.hpp"
 #include "gx_rigid_reference.hpp"
 #include <dolphin/gd.h>
 #include <dolphin/gx.h>
 #include <dolphin/os.h>
 #include <cassert>
 #include <bit>
+#include <cstddef>
 #include <cmath>
 #include <chrono>
 #include <cstdio>
@@ -52,18 +55,84 @@ bool fogMode;
 bool fogPrimary;
 bool constantFogTest;
 bool redFogTest;
+bool standInFogTest;
 bool relaxedAlphaTest;
 std::vector<GpuVertex> expandedVertices;
 std::vector<u16> expandedIndices;
 std::array<TextureHandle,3> protectedTextures{};
+// Immediate record parity (end of main): what each rigid submission sent,
+// as the multi-texture upload sees it (rows below the palette end and from
+// paletteLimit up, light loop, matrices) plus the 32-byte vertex records.
+struct RigidCapture {
+    std::vector<std::array<float,4>> rows;unsigned lights{},matrices{};
+    std::vector<std::byte> records;std::vector<u16> indices;
+    RasterPlan raster;PicaMaterialPlan material;
+};
+std::vector<RigidCapture>* rigidCaptures;
+RigidCapture captureRows(const RasterPlan& r,const PicaMaterialPlan& m,const RigidVertexPlan& p){
+    RigidCapture c;const unsigned count=p.uniformCount();
+    for(unsigned n=0;n<count;++n)c.rows.push_back(p.uniforms[n]);
+    for(unsigned n=std::max(count,p.paletteLimit());n<94;++n)c.rows.push_back(p.uniforms[n]);
+    c.lights=p.lights;c.matrices=p.matrices;c.raster=r;c.material=m;
+    return c;
 }
+// Material plans compared member by member: `lowering` follows a padding
+// byte whose value is indeterminate.
+bool sameMaterialPlan(const PicaMaterialPlan& a,const PicaMaterialPlan& b){
+    return a.lowering==b.lowering&&!std::memcmp(&a,&b,offsetof(PicaMaterialPlan,rasterCarrier)+sizeof(RasterCarrier));
+}
+// Native shape replay check (end of main): resident indices in host memory
+// and every submitNativeRigid call as the multi-texture upload sees it.
+bool nativeReplayFixture;
+std::vector<std::vector<std::uint16_t>> residentIndices;
+struct NativeCapture {RigidCapture rows;const void* vertices{};const std::uint16_t* indices{};unsigned indexCount{};bool chained{};};
+std::vector<NativeCapture>* nativeCaptures;
+}
+extern "C" void duskNativeStaticGeometry(std::uint32_t generation,const void* list);
+extern "C" bool duskNativeDrawShape(std::uint32_t generation,const void* list,std::uint32_t size);
+// The model shadow pass belongs to the renderer (gx_pica.cpp): no caster here.
+extern "C" void duskNativeShadowCaster(unsigned){}
 // Texture-command diagnostics report through the game log on the console.
 extern "C" void OSReport(const char*,...){}
 namespace dusk::native {
 std::uint64_t gxProfileTick(){return std::chrono::steady_clock::now().time_since_epoch().count();}
-std::uint32_t residentIndexEpoch(){assert(false&&"resident replay is outside this adapter fixture");return 0;}
-std::uint16_t* allocateResidentIndices(const std::uint16_t*,unsigned){assert(false&&"resident replay is outside this adapter fixture");return nullptr;}
-bool submitNativeRigid(const RasterPlan&,const PicaMaterialPlan&,const RigidVertexPlan&,const void*,const std::uint16_t*,unsigned,bool){assert(false&&"resident replay is outside this adapter fixture");return false;}
+std::uint32_t residentIndexEpoch(){assert(nativeReplayFixture&&"resident replay is outside this adapter fixture");return 7;}
+unsigned gxShadowCasterSlot(){return 0;}
+void setGxShadowCasterSlot(unsigned){}
+void runGxShadowCasterJob(const void*,std::size_t){}
+void runGxCopyTexJob(const void*,std::size_t,const gx::CommandRegisters&){}
+void runGxBloomJob(const void*,std::size_t){}
+void runHudTapeJob(const void*,std::size_t){} // hud_tape_ctru.cpp: no HUD tape in this fixture
+void runScreenTapeJob(const void*,std::size_t){} // screen_tape_ctru.cpp: no retained screens in this fixture
+void runGxShadowArmJob(){}
+void invalidateGxTextures(){}
+// duskNativeGameDrawBegin/End (gx_command_draw.cpp, the DUSK_PICA_GAME_DRAW
+// model dispatch) are never called here. Weak: a runner that compiles
+// gx_pica.cpp (test_alpha_interval) links its own definitions.
+[[gnu::weak]] FramebufferHandle activeFramebuffer(){return nullptr;}
+[[gnu::weak]] bool alphaIntervalCopySafe(){return true;}
+[[gnu::weak]] void invalidatePicaCommandState(){}
+std::uint16_t* allocateResidentIndices(const std::uint16_t* indices,unsigned count){
+    assert(nativeReplayFixture&&"resident replay is outside this adapter fixture");
+    residentIndices.emplace_back(indices,indices+count);return residentIndices.back().data();
+}
+bool submitNativeRigid(const RasterPlan& r,const PicaMaterialPlan& m,const RigidVertexPlan& p,const void* vertices,const std::uint16_t* indices,unsigned count,unsigned,bool chained,
+                       const NativeRigidLevels* levels){
+    assert(nativeReplayFixture&&nativeCaptures&&"resident replay is outside this adapter fixture");
+    // No levels of detail here (runtime/model_lod.hpp): the record's own list only.
+    assert(!levels);
+    assert(p.multiTexture&&p.compact&&p.staticVertices==vertices&&vertices&&indices&&count&&p.lights&&p.matrices);
+    nativeCaptures->push_back({captureRows(r,m,p),vertices,indices,count,chained});
+    return true;
+}
+// Native PICA blocks stay off here (no SD switch on the host): nothing is
+// ever captured or replayed from a block.
+void requestPicaBlockCapture(){}
+void cancelPicaBlockCapture(){}
+bool takePicaBlockCapture(PicaBlockCapture&){return false;}
+bool submitPicaBlock(const std::uint32_t*,unsigned,bool,const RigidVertexPlan&,const void*,const std::uint16_t*,unsigned,unsigned){
+    assert(!"PICA blocks are off in this adapter fixture");return false;
+}
 GxTextureDrawScope::GxTextureDrawScope(std::span<const gx::Texture> textures):active(!scopeFailure){
     assert((textures.size()<=3&&protectedTextures==std::array<TextureHandle,3>{}));
     for(unsigned n=0;n<textures.size();++n)protectedTextures[n]=textures[n].handle;
@@ -78,7 +147,10 @@ const char* gxTextureFailure(){return textureFailureReason;}
 // Per-pixel projection switch of an already bound unit 0; the host model has
 // no texture unit state to change.
 bool setGxTextureProjection(bool){return true;}
-bool bindGxTexture(const Texture& texture,float& u,float& v,unsigned unit,bool projective){
+// worldMips: the use each bind received, by unit (native replay fixture).
+std::vector<std::pair<unsigned,bool>>* worldUses;
+bool bindGxTexture(const Texture& texture,float& u,float& v,unsigned unit,bool projective,GxWorldMipUse use){
+    if(worldUses)worldUses->push_back({unit,use.world});
     assert(!projective||unit==0);
     assert(texture.handle&&unit<3&&protectedTextures[unit]==texture.handle);++binds;u=1;v=.5;
     if(carrierMode){carrierTextures[unit]=texture;if(unit==carrierFailBind)return false;if(carrierInvalidScale)u=std::numeric_limits<float>::quiet_NaN();}
@@ -86,9 +158,25 @@ bool bindGxTexture(const Texture& texture,float& u,float& v,unsigned unit,bool p
 }
 // The host has no stencil target: triangle fog keeps the CPU pair form.
 bool picaRigidTriangleFogAvailable(){return false;}
+// Alpha-union layers stay on the CPU vertex path here (the pair form these
+// tests check); the predicate is tested with gx_pica.cpp (gx_alpha_interval_test).
+bool picaAlphaUnionGpu(const RasterPlan&){return false;}
 bool submitGxRigidFogGeometry(const RasterPlan&,const PicaMaterialPlan&,const RasterPlan&,const PicaMaterialPlan&,
     const GpuGeometryBatch&,const RigidVertexPlan&,const RigidVertexPlan&){assert(false);return false;}
-bool submitGxRigidGeometry(const RasterPlan&,const PicaMaterialPlan&,const GpuGeometryBatch& b,const RigidVertexPlan& p){
+bool submitGxRigidGeometry(const RasterPlan& r,const PicaMaterialPlan& m,const GpuGeometryBatch& b,const RigidVertexPlan& p){
+    if(rigidCaptures){
+        // Resident static vertices (native replay check): the arena keeps
+        // only the indices and three placeholder records.
+        assert(arena.owns(b)&&p.multiTexture&&p.compact&&(p.staticVertices?nativeReplayFixture:validateCompactRigidGeometry(b)));
+        RigidCapture c=captureRows(r,m,p);
+        if(!p.staticVertices){
+            const auto bytes=std::as_bytes(b.vertices).first(b.vertices.size()*sizeof(CompactRigidVertexMT));
+            c.records.assign(bytes.begin(),bytes.end());
+        }
+        c.indices.assign(b.indices.begin(),b.indices.end());
+        rigidCaptures->push_back(std::move(c));
+        return arena.commit(b);
+    }
     assert(rigidTestMode&&arena.owns(b)&&(p.compact?validateCompactRigidGeometry(b):validateGpuGeometry(b))&&rigidExpected.size()==b.vertices.size());
     if(p.compact)++compactSubmissions;
     assert(p.uniformCount()<=94&&p.matrices<=10);
@@ -114,6 +202,10 @@ bool submitGxTriangleFogGeometry(const RasterPlan& r,const PicaMaterialPlan& mat
     for(auto index:b.indices)assert(index<half);
     return arena.commit(b);
 }
+bool submitGxAdditiveTextureGeometry(const RasterPlan&,const PicaMaterialPlan&,const RasterPlan&,
+    const PicaMaterialPlan*,const PicaMaterialPlan&,const Texture&,const Texture&,const GpuGeometryBatch&,bool){
+    assert(false);return false;
+}
 bool submitGxCommandGeometry(const RasterPlan& r,const PicaMaterialPlan& material,const GpuGeometryBatch& b){
     assert(arena.owns(b)&&validateGpuGeometry(b));
     if(signedQTestMode){
@@ -132,6 +224,11 @@ bool submitGxCommandGeometry(const RasterPlan& r,const PicaMaterialPlan& materia
         ++submissions;const bool committed=arena.commit(b);return committed&&!gpuCommittedFailure;
     }
     if(rigidTestMode){rigidExpected.assign(b.vertices.begin(),b.vertices.end());expandedIndices.assign(b.indices.begin(),b.indices.end());++submissions;return arena.commit(b);}
+    if(standInFogTest){
+        // One-stage stand-in plus the vertex fog stage on its ramp unit.
+        assert(material.stageCount==2&&material.textureCount==2&&material.stages[1].rgb.function==MaterialFunction::interpolate);
+        return arena.commit(b);
+    }
     if(constantFogTest){
         assert(material.textureCount==3&&material.stageCount==4);
         assert(material.stages[3].rgb.inputs[2].source==MaterialSource::primary);
@@ -353,8 +450,14 @@ static void negativeCases(const CommandDraw& draw){
     std::array<float,4> actual;
     assert(evaluateRasterColor(mixed,decoded,actual,&colorError));
     assert(actual[0]==float(0x12)/255&&actual[1]==float(0x34)/255&&actual[2]==float(0x56)/255&&actual[3]==1);
-    decoded.present&=~(1u<<GX_VA_CLR0);
-    assert(!evaluateRasterColor(mixed,decoded,actual,&colorError)&&colorError==RasterColorError::vertex);
+    // No CLR0: channel 0 reads CLR1 when present, else Dolphin's missing
+    // colour, opaque white (rasterVertexColor); RGB keeps its register source.
+    decoded.present&=~((1u<<GX_VA_CLR0)|(1u<<GX_VA_CLR1));
+    const auto missingBefore=gxMissingColorVertices;
+    assert(evaluateRasterColor(mixed,decoded,actual,&colorError)&&actual[3]==1&&actual[0]==float(0x12)/255&&gxMissingColorVertices==missingBefore+1);
+    decoded.present|=1u<<GX_VA_CLR1;decoded.color[1][3]=.25f;
+    assert(evaluateRasterColor(mixed,decoded,actual)&&actual[3]==.25f&&gxMissingColorVertices==missingBefore+1);
+    decoded.present&=~(1u<<GX_VA_CLR1);
     colorRegisters.xf[0x1010]&=~1u;
     assert(planRasterColor(colorRegisters,colorMaterial,mixed)&&mixed.vertex==0);
     assert(evaluateRasterColor(mixed,decoded,actual)&&actual[3]==float(0x78)/255);
@@ -445,6 +548,16 @@ static void negativeCases(const CommandDraw& draw){
     assert(!planRaster(regs,tails,&tailError,FogPolicy::requireSupported,ColorStoragePolicy::rgb8Only,ClipPolicy::requireEnabled,true,true)&&tailError==RasterError::earlyDepth);
     regs=draw.registers;
     regs.bp[0x41]&=~24u;RasterPlan masked;assert(planRaster(regs,masked)&&!masked.writeRgb&&!masked.writeAlpha);regs=draw.registers;
+    // Actual early-Z-only state from the Zant ambush. A mask of zero
+    // still writes depth for a transparent texel; late Z must test alpha.
+    regs.bp[0x40]=0x17;regs.bp[0x41]=0x04;regs.bp[0x43]=0x41;regs.bp[0xf3]=0x640000;
+    auto planMasked=[&](){return planRaster(regs,masked,nullptr,FogPolicy::requireSupported,
+        ColorStoragePolicy::rgba8ForRgba6,ClipPolicy::requireEnabled,true);};
+    assert(planMasked()&&!masked.earlyDepthAlpha&&masked.alpha.comparison==7);
+    assert(!masked.writeRgb&&!masked.writeAlpha&&masked.depth.enabled&&masked.depth.write&&masked.depth.compare==3);
+    regs.bp[0x41]|=16;assert(planMasked()&&masked.earlyDepthAlpha&&masked.writeAlpha);
+    regs.bp[0x41]=0x04;regs.bp[0x43]=1;assert(planMasked()&&masked.alpha.comparison!=7);
+    regs=draw.registers;
     regs.bp[0]|=3u<<14;CommandDrawContext culled;assert(drawGxCommand(changed,&culled)&&culled.culled==1&&arena.used()==used&&submissions==submitted);regs=draw.registers;
     scopeFailure=true;reject(changed,"test texture failure");scopeFailure=false;
     for(const char* reason:{"test texture failure","injected texture allocation failure","injected GPU completion failure"}){
@@ -485,7 +598,7 @@ static void intervalAdapterCases(const CommandDraw& draw){
         case 6:textureFailure=true;break;
         case 7:gpuFailure=true;break;
         case 8:gpuCommittedFailure=true;break;
-        case 9:regs.bp[0xc0]|=3u<<16;break;
+        case 9:regs.bp[0xc0]|=3u<<16|1u<<18;break; // R8_EQ: no PICA lowering
         }
         assert(!drawGxCommand(changed,&c)&&c.rejected==1&&!c.submitted&&!c.alphaIntervalDraws&&!c.simplifiedDraws&&!c.skippedDraws);
         assert(c.failureKind==((mode==7||mode==8)?DrawFailureKind::submission:mode==6?DrawFailureKind::resource:mode==5?DrawFailureKind::geometry:DrawFailureKind::state));
@@ -550,7 +663,7 @@ static void safetyFallbackCases(const CommandDraw& draw){
     safetyMode=true;
     auto registers=draw.registers;
     CommandDraw changed{draw.primitive,draw.vertexCount,draw.indexCount,draw.vertices,draw.indices,draw.plan,draw.arrays,registers};
-    registers.bp[0xc0]|=3u<<16; // Valid GX compare equation; untranslatable TEV operation.
+    registers.bp[0xc0]|=3u<<16|1u<<18; // Valid GX compare equation (R8_EQ); untranslatable TEV operation.
     MaterialState material;PicaMaterialPlan p;MaterialPlanError error;
     assert(decodeMaterial(registers,material)&&!planPicaMaterial(material,p,&error)&&error==MaterialPlanError::operation);
     CommandDrawContext ui;ui.allowDegradedDraws=true;
@@ -751,6 +864,30 @@ static void indirectInvisibleCases(const CommandDraw& draw){
         candidate.indices={reinterpret_cast<const u8*>(shared),sizeof(shared)};fatal();candidate.indexCount=0;candidate.indices={};
         for(unsigned i=0;i<3;++i){put(i,16,.5f+.0625f*i);put(i,24,.75f+.0625f*i);}
     }
+    // The indirect source is sampled on the CPU. A single negative source
+    // chart yields the same warp as multiplying its whole matrix by -1.
+    texgen(0,true,2);
+    texgen(1,true,1);
+    auto chartControl=context();
+    assert(drawGxCommand(candidate,&chartControl)&&chartControl.vertexIndirectDraws==1);
+    const auto positiveChart=rigidExpected;
+    arena=savedArena;submissions=sent;
+    for(unsigned n=0;n<12;++n)regs.xf[4*33+n]^=0x80000000u;
+    auto signedChart=context();
+    assert(drawGxCommand(candidate,&signedChart)&&signedChart.vertexIndirectDraws==1);
+    assert(signedChart.submitted==1&&!signedChart.skippedDraws&&!signedChart.simplifiedDraws);
+    assert(positiveChart.size()==rigidExpected.size()&&
+        !std::memcmp(positiveChart.data(),rigidExpected.data(),positiveChart.size()*sizeof(GpuVertex)));
+    arena=savedArena;submissions=sent;
+    // Even an unreferenced vertex with the opposite sign defeats the
+    // whole-draw proof. The remaining visible negative-Q triangle stays strict.
+    texgen(1,true,0,true);
+    for(unsigned i=0;i<6;++i)put(i,24,-1);
+    put(0,24,1);
+    const u16 visible[]{3,4,5};
+    candidate.indexCount=3;
+    candidate.indices={reinterpret_cast<const u8*>(visible),sizeof(visible)};
+    fatal();
     rigidTestMode=false;
     std::printf("PASS invisible indirect: captured clip quad, base/source/both nonpositive q, clip policies, exact surviving attributes; %u fatal injections\n",fatalCases);
 }
@@ -960,6 +1097,23 @@ int main(){
         changed.vertices=draw.vertices;regs.xf[0x1010]=2;regs.xfValid.set(0x100a);regs.xf[0x100a]=255;
         CommandDrawContext lit;lit.allowVertexFog=true;
         assert(!drawGxCommand(changed,&lit)&&std::strcmp(lit.failure,"GX vertex fog TEV/texture capacity")==0&&arena.used()==afterPair);
+        // A plan that needs a lowering (halved TEX2*PREV on the last stage)
+        // with no fog room under the blend keeps the Alpha 6 stand-in.
+        {
+            regs.xf[0x1010]=1;changed.vertices=varied; // the blended varying-alpha draw above
+            const auto lastStage=regs.bp[0xc4];regs.bp[0xc4]|=3u<<20;
+            MaterialState state;PicaMaterialPlan plan;
+            assert(decodeMaterial(regs,state)&&planPicaMaterial(state,plan,nullptr,MaterialPolicy::quantizedConstants));
+            assert((plan.lowering&MaterialLowering::halve)&&plan.textureCount==3);
+            CommandDrawContext lowered;lowered.allowVertexFog=lowered.allowTriangleFog=lowered.allowQuantizedConstants=true;
+            assert(!drawGxCommand(changed,&lowered)&&std::strcmp(lowered.failure,"GX vertex fog TEV/texture capacity")==0);
+            lowered={};lowered.allowVertexFog=lowered.allowTriangleFog=lowered.allowQuantizedConstants=lowered.allowDegradedDraws=true;
+            lowered.allowVisualFallback=[](const CommandDraw&,DrawVisualFallback){return true;};
+            standInFogTest=true;
+            assert(drawGxCommand(changed,&lowered)&&lowered.vertexFogDraws==1&&lowered.simplifiedDraws==1);
+            assert(lowered.simplifiedByReason[unsigned(DrawVisualFallback::tevMaterial)]==1);
+            standInFogTest=false;regs.bp[0xc4]=lastStage;
+        }
         constantFogTest=false;return true;
     },nullptr);
     assert(processor.execute(list));
@@ -1427,6 +1581,475 @@ int main(){
     assert(rigidSubmissions==183&&compactSubmissions==56);
     std::puts("PASS 64 projected background adapter draws: raw/compact positions, independent material/ambient/alpha, homogeneous q, all UV/fog outputs; invalid divisor and per-vertex texture matrix fallback");
     std::puts("PASS 119 rigid/palette adapter/reference draws including 24 compact S16 stream draws: 1/5/8 compacted lights, affine position/normal/projection, material/vertex RGB and alpha, vertex ambient RGB, range/plain/no fog; ninth matrix/eight lights CPU fallback and missing/invalid/nonfinite palette rejection without mutation");
+    // Immediate draw records (HUD panes): every replay, including the in-place
+    // finish of the record's uniform block, the unchanged-draw repeats and
+    // the lookup key memo, submits exactly what the complete path submits.
+    {
+        assert(arena.end()&&arena.begin());
+        GXSetProjection(projection,GX_ORTHOGRAPHIC);GXSetViewport(0,0,400,240,0,1);GXSetScissor(0,0,400,240);
+        GXSetCullMode(GX_CULL_NONE);GXSetBlendMode(GX_BM_BLEND,GX_BL_SRCALPHA,GX_BL_INVSRCALPHA,GX_LO_COPY);
+        GXSetZMode(GX_FALSE,GX_ALWAYS,GX_FALSE);GXSetAlphaCompare(GX_ALWAYS,0,GX_AOP_AND,GX_ALWAYS,0);
+        GXSetNumChans(1);GXSetChanCtrl(GX_COLOR0A0,GX_FALSE,GX_SRC_REG,GX_SRC_VTX,0,GX_DF_NONE,GX_AF_NONE);
+        GXLoadTexObj(&objects[0],GX_TEXMAP0);GXLoadTexObj(&objects[1],GX_TEXMAP1);
+        const float texMatrix[8]{.5f,0,0,.25f,0,2,0,-.5f};GXLoadTexMtxImm(texMatrix,GX_TEXMTX0,GX_MTX2x4);
+        assert(stream.writeBp(0xf1,0));assert(stream.finish());
+        // Two pane states: one texture (identity texgen), two textures (the
+        // second through a texture matrix, S16 coordinates with 8 fraction bits).
+        auto state=[&](bool second,u8 materialAlpha){
+            GXSetNumTexGens(second?2:1);GXSetNumTevStages(second?2:1);
+            GXSetTexCoordGen2(GX_TEXCOORD0,GX_TG_MTX2x4,GX_TG_TEX0,GX_IDENTITY,GX_FALSE,GX_PTIDENTITY);
+            GXSetTexCoordGen2(GX_TEXCOORD1,GX_TG_MTX2x4,GX_TG_TEX1,GX_TEXMTX0,GX_FALSE,GX_PTIDENTITY);
+            GXSetTevOrder(GX_TEVSTAGE0,GX_TEXCOORD0,GX_TEXMAP0,GX_COLOR0A0);GXSetTevOp(GX_TEVSTAGE0,GX_MODULATE);
+            GXSetTevOrder(GX_TEVSTAGE1,GX_TEXCOORD1,GX_TEXMAP1,GX_COLOR0A0);GXSetTevOp(GX_TEVSTAGE1,GX_MODULATE);
+            GXSetChanMatColor(GX_COLOR0A0,{200,180,160,materialAlpha});
+            GXClearVtxDesc();GXSetVtxDesc(GX_VA_POS,GX_DIRECT);GXSetVtxDesc(GX_VA_CLR0,GX_DIRECT);GXSetVtxDesc(GX_VA_TEX0,GX_DIRECT);
+            if(second)GXSetVtxDesc(GX_VA_TEX1,GX_DIRECT);
+            GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_POS,GX_POS_XYZ,GX_F32,0);GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_CLR0,GX_CLR_RGBA,GX_RGBA8,0);
+            GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_TEX0,GX_TEX_ST,GX_F32,0);GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_TEX1,GX_TEX_ST,GX_S16,8);
+            assert(stream.finish());
+        };
+        // State changes only between steps of different states, so the
+        // epoch stands across the others (key memo) and repeats can occur.
+        struct Step {bool second;u8 materialAlpha;float tx,ty,scale,x,y,uv;u8 alpha;};
+        const Step steps[]{
+            {false,255,0,0,1,10,10,0,255},{false,255,0,0,1,10,10,0,255},{false,255,0,0,1,10,10,0,255},
+            {false,255,30,5,1,10,10,0,255},{false,255,30,5,1,10,10,0,255},
+            {false,255,-300,20,1,520,600,.25f,0},{false,255,-300,20,1,520,600,.25f,0}, // compact origin 512, hidden pane
+            {true,255,5,5,2,20,30,.5f,200},{true,255,5,5,2,20,30,.5f,200},{true,255,5,5,2,20,30,.5f,200},
+            {false,255,0,0,1,10,10,0,255},
+            {false,128,0,0,1,10,10,0,255},{false,128,0,0,1,10,10,0,255}, // material colour only
+            {false,255,0,0,1,10,10,0,255},
+            {true,255,7,5,2,20,30,.5f,200},{true,255,7,5,2,21,30,.5f,200}};
+        auto run=[&]{
+            std::vector<RigidCapture> captures;rigidCaptures=&captures;
+            CommandDrawContext immediate;immediate.allowRigidGpu=true;
+            processor.setSink([](const CommandDraw& draw,void* data){return drawGxCommand(draw,data);},&immediate);
+            const Step* previous=nullptr;
+            for(const auto& step:steps){
+                if(!previous||previous->second!=step.second||previous->materialAlpha!=step.materialAlpha)state(step.second,step.materialAlpha);
+                previous=&step;
+                const float position[12]{step.scale,0,0,step.tx,0,step.scale,0,step.ty,0,0,1,0};
+                GXLoadPosMtxImm(position,GX_PNMTX0);GXSetCurrentMtx(GX_PNMTX0);
+                list={u8(GX_QUADS),0,4};
+                for(unsigned i=0;i<4;++i){
+                    scalar(step.x+(i==1||i==2?40:0));scalar(step.y+(i>=2?20:0));scalar(0);
+                    list.insert(list.end(),{64,128,192,step.alpha});
+                    scalar(step.uv+(i==1||i==2?.5f:0));scalar(step.uv+(i>=2?.5f:0));
+                    if(step.second){const u16 s=u16(32*i),t=u16(-16*int(i));list.insert(list.end(),{u8(s>>8),u8(s),u8(t>>8),u8(t)});}
+                }
+                assert(arena.end()&&arena.begin());assert(processor.execute(list));
+            }
+            assert(immediate.submitted==std::size(steps)&&!immediate.rejected&&captures.size()==std::size(steps));
+            rigidCaptures=nullptr;return captures;
+        };
+        auto same=[](const std::vector<RigidCapture>& a,const std::vector<RigidCapture>& b){
+            assert(a.size()==b.size());
+            for(unsigned n=0;n<a.size();++n){
+                const auto& x=a[n];const auto& y=b[n];
+                if(x.rows.size()!=y.rows.size()||std::memcmp(x.rows.data(),y.rows.data(),x.rows.size()*sizeof(x.rows[0]))){
+                    for(unsigned k=0;k<std::min(x.rows.size(),y.rows.size());++k)for(unsigned c=0;c<4;++c)
+                        if(std::bit_cast<u32>(x.rows[k][c])!=std::bit_cast<u32>(y.rows[k][c]))
+                            std::fprintf(stderr,"immediate parity step=%u row=%u.%u complete=%a replay=%a\n",n,k,c,double(x.rows[k][c]),double(y.rows[k][c]));
+                    assert(false);
+                }
+                assert(x.lights==y.lights&&x.matrices==y.matrices&&x.records==y.records&&x.indices==y.indices);
+                // Plans compare as bytes up to their last member: the host's
+                // 64-bit pointers leave tail padding the ARM layout has not.
+                constexpr auto rasterBytes=offsetof(RasterPlan,reserved)+sizeof(RasterPlan::reserved);
+                assert(!std::memcmp(&x.raster,&y.raster,rasterBytes)&&sameMaterialPlan(x.material,y.material));
+            }
+        };
+        setImmediateDrawRecords(false);
+        const auto complete=run();
+        std::uint64_t hits0,misses0,stores0,fallbacks0;immediateDrawStatistics(hits0,misses0,stores0,fallbacks0);
+        ImmediateDrawDetail detail0;immediateDrawDetail(detail0);
+        setImmediateDrawRecords(true);
+        const auto replayed=run();
+        std::uint64_t hits1,misses1,stores1,fallbacks1;immediateDrawStatistics(hits1,misses1,stores1,fallbacks1);
+        ImmediateDrawDetail detail1;immediateDrawDetail(detail1);
+        same(complete,replayed);
+        // Misses: A, B, and A with another material colour (colour only).
+        assert(hits1-hits0==13&&misses1-misses0==3&&stores1-stores0==3&&fallbacks1==fallbacks0);
+        assert(detail1.repeats-detail0.repeats==5&&detail1.missColor-detail0.missColor==1&&detail1.missState-detail0.missState==2);
+        assert(detail1.zeroVertexAlpha-detail0.zeroVertexAlpha==2&&detail1.keyMemoHits>detail0.keyMemoHits);
+        // Shortcuts off (the A/B switch): the same submissions, no repeats.
+        setImmediateDrawShortcuts(false);setImmediateDrawRecords(true);
+        const auto plain=run();
+        ImmediateDrawDetail detail2;immediateDrawDetail(detail2);
+        same(complete,plain);
+        assert(detail2.repeats==detail1.repeats&&detail2.keyMemoHits==detail1.keyMemoHits);
+        setImmediateDrawShortcuts(true);
+        std::printf("PASS immediate records: %zu pane draws, replays equal the complete path (uniform rows, vertex records, plans); "
+                    "%llu repeats, %llu key memo hits, colour-only miss classified, shortcuts off equal too\n",std::size(steps),
+                    static_cast<unsigned long long>(detail1.repeats-detail0.repeats),static_cast<unsigned long long>(detail1.keyMemoHits-detail0.keyMemoHits));
+    }
+    // Native shape replay (duskNativeDrawShape, the J3D static shapes):
+    // two static lists of one lit, fogged two-texture material (TEX0, and an
+    // environment map from the normal through a texture and a post matrix)
+    // are recorded by the complete path, then replayed over frames that move
+    // the lights, the texture matrix, the fog, the projection and the light
+    // count, the last one under the narrow palette. The lean replay submits
+    // exactly what the complete replay (switch off) submits, continuations
+    // included, and its first replay equals the recorded draw.
+    {
+        assert(arena.end()&&arena.begin());
+        static std::array<std::uint8_t,65536> poolBytes;static StaticCompactCache pool;
+        assert(pool.attach(poolBytes,true,[](void*,std::size_t){}));setStaticCompactCache(&pool);nativeReplayFixture=true;
+        GXSetProjection(projection,GX_ORTHOGRAPHIC);GXSetViewport(0,0,400,240,0,1);GXSetScissor(0,0,400,240);
+        GXSetCullMode(GX_CULL_NONE);GXSetBlendMode(GX_BM_NONE,GX_BL_ONE,GX_BL_ZERO,GX_LO_COPY);
+        GXSetZMode(GX_TRUE,GX_LEQUAL,GX_TRUE);GXSetAlphaCompare(GX_ALWAYS,0,GX_AOP_AND,GX_ALWAYS,0);
+        GXSetNumChans(1);GXSetChanCtrl(GX_COLOR0,GX_TRUE,GX_SRC_REG,GX_SRC_REG,GX_LIGHT0|GX_LIGHT1,GX_DF_CLAMP,GX_AF_SPOT);
+        GXSetChanCtrl(GX_ALPHA0,GX_FALSE,GX_SRC_REG,GX_SRC_REG,GX_LIGHT_NULL,GX_DF_NONE,GX_AF_NONE);
+        GXSetChanMatColor(GX_COLOR0A0,{200,180,160,255});GXSetChanAmbColor(GX_COLOR0A0,{40,50,60,255});
+        GXLoadTexObj(&objects[0],GX_TEXMAP0);GXLoadTexObj(&objects[1],GX_TEXMAP1);
+        GXSetNumTexGens(2);
+        GXSetTexCoordGen2(GX_TEXCOORD0,GX_TG_MTX2x4,GX_TG_TEX0,GX_IDENTITY,GX_FALSE,GX_PTIDENTITY);
+        GXSetTexCoordGen2(GX_TEXCOORD1,GX_TG_MTX2x4,GX_TG_NRM,GX_TEXMTX0,GX_FALSE,GX_PTTEXMTX0);
+        const float post[12]{1,.1f,0,.05f,0,1,.1f,-.05f,0,0,1,0};GXLoadTexMtxImm(post,GX_PTTEXMTX0,GX_MTX3x4);
+        GXSetNumTevStages(2);
+        GXSetTevOrder(GX_TEVSTAGE0,GX_TEXCOORD0,GX_TEXMAP0,GX_COLOR0A0);GXSetTevOp(GX_TEVSTAGE0,GX_MODULATE);
+        GXSetTevOrder(GX_TEVSTAGE1,GX_TEXCOORD1,GX_TEXMAP1,GX_COLOR0A0);GXSetTevOp(GX_TEVSTAGE1,GX_MODULATE);
+        GXClearVtxDesc();GXSetVtxDesc(GX_VA_POS,GX_INDEX16);GXSetVtxDesc(GX_VA_NRM,GX_INDEX16);GXSetVtxDesc(GX_VA_TEX0,GX_INDEX16);
+        GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_POS,GX_POS_XYZ,GX_F32,0);GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_NRM,GX_NRM_XYZ,GX_S16,0);
+        GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_TEX0,GX_TEX_ST,GX_S16,8);
+        assert(stream.writeBp(0xee,std::bit_cast<u32>(.5f)>>12)&&stream.writeBp(0xef,0x600000)&&stream.writeBp(0xf0,2));
+        for(unsigned reg=0xe9;reg<=0xed;++reg)assert(stream.writeBp(reg,(40u+reg)|((70u+reg)<<12)));
+        GXLightObj lamp;
+        auto frameState=[&](float lightX,u8 second,float env,u32 fogColor,u32 center,float near){
+            GXInitLightPos(&lamp,lightX,40,-60);GXInitLightDir(&lamp,0,-.3f,1);GXInitLightColor(&lamp,{200,190,180,255});
+            GXInitLightAttn(&lamp,1,0,0,1,.01f,0);GXLoadLightObjImm(&lamp,GX_LIGHT0);
+            GXInitLightPos(&lamp,-50,lightX,-80);GXInitLightDir(&lamp,.2f,0,1);GXInitLightColor(&lamp,{second,second,second,255});
+            GXInitLightAttn(&lamp,1,0,0,1,.02f,.001f);GXLoadLightObjImm(&lamp,GX_LIGHT1);
+            const float m[8]{.5f*env,.1f,0,.5f,0,.5f,.2f*env,.5f};GXLoadTexMtxImm(m,GX_TEXMTX0,GX_MTX2x4);
+            assert(stream.writeBp(0xf1,(2u<<21)|(std::bit_cast<u32>(.05f)>>12))&&stream.writeBp(0xf2,fogColor)&&stream.writeBp(0xe8,1024|center));
+            const float p[16]{.5f,0,.05f,0,0,.7f,-.1f,0,0,0,-1.01f,-near,0,0,-1,0};GXSetProjection(p,GX_PERSPECTIVE);
+        };
+        auto shapeMatrix=[&](float x){
+            const float m[12]{1,.2f,0,x,0,1,.3f,7,.1f,0,1,-100},n[12]{1,.1f,0,0,0,1,.2f,0,.1f,0,1,0};
+            GXLoadPosMtxImm(m,GX_PNMTX0);GXLoadNrmMtxImm(n,GX_PNMTX0);GXSetCurrentMtx(GX_PNMTX0);assert(stream.finish());
+        };
+        frameState(100,170,1,0x406080,542,10);assert(stream.finish());
+        assert(processor.bindArray(0,compactPos.data(),sizeof(compactPos),12,true));
+        assert(processor.bindArray(1,compactNormals.data(),sizeof(compactNormals),6,true));
+        assert(processor.bindArray(4,compactUv.data(),sizeof(compactUv),4,true));
+        std::vector<u8> listA{u8(GX_TRIANGLES),0,6},listB{u8(GX_TRIANGLES),0,3};
+        for(unsigned i=0;i<6;++i)listA.insert(listA.end(),{0,u8(i%3),0,u8((i+1)%3),0,u8((i+2)%3)});
+        for(unsigned i=0;i<3;++i)listB.insert(listB.end(),{0,u8(2-i),0,u8(i),0,u8(i)});
+        constexpr std::uint32_t generation=77;
+        // Recording: a list's first draw stores its static pool entry, the
+        // second draws from the pool and becomes the record.
+        CommandDrawContext record;record.allowRigidGpu=true;record.allowVertexFog=true;
+        processor.setSink([](const CommandDraw& draw,void* data){return drawGxCommand(draw,data);},&record);
+        std::array<std::uint64_t,13> outcomesBefore,outcomesAfter;nativeShapeRecordOutcomes(outcomesBefore);
+        std::vector<RigidCapture> recorded;rigidCaptures=&recorded;
+        for(const auto* list:{&listA,&listB})for(unsigned pass=0;pass<2;++pass){
+            shapeMatrix(list==&listA?-20.f:-14.f);assert(arena.end()&&arena.begin());
+            duskNativeStaticGeometry(generation,list->data());assert(processor.execute(*list));duskNativeStaticGeometry(0,nullptr);
+        }
+        rigidCaptures=nullptr;nativeShapeRecordOutcomes(outcomesAfter);
+        assert(recorded.size()==4&&record.submitted==4&&!record.rejected);
+        assert(outcomesAfter[0]-outcomesBefore[0]==2&&outcomesAfter[3]-outcomesBefore[3]==2); // recorded, then not resident on first sight
+        struct Frame {float lightX;u8 second;float env;u32 fogColor,center;float near;bool narrow;};
+        const Frame frames[]{
+            {100,170,1,0x406080,542,10,false},  // as recorded
+            {100,170,1,0x406080,542,10,false},  // unchanged
+            {130,170,1,0x406080,542,10,false},  // lights moved
+            {130,170,1.5f,0x406080,542,10,false}, // environment matrix
+            {130,170,1.5f,0x608040,600,10,false}, // fog colour and range centre
+            {130,170,1.5f,0x608040,600,12,false}, // projection
+            {130,0,1.5f,0x608040,600,12,false},   // second light black: one light record
+            {130,170,1.5f,0x608040,600,12,true}}; // narrow palette (unit rows of absent units uploaded)
+        auto run=[&](bool lean){
+            setNativeLeanReplay(lean);
+            std::vector<NativeCapture> captures;nativeCaptures=&captures;
+            for(const auto& f:frames){
+                multiTextureWidePalette=!f.narrow;
+                frameState(f.lightX,f.second,f.env,f.fogColor,f.center,f.near);
+                for(const auto* list:{&listA,&listB}){shapeMatrix(list==&listA?-20.f:-14.f);assert(duskNativeDrawShape(generation,list->data(),std::uint32_t(list->size())));}
+            }
+            multiTextureWidePalette=true;nativeCaptures=nullptr;
+            assert(captures.size()==2*std::size(frames));
+            return captures;
+        };
+        // A first pass leaves the records as the measured passes find them
+        // (constants refreshed for the last frame's colours), so both measured
+        // passes continue the same shapes.
+        // worldMips: record replays run with no static geometry hint, as on
+        // the worker; unit 0 (TEX0 through a 2x4 identity texgen, perspective)
+        // is still a world use, unit 1 (from the normal) never is.
+        std::vector<std::pair<unsigned,bool>> uses;worldUses=&uses;
+        run(false);
+        worldUses=nullptr;
+        assert(!uses.empty());
+        for(const auto& [unit,world]:uses)assert(world==(unit==0));
+        NativeLeanReplayStatistics s0,s1,s2;nativeLeanReplayStatistics(s0);
+        const auto complete=run(false);nativeLeanReplayStatistics(s1);
+        const auto lean=run(true);nativeLeanReplayStatistics(s2);
+        constexpr auto rasterBytes=offsetof(RasterPlan,reserved)+sizeof(RasterPlan::reserved);
+        auto sameRows=[](const RigidCapture& x,const RigidCapture& y,const char* what,unsigned n){
+            if(x.rows.size()==y.rows.size()&&!std::memcmp(x.rows.data(),y.rows.data(),x.rows.size()*sizeof(x.rows[0])))return true;
+            std::fprintf(stderr,"native replay parity (%s) draw=%u rows %zu/%zu\n",what,n,x.rows.size(),y.rows.size());
+            for(unsigned k=0;k<std::min(x.rows.size(),y.rows.size());++k)for(unsigned c=0;c<4;++c)
+                if(std::bit_cast<u32>(x.rows[k][c])!=std::bit_cast<u32>(y.rows[k][c]))
+                    std::fprintf(stderr,"  row=%u.%u %a %a\n",k,c,double(x.rows[k][c]),double(y.rows[k][c]));
+            return false;
+        };
+        unsigned chained=0;
+        for(unsigned n=0;n<complete.size();++n){
+            const auto& x=complete[n];const auto& y=lean[n];
+            assert(sameRows(x.rows,y.rows,"lean against complete replay",n));
+            assert(x.rows.lights==y.rows.lights&&x.rows.matrices==y.rows.matrices&&x.vertices==y.vertices&&x.indices==y.indices&&
+                   x.indexCount==y.indexCount&&x.chained==y.chained);
+            assert(!std::memcmp(&x.rows.raster,&y.rows.raster,rasterBytes)&&sameMaterialPlan(x.rows.material,y.rows.material));
+            chained+=x.chained;
+        }
+        // The first frame replays the recorded state: the recorded draws' rows.
+        assert(sameRows(recorded[1],lean[0].rows,"replay against recording",0)&&sameRows(recorded[3],lean[1].rows,"replay against recording",1));
+        // Light records: two, then one with the second light black.
+        assert(lean[0].rows.lights==2&&lean[12].rows.lights==1&&lean[14].rows.lights==2);
+        assert(s1.fullPlans-s0.fullPlans+chained==complete.size()&&s1.leanPlans==s0.leanPlans);
+        assert(s2.leanPlans-s1.leanPlans+(s2.rowContinuations-s1.rowContinuations)==lean.size()&&s2.fullPlans==s1.fullPlans);
+        // List B continues list A, except where the fog colour moved: its
+        // constants are refreshed first (frames 1 and 5). Two continuations
+        // cross frames whose state did not change (frame 2).
+        assert(s2.rowContinuations-s1.rowContinuations==chained&&chained==7&&s2.leanRefusals==s1.leanRefusals);
+        // Projection planned again when its words moved (and after the switch);
+        // fog when its words moved; every other lean plan from the caches.
+        assert(s2.projectionPlanned-s1.projectionPlanned==2&&s2.fogPlanned-s1.fogPlanned==2);
+        assert(s2.projectionEpochHits+s2.projectionEqualHits>s1.projectionEpochHits+s1.projectionEqualHits);
+        processor.setSink(nullptr);setStaticCompactCache(nullptr);nativeReplayFixture=false;
+        std::printf("PASS native shape replay: %zu replays over %zu frames (%u continuations), lean equal to the complete replay "
+                    "(uniform rows, plans, vertices, indices) and to the recorded draws\n",lean.size(),std::size(frames),chained);
+    }
+    // Fallback records (2026-11-16): a static list whose material takes the
+    // TEV stand-in (an EQ compare, refused; under a multiply blend its floor
+    // constant is TEV register C0) and the relaxed dual alpha test. With the
+    // switch off every frame takes the complete path (record refusal 5); on,
+    // the list is recorded and its replays, also after C0 moves (the stand-in
+    // decision repeated), submit what the complete path submits.
+    {
+        assert(arena.end()&&arena.begin());
+        static std::array<std::uint8_t,65536> fallbackPoolBytes;static StaticCompactCache fallbackPool;
+        assert(fallbackPool.attach(fallbackPoolBytes,true,[](void*,std::size_t){}));setStaticCompactCache(&fallbackPool);nativeReplayFixture=true;
+        const float perspective[16]{.5f,0,.05f,0,0,.7f,-.1f,0,0,0,-1.01f,-10,0,0,-1,0};GXSetProjection(perspective,GX_PERSPECTIVE);
+        GXSetViewport(0,0,400,240,0,1);GXSetScissor(0,0,400,240);GXSetCullMode(GX_CULL_NONE);
+        GXSetBlendMode(GX_BM_BLEND,GX_BL_DSTCLR,GX_BL_ZERO,GX_LO_COPY);GXSetZMode(GX_TRUE,GX_LEQUAL,GX_TRUE);
+        GXSetAlphaCompare(GX_GREATER,75,GX_AOP_AND,GX_LESS,255); // relaxed: alpha > 75
+        GXSetNumChans(1);GXSetChanCtrl(GX_COLOR0A0,GX_FALSE,GX_SRC_REG,GX_SRC_REG,GX_LIGHT_NULL,GX_DF_NONE,GX_AF_NONE);
+        GXSetChanMatColor(GX_COLOR0A0,{200,180,160,255});
+        GXLoadTexObj(&objects[0],GX_TEXMAP0);GXLoadTexObj(&objects[1],GX_TEXMAP1);
+        GXSetNumTexGens(1);GXSetTexCoordGen2(GX_TEXCOORD0,GX_TG_MTX2x4,GX_TG_TEX0,GX_IDENTITY,GX_FALSE,GX_PTIDENTITY);
+        GXSetNumTevStages(2);
+        GXSetTevOrder(GX_TEVSTAGE0,GX_TEXCOORD0,GX_TEXMAP0,GX_COLOR0A0);GXSetTevOp(GX_TEVSTAGE0,GX_MODULATE);
+        GXSetTevOrder(GX_TEVSTAGE1,GX_TEXCOORD0,GX_TEXMAP1,GX_COLOR0A0);
+        GXSetTevColorIn(GX_TEVSTAGE1,GX_CC_TEXC,GX_CC_CPREV,GX_CC_RASC,GX_CC_C0);
+        GXSetTevColorOp(GX_TEVSTAGE1,GX_TEV_COMP_RGB8_EQ,GX_TB_ZERO,GX_CS_SCALE_1,GX_TRUE,GX_TEVPREV);
+        GXSetTevAlphaIn(GX_TEVSTAGE1,GX_CA_ZERO,GX_CA_ZERO,GX_CA_ZERO,GX_CA_APREV);
+        GXSetTevAlphaOp(GX_TEVSTAGE1,GX_TEV_ADD,GX_TB_ZERO,GX_CS_SCALE_1,GX_TRUE,GX_TEVPREV);
+        GXSetTevColor(GX_TEVREG0,{10,20,30,255});
+        GXClearVtxDesc();GXSetVtxDesc(GX_VA_POS,GX_INDEX16);GXSetVtxDesc(GX_VA_NRM,GX_INDEX16);GXSetVtxDesc(GX_VA_TEX0,GX_INDEX16);
+        GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_POS,GX_POS_XYZ,GX_F32,0);GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_NRM,GX_NRM_XYZ,GX_S16,0);
+        GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_TEX0,GX_TEX_ST,GX_S16,8);
+        const float shape[12]{1,.2f,0,-20,0,1,.3f,7,.1f,0,1,-100};
+        GXLoadPosMtxImm(shape,GX_PNMTX0);GXLoadNrmMtxImm(identity,GX_PNMTX0);GXSetCurrentMtx(GX_PNMTX0);
+        assert(stream.writeBp(0xf1,0)&&stream.finish());
+        {MaterialState ms;PicaMaterialPlan mp;MaterialPlanError error;
+         assert(decodeMaterial(processor.registers(),ms)&&!planPicaMaterial(ms,mp,&error)&&error==MaterialPlanError::operation);}
+        assert(processor.bindArray(0,compactPos.data(),sizeof(compactPos),12,true));
+        assert(processor.bindArray(1,compactNormals.data(),sizeof(compactNormals),6,true));
+        assert(processor.bindArray(4,compactUv.data(),sizeof(compactUv),4,true));
+        std::vector<u8> fallbackList{u8(GX_TRIANGLES),0,6};
+        for(unsigned i=0;i<6;++i)fallbackList.insert(fallbackList.end(),{0,u8(i%3),0,u8((i+1)%3),0,u8((i+2)%3)});
+        constexpr std::uint32_t generation=78;
+        CommandDrawContext record;record.allowRigidGpu=true;record.allowVertexFog=true;record.allowDegradedDraws=true;record.allowAlphaCompareFallback=true;
+        processor.setSink([](const CommandDraw& draw,void* data){return drawGxCommand(draw,data);},&record);
+        std::vector<RigidCapture> unused;
+        auto completeDraw=[&]{
+            assert(arena.end()&&arena.begin());
+            const bool keep=rigidCaptures;if(!keep)rigidCaptures=&unused;
+            duskNativeStaticGeometry(generation,fallbackList.data());assert(processor.execute(fallbackList));duskNativeStaticGeometry(0,nullptr);
+            if(!keep)rigidCaptures=nullptr;
+        };
+        const std::array<GXColor,5> c0{{{10,20,30,255},{10,20,30,255},{90,60,30,255},{90,60,30,255},{200,100,50,255}}};
+        // Switch off: the complete path every frame (after a first draw that
+        // stores the static pool entry), never recorded.
+        setNativeFallbackRecords(false);completeDraw();
+        std::array<std::uint64_t,13> outcomes0,outcomes1,outcomes2;nativeShapeRecordOutcomes(outcomes0);
+        std::vector<RigidCapture> complete;rigidCaptures=&complete;
+        for(const auto& color:c0){GXSetTevColor(GX_TEVREG0,color);assert(stream.finish());completeDraw();}
+        rigidCaptures=nullptr;nativeShapeRecordOutcomes(outcomes1);
+        assert(complete.size()==c0.size()&&outcomes1[5]-outcomes0[5]==c0.size()&&outcomes1[0]==outcomes0[0]);
+        assert(!duskNativeDrawShape(generation,fallbackList.data(),std::uint32_t(fallbackList.size())));
+        for(const auto& c:complete)assert(c.raster.alphaRelaxed&&c.material.stageCount==1&&c.material.textureCount==1);
+        // The multiply stand-in's constant is C0 (its floor): it follows C0.
+        assert((complete[0].material.stages[0].constant==std::array<u8,4>{10,20,30,255}));
+        assert((complete[4].material.stages[0].constant==std::array<u8,4>{200,100,50,255}));
+        // Switch on: recorded by the complete path, then replayed.
+        DrawGapStatistics gaps0,gaps1;drawGapStatistics(gaps0);
+        setNativeFallbackRecords(true);GXSetTevColor(GX_TEVREG0,c0[0]);assert(stream.finish());completeDraw();
+        nativeShapeRecordOutcomes(outcomes2);assert(outcomes2[0]-outcomes1[0]==1);
+        const auto simplifiedBefore=record.simplifiedByReason;
+        std::vector<NativeCapture> replays;nativeCaptures=&replays;
+        for(const auto& color:c0){GXSetTevColor(GX_TEVREG0,color);assert(stream.finish());assert(duskNativeDrawShape(generation,fallbackList.data(),std::uint32_t(fallbackList.size())));}
+        nativeCaptures=nullptr;drawGapStatistics(gaps1);
+        assert(replays.size()==c0.size());
+        constexpr auto rasterBytes=offsetof(RasterPlan,reserved)+sizeof(RasterPlan::reserved);
+        for(unsigned n=0;n<c0.size();++n){
+            const auto& x=complete[n];const auto& y=replays[n].rows;
+            assert(x.rows.size()==y.rows.size()&&!std::memcmp(x.rows.data(),y.rows.data(),x.rows.size()*sizeof(x.rows[0])));
+            assert(x.lights==y.lights&&x.matrices==y.matrices&&!std::memcmp(&x.raster,&y.raster,rasterBytes)&&sameMaterialPlan(x.material,y.material));
+        }
+        // C0 moved twice: the stand-in decision repeated twice. Every replay
+        // counts as the complete path counted the draw.
+        assert(gaps1.fallbackStored-gaps0.fallbackStored==1&&gaps1.standInReplays-gaps0.standInReplays==c0.size());
+        assert(gaps1.relaxedAlphaReplays-gaps0.relaxedAlphaReplays==c0.size()&&gaps1.standInRefreshes-gaps0.standInRefreshes==2);
+        assert(gaps1.standInRefusals==gaps0.standInRefusals);
+        assert(record.simplifiedByReason[unsigned(DrawVisualFallback::tevMaterial)]-simplifiedBefore[unsigned(DrawVisualFallback::tevMaterial)]==c0.size());
+        assert(record.simplifiedByReason[unsigned(DrawVisualFallback::alphaCompare)]-simplifiedBefore[unsigned(DrawVisualFallback::alphaCompare)]==c0.size());
+        // Switch off again: the records holding a fallback are dropped.
+        setNativeFallbackRecords(false);assert(!duskNativeDrawShape(generation,fallbackList.data(),std::uint32_t(fallbackList.size())));setNativeFallbackRecords(true);
+        processor.setSink(nullptr);setStaticCompactCache(nullptr);nativeReplayFixture=false;
+        std::printf("PASS fallback records: TEV stand-in (multiply floor from C0) and relaxed alpha test recorded; %zu replays equal the complete path "
+                    "(rows, raster, material), C0 moves repeat the stand-in decision; switch off refuses them (refusal 5)\n",replays.size());
+    }
+    // Missing vertex colour (2026-11-16): a channel reading the vertex colour
+    // of a format without CLR0 reads Dolphin's missing colour, opaque white.
+    // The GPU draw is the draw of the same vertices with a white CLR0 (same
+    // rows, same records); the CPU route gives the same vertices too.
+    {
+        setImmediateDrawRecords(false);
+        const float perspective[16]{.5f,0,.05f,0,0,.7f,-.1f,0,0,0,-1.01f,-10,0,0,-1,0};GXSetProjection(perspective,GX_PERSPECTIVE);
+        GXSetBlendMode(GX_BM_NONE,GX_BL_ONE,GX_BL_ZERO,GX_LO_COPY);GXSetAlphaCompare(GX_ALWAYS,0,GX_AOP_AND,GX_ALWAYS,0);
+        GXSetChanCtrl(GX_COLOR0A0,GX_FALSE,GX_SRC_REG,GX_SRC_VTX,GX_LIGHT_NULL,GX_DF_NONE,GX_AF_NONE);
+        GXSetNumTevStages(1);GXSetTevOrder(GX_TEVSTAGE0,GX_TEXCOORD0,GX_TEXMAP0,GX_COLOR0A0);GXSetTevOp(GX_TEVSTAGE0,GX_MODULATE);
+        const float shape[12]{1,.2f,0,-20,0,1,.3f,7,.1f,0,1,-100};GXLoadPosMtxImm(shape,GX_PNMTX0);GXSetCurrentMtx(GX_PNMTX0);
+        auto format=[&](bool color){
+            GXClearVtxDesc();GXSetVtxDesc(GX_VA_POS,GX_DIRECT);if(color)GXSetVtxDesc(GX_VA_CLR0,GX_DIRECT);GXSetVtxDesc(GX_VA_TEX0,GX_DIRECT);
+            GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_POS,GX_POS_XYZ,GX_F32,0);GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_CLR0,GX_CLR_RGBA,GX_RGBA8,0);
+            GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_TEX0,GX_TEX_ST,GX_F32,0);assert(stream.writeBp(0xf1,0)&&stream.finish());
+            list={u8(GX_TRIANGLES),0,3};
+            for(unsigned i=0;i<3;++i){scalar(10.f+i*40);scalar(15.f+i*20);scalar(-float(i));if(color)list.insert(list.end(),{255,255,255,255});scalar(.1f*i);scalar(.2f*i);}
+        };
+        CommandDrawContext missing;missing.allowRigidGpu=true;
+        processor.setSink([](const CommandDraw& draw,void* data){return drawGxCommand(draw,data);},&missing);
+        std::vector<RigidCapture> gpu;rigidCaptures=&gpu;
+        const auto decodesBefore=gxMissingColorDecodes;
+        for(bool color:{false,true}){format(color);assert(arena.end()&&arena.begin());assert(processor.execute(list));}
+        rigidCaptures=nullptr;
+        assert(gpu.size()==2&&!missing.rejected&&gxMissingColorDecodes==decodesBefore+1);
+        assert(gpu[0].rows.size()==gpu[1].rows.size()&&!std::memcmp(gpu[0].rows.data(),gpu[1].rows.data(),gpu[0].rows.size()*sizeof(gpu[0].rows[0])));
+        assert(gpu[0].records==gpu[1].records&&gpu[0].indices==gpu[1].indices&&gpu[0].rows[14][3]==1);
+        // CPU route (the GPU route off): white too.
+        rigidTestMode=true;missing.allowRigidGpu=false;std::array<std::vector<GpuVertex>,2> cpu;
+        for(bool color:{false,true}){format(color);assert(arena.end()&&arena.begin());assert(processor.execute(list));cpu[color]=rigidExpected;}
+        rigidTestMode=false;
+        assert(cpu[0].size()==3&&!missing.rejected);
+        for(unsigned i=0;i<3;++i)assert(cpu[0][i].position==cpu[1][i].position&&cpu[0][i].color==cpu[1][i].color&&cpu[0][i].texcoord==cpu[1][i].texcoord);
+        processor.setSink(nullptr);setImmediateDrawRecords(true);
+        std::puts("PASS missing vertex colour: no CLR0 reads opaque white; GPU rows and records equal a white CLR0 draw, CPU route equal too");
+    }
+    // One-attribute formats (2026-11-16, compact reject 58 before): a
+    // position-only unlit draw takes the multi-texture GPU route. Its records
+    // and rows place every vertex where the CPU route places it.
+    {
+        setImmediateDrawRecords(false);
+        GXSetChanCtrl(GX_COLOR0A0,GX_FALSE,GX_SRC_REG,GX_SRC_REG,GX_LIGHT_NULL,GX_DF_NONE,GX_AF_NONE);
+        GXSetChanMatColor(GX_COLOR0A0,{200,180,160,255});
+        GXSetNumTexGens(0);GXSetNumTevStages(1);GXSetTevOrder(GX_TEVSTAGE0,GX_TEXCOORD_NULL,GX_TEXMAP_NULL,GX_COLOR0A0);GXSetTevOp(GX_TEVSTAGE0,GX_PASSCLR);
+        GXClearVtxDesc();GXSetVtxDesc(GX_VA_POS,GX_DIRECT);GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_POS,GX_POS_XYZ,GX_F32,0);
+        assert(stream.writeBp(0xf1,0)&&stream.finish());
+        list={u8(GX_TRIANGLES),0,3};
+        for(unsigned i=0;i<3;++i){scalar(10.f+i*40);scalar(15.f+i*20);scalar(-float(i));}
+        CommandDrawContext single;single.allowRigidGpu=true;
+        processor.setSink([](const CommandDraw& draw,void* data){return drawGxCommand(draw,data);},&single);
+        gxCompactSingleAttribute=false;rigidTestMode=true;assert(arena.end()&&arena.begin());assert(processor.execute(list));
+        const auto cpu=rigidExpected;rigidTestMode=false;gxCompactSingleAttribute=true;
+        std::vector<RigidCapture> gpu;rigidCaptures=&gpu;const auto decodesBefore=gxCompactSingleAttributeDecodes;
+        assert(arena.end()&&arena.begin());assert(processor.execute(list));rigidCaptures=nullptr;
+        assert(gpu.size()==1&&cpu.size()==3&&!single.rejected&&gxCompactSingleAttributeDecodes==decodesBefore+1);
+        const auto& c=gpu[0];
+        for(unsigned i=0;i<3;++i){
+            CompactRigidVertexMT v;std::memcpy(&v,c.records.data()+i*sizeof(v),sizeof(v));
+            const unsigned m=unsigned(v.matrix[0]);std::array<float,4> view{0,0,0,1},clip{};
+            for(unsigned r=0;r<3;++r)view[r]=c.rows[m+r][0]*v.position[0]+c.rows[m+r][1]*v.position[1]+c.rows[m+r][2]*v.position[2]+c.rows[m+r][3];
+            for(unsigned r=0;r<4;++r)clip[r]=c.rows[6+r][0]*view[0]+c.rows[6+r][1]*view[1]+c.rows[6+r][2]*view[2]+c.rows[6+r][3];
+            for(unsigned k=0;k<4;++k)assert(std::abs(clip[k]-cpu[i].position[k])<=1e-5f*(1+std::abs(cpu[i].position[k])));
+            // Unlit: ambient one, the dummy light black, material colour.
+            for(unsigned k=0;k<4;++k)assert(c.rows.back()[k]==cpu[i].color[k]);
+        }
+        processor.setSink(nullptr);setImmediateDrawRecords(true);
+        std::puts("PASS one-attribute format: position-only unlit draw on the multi-texture GPU route, positions and colour as the CPU route");
+    }
+    // Palette split (2026-11-16, rigid plan rejects 45/46/59/60 before): a
+    // lit multi-texture draw with six lights and ten distinct matrices whose
+    // normal rows are not proportional does not fit one palette. It is drawn
+    // as consecutive runs; every referenced vertex, through its run's rows,
+    // gets the CPU route's position and colour, the runs' triangles are the
+    // draw's in order, and every row outside the palette is the same in all runs.
+    {
+        setImmediateDrawRecords(false);
+        GXSetNumTexGens(1);GXSetTexCoordGen2(GX_TEXCOORD0,GX_TG_MTX2x4,GX_TG_TEX0,GX_IDENTITY,GX_FALSE,GX_PTIDENTITY);
+        GXLoadTexObj(&objects[0],GX_TEXMAP0);
+        GXSetNumTevStages(1);GXSetTevOrder(GX_TEVSTAGE0,GX_TEXCOORD0,GX_TEXMAP0,GX_COLOR0A0);GXSetTevOp(GX_TEVSTAGE0,GX_MODULATE);
+        GXSetChanCtrl(GX_COLOR0,GX_TRUE,GX_SRC_REG,GX_SRC_REG,GXLightID(63),GX_DF_CLAMP,GX_AF_SPOT);
+        GXSetChanCtrl(GX_ALPHA0,GX_FALSE,GX_SRC_REG,GX_SRC_REG,GX_LIGHT_NULL,GX_DF_NONE,GX_AF_NONE);
+        GXSetChanMatColor(GX_COLOR0A0,{180,160,140,255});GXSetChanAmbColor(GX_COLOR0A0,{30,40,50,255});
+        GXLightObj lamp;
+        for(unsigned l=0;l<6;++l){
+            GXInitLightPos(&lamp,100+31*l,-30+float(l)*17,150+7*l);GXInitLightDir(&lamp,.03f*l,-.2f,1);
+            GXInitLightColor(&lamp,{u8(10+l*12),u8(70+l*17),u8(170-l*13),255});
+            GXInitLightAttn(&lamp,.9f,.2f,.1f,1,.001f,.00001f);GXLoadLightObjImm(&lamp,GXLightID(1u<<l));
+        }
+        for(unsigned slot=0;slot<10;++slot){
+            const float pos[12]{1+.03f*slot,.01f*slot,0,float(slot),0,1,.04f,2.f-slot,.02f,0,1,-100.f-slot};
+            const float nrm[12]{1,.1f,.03f*slot,0,0,1,.2f,0,.1f,0,1,0};
+            GXLoadPosMtxImm(pos,GX_PNMTX0+slot*3);GXLoadNrmMtxImm(nrm,GX_PNMTX0+slot*3);
+        }
+        GXClearVtxDesc();GXSetVtxDesc(GX_VA_PNMTXIDX,GX_DIRECT);GXSetVtxDesc(GX_VA_POS,GX_DIRECT);GXSetVtxDesc(GX_VA_NRM,GX_DIRECT);GXSetVtxDesc(GX_VA_TEX0,GX_DIRECT);
+        GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_POS,GX_POS_XYZ,GX_F32,0);GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_NRM,GX_NRM_XYZ,GX_F32,0);
+        GXSetVtxAttrFmt(GX_VTXFMT0,GX_VA_TEX0,GX_TEX_ST,GX_F32,0);
+        assert(stream.writeBp(0xf1,0)&&stream.finish());
+        list={u8(GX_TRIANGLES),0,30};
+        for(unsigned i=0;i<30;++i){
+            list.push_back(u8(3*(i/3)));scalar(10.f+(i%3)*40);scalar(15.f+(i%3)*20+i);scalar(-float(i%3));
+            scalar(.1f*(i%3));scalar(.2f);scalar(1.f);scalar(.1f*(i%3));scalar(.2f*(i%3));
+        }
+        CommandDrawContext split;split.allowRigidGpu=true;
+        processor.setSink([](const CommandDraw& draw,void* data){return drawGxCommand(draw,data);},&split);
+        // CPU route: the split switched off.
+        setPaletteSplit(false);rigidTestMode=true;assert(arena.end()&&arena.begin());assert(processor.execute(list));
+        const auto cpu=rigidExpected;const auto cpuIndices=expandedIndices;rigidTestMode=false;setPaletteSplit(true);
+        DrawGapStatistics gaps0,gaps1;drawGapStatistics(gaps0);
+        std::vector<RigidCapture> runs;rigidCaptures=&runs;
+        assert(arena.end()&&arena.begin());assert(processor.execute(list));rigidCaptures=nullptr;drawGapStatistics(gaps1);
+        assert(!split.rejected&&cpu.size()==30&&runs.size()==2&&gaps1.paletteSplitDraws-gaps0.paletteSplitDraws==1&&gaps1.paletteSplitRuns-gaps0.paletteSplitRuns==2);
+        std::vector<u16> joined;
+        auto close=[](float a,float expected){assert(std::abs(a-expected)<2e-4f*(1+std::abs(expected)));};
+        for(const auto& run:runs){
+            joined.insert(joined.end(),run.indices.begin(),run.indices.end());
+            // The shader's attribute and uniform contract, as rigidReference
+            // models it (the light records and rows 0-18 share its layout).
+            RigidVertexPlan plan;plan.lights=run.lights;plan.multiTexture=true;
+            const unsigned count=unsigned(run.rows.size())-(94-89);
+            for(unsigned k=0;k<count;++k)plan.uniforms[k]=run.rows[k];
+            for(unsigned k=89;k<94;++k)plan.uniforms[k]=run.rows[count+k-89];
+            for(auto index:run.indices){
+                CompactRigidVertexMT v;std::memcpy(&v,run.records.data()+index*sizeof(v),sizeof(v));
+                GpuVertex g{};g.position={v.position[0],v.position[1],v.position[2],float(v.normal[2])};
+                g.texcoord[1]={float(v.normal[0]),float(v.normal[1])};g.texcoord[2]={float(v.matrix[0]),float(v.matrix[1])};
+                g.color=plan.uniforms[93];
+                const auto out=rigidReference(plan,g);
+                for(unsigned k=0;k<4;++k)close(out.position[k],cpu[index].position[k]);
+                for(unsigned k=0;k<3;++k)close(out.color[k],cpu[index].color[k]);
+            }
+        }
+        assert(joined==cpuIndices);
+        for(unsigned k=6;k<43;++k)assert(runs[0].rows[k]==runs[1].rows[k]);
+        for(unsigned k=0;k<5;++k)assert(runs[0].rows[runs[0].rows.size()-5+k]==runs[1].rows[runs[1].rows.size()-5+k]);
+        processor.setSink(nullptr);setImmediateDrawRecords(true);
+        std::printf("PASS palette split: six lights and ten matrices drawn as %zu runs; every vertex as the CPU route (position, lit colour), "
+                    "triangle order kept, rows outside the palette equal\n",runs.size());
+    }
     assert(arena.end());
     Texture before,after;assert(textureBinding(0,before));
     const u8 incomplete[]{0x61,0x41};assert(stream.write(incomplete));

@@ -2,6 +2,7 @@
 #include <dolphin/os.h>
 #include "gx_texture_commands.hpp"
 #include "gx_commands.hpp"
+#include "gx_worker_sync.hpp"
 namespace dusk::native::gx {
 namespace {
 bool cachedRegion(u32 value,bool odd) {
@@ -20,7 +21,11 @@ bool resolveCommandTexture(const CommandRegisters& r,unsigned map,Texture& out,c
     const unsigned offset=(map/4)*32+map%4;
     bool any=false;
     for(unsigned base:{0x80u,0x84u,0x88u,0x8cu,0x90u,0x94u,0x98u})any|=r.bpValid[base+offset];
-    if(!any){if(textureBinding(map,out))return true;return fail("GX command texture map missing/stale");}
+    if(!any){
+        if(drawingQueuedShape()){++queuedTextureBindingRefusals;return fail("GX command texture map missing (queued shape)");}
+        if(textureBinding(map,out))return true;
+        return fail("GX command texture map missing/stale");
+    }
     if((r.bpValid[0x8c+offset]&&!cachedRegion(r.bp[0x8c+offset],false))||
        (r.bpValid[0x90+offset]&&(!r.bpValid[0x8c+offset]||!cachedRegion(r.bp[0x90+offset],true))))
         return fail("GX texture cache region unsupported");

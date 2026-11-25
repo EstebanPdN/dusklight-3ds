@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <cstddef>
 #include <cstdint>
 namespace dusk::native {
 // Native bloom. The GameCube filter copies the EFB five times and blurs with
@@ -26,5 +27,13 @@ struct BloomSettings {
     unsigned hazePhase{};   // frame counter driving the sway
 };
 // Only while the main framebuffer is the active target. False: nothing drawn.
+// With the second-core worker the pass is a queued job once its surfaces
+// exist (gx_worker_sync.hpp gxJobBloom): true then means it was queued.
 bool drawGxBloom(const BloomSettings&);
+// The queued pass, run by the thread that draws (gx_command_draw.cpp).
+void runGxBloomJob(const void* arguments,std::size_t bytes);
+// drawGxBloom may queue (SD switch gx-bloom-job-off.txt); passes queued and
+// queued passes that drew nothing.
+void setGxBloomJobs(bool on);
+void gxBloomJobStatistics(std::uint64_t& queued,std::uint64_t& failed);
 }

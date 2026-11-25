@@ -39,11 +39,11 @@ def main():
         runtime/gx_gpu_geometry.cpp runtime/gx_material.cpp runtime/gx_pica_material.cpp
         runtime/gx_raster_plan.cpp runtime/gx_raster_color.cpp runtime/gd_native.cpp
         tests/gx_command_draw_test.cpp runtime/gx_vertex_transform.cpp runtime/gx_geometry.cpp
-        runtime/gx_pica_math.cpp runtime/gx_commands.cpp runtime/gx_stream.cpp
+        runtime/gx_pica_math.cpp runtime/gx_commands.cpp runtime/gx_worker.cpp runtime/gx_stream.cpp
         runtime/gx_vertex_decode.cpp runtime/gx_rigid_decode.cpp runtime/gx_transform_commands.cpp
         runtime/gx_vertex_commands.cpp runtime/gx_lighting_commands.cpp runtime/gx_light_objects.cpp
         runtime/gx_tev_commands.cpp gx_api.cpp gx_command_api.cpp runtime/gx_state.cpp
-        runtime/resource_archive.cpp'''.split()]
+        runtime/resource_archive.cpp runtime/pica_blocks.cpp'''.split()]
     adapter_sources += [AURORA/name for name in '''lib/dolphin/gd/GDGeometry.cpp lib/dolphin/gd/GDTev.cpp
         lib/dolphin/gd/GDIndirect.cpp lib/gx/dl.cpp lib/gx/attr_fmt.cpp'''.split()]
     controls=OUT/'controls';controls.mkdir(exist_ok=True)

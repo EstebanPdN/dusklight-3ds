@@ -1,0 +1,26 @@
+{
+  "dusklight": {
+    "name": "DuskLight", "system": "GameCube", "input": "ISO", "extensions": ["iso"],
+    "support": "Twilight Princess · USA or PAL, revision 0",
+    "output": "zelda.twilight", "sd": "/3ds/DuskLight/",
+    "logo": "logo.png", "art": "art/dusklight-art.jpg"
+  },
+  "worms": {
+    "name": "Worms 3D", "system": "GameCube", "input": "ISO", "extensions": ["iso"],
+    "support": "Worms 3D · European PAL disc (GWMP8P)",
+    "output": "assets.worms", "sd": "/3ds/worms3ds/",
+    "logo": "art/worms-logo.webp", "art": "art/worms-art.webp"
+  },
+  "mk64": {
+    "name": "Mario Kart 64", "system": "Nintendo 64", "input": "ROM", "extensions": ["z64", "n64", "v64"],
+    "support": "Original USA ROM · Z64, N64 or V64",
+    "output": "mk64.o2r", "sd": "/3ds/MK64/", "extra": "Keep mk64.z64 in that folder too.",
+    "logo": "art/mk64-logo.webp", "art": "art/mk64-art.webp"
+  },
+  "sm64ds": {
+    "name": "Super Mario 64 DS", "system": "Nintendo DS", "input": "NDS ROM", "extensions": ["nds"],
+    "support": "European Nintendo DS ROM · ASMP, revision 0",
+    "output": "mario.sm64ds", "sd": "/3ds/sm64ds/",
+    "logo": "art/sm64ds-logo.webp", "art": "art/sm64ds-art.webp"
+  }
+}

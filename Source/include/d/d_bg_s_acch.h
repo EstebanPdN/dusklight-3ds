@@ -95,6 +95,9 @@ public:
     void GroundRoofProc(dBgS&);
     void LineCheck(dBgS&);
     void CrrPos(dBgS&);
+#if defined(DUSK_TARGET_3DS)
+    void CrrPosOriginal(dBgS&);  // logic.txt crrskip (d_bg_s_acch.cpp)
+#endif
     f32 GetWallAllR();
     void SetWallCir();
     void CalcWallBmdCyl();

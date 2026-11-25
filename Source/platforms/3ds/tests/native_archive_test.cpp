@@ -242,6 +242,22 @@ void testDisc(const char* outputDirectory, const char* gameId) {
             void* resource=cache->getResource(0,"archive.arc");
             assert(resource && cache->getResSize(resource)==256 && !std::memcmp(resource,arc.data(),arc.size()));
             assert(cache->removeResource(resource));
+            // A complete walk that missed a name is remembered: the second
+            // lookup makes no DVD call (the provider keeps the last status).
+            assert(!cache->getResource(0,"missing.bti"));
+            assert(!DVDOpenDir("//",&directory) && provider.lastStatus()==DvdStatus::invalidArgument);
+            assert(!cache->getResource(0,"missing.bti") && provider.lastStatus()==DvdStatus::invalidArgument);
+            assert(!cache->readResource(nullptr,0,0,"missing.bti") && provider.lastStatus()==DvdStatus::invalidArgument);
+            // A walk that could not open its directories is not remembered.
+            {
+                std::array<DVDDir,64> held{};
+                for(auto& handle:held)assert(DVDOpenDir("/",&handle));
+                assert(!cache->getResource(0,"archive.arc"));
+                for(auto& handle:held)assert(DVDCloseDir(&handle));
+                void* again=cache->getResource(0,"archive.arc");
+                assert(again && !std::memcmp(again,arc.data(),arc.size()) && cache->removeResource(again));
+            }
+            assert(DVDGetDriveStatus()==DVD_STATE_END && DVDCheckDisk());
             assert(cache->becomeCurrent("/nested") && DVDConvertPathToEntrynum("archive.arc")==4);
             cache->unmount();
         }
@@ -310,6 +326,43 @@ void testDisc(const char* outputDirectory, const char* gameId) {
         ArchiveBootstrap archive; ResourceSpan resource;
         assert(archive.load(disc, "/archive.arc", limits) == ArchiveStatus::ready);
         assert(archive.findBasename("screen.blo", resource) == ArchiveStatus::ready && resource.size == 20);
+        // Hold the I/O service in a callback while a different thread opens
+        // files by path and number and enumerates a directory from cached FST.
+        assert(DVDOpen("/ArChIvE.ArC",&info));
+        assert(provider.shareWithGameWorkers());
+        static std::atomic<bool> entered{}, resolved{};
+        entered=false;resolved=false;
+        DVDFileInfo byNumber{}, byPath{};
+        std::thread lookup([&]{
+            while(!entered.load())std::this_thread::yield();
+            assert(DVDConvertPathToEntrynum("/FoLdEr/NeStEd/ArChIvE.aRc")==4);
+            assert(DVDConvertPathToEntrynum("folder/nested/archive.arc")==4);
+            char retainedPath[40]{};
+            assert(DVDConvertEntrynumToPath(1,retainedPath,sizeof(retainedPath)));
+            assert(!std::strcmp(retainedPath,"/ArChIvE.ArC"));
+            assert(DVDFastOpen(4, &byNumber));
+            assert(DVDGetCommandBlockStatus(&byNumber.cb) == DVD_STATE_END);
+            assert(DVDGetFileInfoStatus(&byNumber) == DVD_STATE_END);
+            DVDFileInfo unregistered{};
+            assert(DVDGetCommandBlockStatus(&unregistered.cb) == DVD_STATE_FATAL_ERROR);
+            assert(!DVDOpen("/archive.arc", &byNumber));
+            assert(DVDOpen("archive.arc", &byPath));
+            DVDDir dir{};
+            DVDDirEntry child{};
+            assert(DVDOpenDir("/folder/nested", &dir));
+            assert(DVDReadDir(&dir, &child) && child.entryNum == 4);
+            assert(DVDCloseDir(&dir));
+            resolved=true;
+        });
+        assert(DVDLowReadDiskID(nullptr,[](u32){
+            entered=true;
+            const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+            while(!resolved.load() && std::chrono::steady_clock::now()<deadline)std::this_thread::yield();
+            assert(resolved.load());
+        }));
+        lookup.join();
+        assert(DVDClose(&byNumber) && DVDClose(&byPath));
+        assert(DVDClose(&info));
         assert(disc.open(nullptr)==DiscStatus::missing);
         std::thread missing([&]{assert(!DVDCheckDisk()&&DVDGetDriveStatus()==DVD_STATE_NO_DISK);});missing.join();
         // Change only this disposable synthetic image. Validation must publish

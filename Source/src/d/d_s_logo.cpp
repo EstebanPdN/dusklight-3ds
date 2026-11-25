@@ -6,6 +6,9 @@
 #include <cstdio>
 #if defined(DUSK_TARGET_3DS)
 #include "../../platforms/3ds/runtime/game_startup.hpp"
+#include "../../platforms/3ds/runtime/tour_load_cost.hpp"
+#include "../../platforms/3ds/runtime/clock.hpp"
+#include "../../platforms/3ds/runtime/gx_profile.hpp"
 #endif
 
 #include "d/dolzel.h" // IWYU pragma: keep
@@ -1193,6 +1196,19 @@ static int resLoad(request_of_phase_process_class* i_phase, dScnLogo_c* i_this) 
 }
 
 int dScnLogo_c::create() {
+#if defined(DUSK_TARGET_3DS)
+    using namespace dusk::native;
+    auto start = measureTourLoads ? gxProfileTick() : 0;
+    auto recordLoad = [&](const char* operation) {
+        if (!start) return;
+        const auto end = gxProfileTick();
+        const auto elapsed = end - start;
+        if (elapsed > nativeTickFrequency / 100)
+            OSReport("Native logo load %s %lu ms\n", operation,
+                     (unsigned long)(elapsed * 1000 / nativeTickFrequency));
+        start = end;
+    };
+#endif
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
     static bool sDiagLogged = false;
     if (!sDiagLogged) {
@@ -1200,6 +1216,9 @@ int dScnLogo_c::create() {
     }
 #endif
     int phase_state = resLoad(&field_0x1c4, this);
+#if defined(DUSK_TARGET_3DS)
+    recordLoad("resource phases");
+#endif
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
     if (!sDiagLogged) {
         DuskLog.debug("dScnLogo_c::create resLoad={} (need {} for complete)", phase_state, fmt::underlying(cPhs_COMPLEATE_e));
@@ -1228,12 +1247,21 @@ int dScnLogo_c::create() {
 
     OS_REPORT("\x1b[31m%d gameHeap->getFreeSize %08x(%d)\n\x1b[m", 1732, mDoExt_getGameHeap()->getFreeSize(), mDoExt_getGameHeap()->getFreeSize());
 
+    #if defined(DUSK_TARGET_3DS)
+    recordLoad("logo layout");
+    #endif
     dvdDataLoad();
+    #if defined(DUSK_TARGET_3DS)
+    recordLoad("archive requests");
+    #endif
 
     OS_REPORT("\x1b[31m%d gameHeap->getFreeSize %08x(%d)\n\x1b[m", 1738, mDoExt_getGameHeap()->getFreeSize(), mDoExt_getGameHeap()->getFreeSize());
 
     #if !(PLATFORM_WII || PLATFORM_SHIELD)
     Z2AudioMgr::getInterface()->loadStaticWaves();
+    #if defined(DUSK_TARGET_3DS)
+    recordLoad("static audio waves");
+    #endif
     #endif
 
     mDoGph_gInf_c::setTickRate(OS_TIMER_CLOCK / 60);

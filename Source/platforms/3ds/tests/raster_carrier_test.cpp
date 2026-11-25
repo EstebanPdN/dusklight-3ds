@@ -114,7 +114,9 @@ static void lighting(){
  assert(evaluateRasterColor(p0,v,a)&&evaluateRasterColor(p1,v,b));
  for(unsigned c=0;c<3;++c){close(a[c],double(0x20+c*0x20)/255);close(b[c],v.color[1][c]*double(0x50+c*0x10)/255);}
  close(a[3],.4*0x40/255);close(b[3],.8*0xc0/255);
- v.present&=~(1u<<GX_VA_CLR1);assert(!evaluateRasterColor(p1,v,b,&e)&&e==RasterColorError::vertex);assert(evaluateRasterColor(p0,v,a));v.present|=1u<<GX_VA_CLR1;
+ // No CLR1: channel 1 reads Dolphin's missing colour, opaque white (rasterVertexColor).
+ v.present&=~(1u<<GX_VA_CLR1);assert(evaluateRasterColor(p1,v,b,&e)&&evaluateRasterColor(p0,v,a));
+ for(unsigned c=0;c<3;++c)close(b[c],double(0x50+c*0x10)/255);close(b[3],double(0xc0)/255);v.present|=1u<<GX_VA_CLR1;
  // Actual-style 0x0f7a: register white material, vertex CLR1 ambient,
  // four selected lights 1..4, clamped diffuse, cosine/distance attenuation.
  word(0x100d,0xffffffff);word(0x100f,0xf7a);

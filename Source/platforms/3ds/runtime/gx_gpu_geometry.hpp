@@ -33,6 +33,18 @@ struct CompactRigidVertexMT {
     std::array<std::uint8_t,4> color{};
 };
 static_assert(sizeof(CompactRigidVertexMT)==32);
+// The same record with a third texture coordinate set after the second one,
+// for a material whose texgens read three GX coordinates
+// (RigidVertexPlan::wideRecord). The six attributes of the compact layout:
+// the second coordinate attribute (shader input v5) is four shorts wide.
+struct CompactRigidVertexMTWide {
+    std::array<float,3> position{};
+    std::array<std::int16_t,3> normal{};
+    std::array<std::int16_t,2> texcoord0{},texcoord1{},texcoord2{};
+    std::array<std::int8_t,2> matrix{0,3}; // position, normal uniform rows
+    std::array<std::uint8_t,4> color{};
+};
+static_assert(sizeof(CompactRigidVertexMTWide)==36);
 // Per-reservation admission, never global state. The CPU direct texture0
 // diagnostic, or private camera-aligned indirect texture0 adapter after its
 // complete original-source proof, may select this token. The latter experiment

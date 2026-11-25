@@ -33,7 +33,10 @@ def main():
     objects=[out/(p.stem+'-host.o') for p in original]
     commands=[['clang++',*game,'-c',str(s),'-o',str(o)] for s,o in zip(original,objects)]
     commands.append(['clang++',*common,*map(str,sources),*map(str,objects),'-Wl,-dead_strip','-o',str(out/'test')])
-    arm='/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++'
+    # devkitARM from the environment, else the usual install places.
+    candidates=[Path(os.environ['DEVKITARM'])/'bin/arm-none-eabi-g++'] if os.environ.get('DEVKITARM') else []
+    candidates+=[Path('/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++'),Path.home()/'devkitpro/devkitARM/bin/arm-none-eabi-g++']
+    arm=str(next((c for c in candidates if c.exists()),candidates[0]))
     flags=['-std=c++20','-O2','-g','-march=armv6k','-mtune=mpcore','-mfloat-abi=hard','-mfpu=vfp',
            '-mtp=soft','-D__3DS__','-DTARGET_PC=1','-DDUSK_TARGET_3DS=1','-I'+str(aurora/'include')]
     for source in sources[:3]:
@@ -43,6 +46,7 @@ def main():
              ROOT/'Source/libs/JSystem/include/JSystem/J3DGraphBase/J3DFifo.h',
              ROOT/'Source/libs/JSystem/include/JSystem/J3DGraphBase/J3DGD.h']
     headers.append(native/'runtime/gx_leaf_wire.hpp')
+    headers+=[native/'runtime/gx_compact_cache.hpp',native/'runtime/gx_state.hpp',native/'runtime/gx_profile.hpp']
     inputs=[*original,*sources,*headers,Path(__file__).resolve()]
     hashes={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
     receipt={'status':'running','origin':'host ASan/UBSan execution of original J3D packet/matrix calls through native GX ABI; ARM compilation only',

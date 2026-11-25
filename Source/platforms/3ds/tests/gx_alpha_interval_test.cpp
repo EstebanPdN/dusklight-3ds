@@ -33,6 +33,7 @@ bool owner=true,failAddress=false,failFlush=false;
 unsigned targetChange{},flushes{};
 int targetColor,targetDepth,otherDepth;
 const GpuGeometryBatch* callbackBatch{};
+bool meshDraws{};
 std::size_t bytesBeforeCallback{};
 bool test(unsigned op,float a,float b){
  switch(op){case GPU_NEVER:return false;case GPU_LESS:return a<b;case GPU_EQUAL:return a==b;
@@ -220,12 +221,16 @@ void failures(){
 extern "C" {
 void* linearMemAlign(size_t n,size_t align){void* p=nullptr;return posix_memalign(&p,align,n)?nullptr:p;}
 void linearFree(void* p){free(p);}
+void C3D_TexDelete(C3D_Tex* texture){linearFree(texture->data);texture->data=nullptr;}
 Result GSPGPU_FlushDataCache(const void*,u32){++flushes;return failFlush?-1:0;}
 void OSReport(const char*,...){}
 Result shaderProgramFree(shaderProgram_s*){return 0;}void DVLB_Free(DVLB_s*){}
 C3D_AttrInfo* C3D_GetAttrInfo(){return &attrs;}void AttrInfo_Init(C3D_AttrInfo* p){*p={};}
 int AttrInfo_AddLoader(C3D_AttrInfo*,int,GPU_FORMATS,int){return 0;}
 C3D_BufInfo* C3D_GetBufInfo(){return &bufs;}void BufInfo_Init(C3D_BufInfo* p){*p={};}
+// The geometry backend sends a changed first buffer as raw register words;
+// this BufInfo_Add mock leaves the configuration unchanged, so none are sent.
+void GPUCMD_Add(u32,const u32*,u32){assert(!"no raw buffer words expected");}
 int BufInfo_Add(C3D_BufInfo*,const void* p,ptrdiff_t stride,int count,u64 permutation){
  assert(stride==sizeof(GpuVertex)&&count==6&&permutation==0x543210);boundVertices=static_cast<const GpuVertex*>(p);return failAddress?-1:0;}
 C3D_FrameBuf* C3D_GetFrameBuf(){return &frame;}
@@ -243,19 +248,22 @@ void C3D_AlphaBlend(GPU_BLENDEQUATION e,GPU_BLENDEQUATION a,GPU_BLENDFACTOR s,GP
 C3D_FVec C3D_FVUnif[2][C3D_FVUNIF_COUNT];C3D_IVec C3D_IVUnif[2][C3D_IVUNIF_COUNT];
 bool C3D_FVUnifDirty[2][C3D_FVUNIF_COUNT];bool C3D_IVUnifDirty[2][C3D_IVUNIF_COUNT];
 void C3D_DrawElements(GPU_Primitive_t prim,int count,int type,const void* indices){
- assert(prim==GPU_TRIANGLES&&count==3&&type==C3D_UNSIGNED_SHORT);
+ // One triangle per draw, except the whole-mesh alpha-union passes.
+ assert(prim==GPU_TRIANGLES&&(count==3||(meshDraws&&count>3&&count%3==0))&&type==C3D_UNSIGNED_SHORT);
  assert(immutable.size()&&std::memcmp(immutable.data(),boundVertices,immutable.size())==0);
- const auto* ix=static_cast<const u16*>(indices);assert(ix[1]==ix[0]+1&&ix[2]==ix[0]+2);
+ for(int first=0;first<count;first+=3){
+ const auto* ix=static_cast<const u16*>(indices)+first;assert(ix[1]==ix[0]+1&&ix[2]==ix[0]+2);
  const unsigned tri=ix[0]/3;assert(tri<samples.size());emitted.push_back(tri);
- const auto& s=samples[tri];if(!s.covers)return;
- if(effect.alpha&&!test(effect.af,s.alpha,effect.ar))return;
- if(effect.stencil&&!test(effect.sf,effect.sr&effect.in,pixel.stencil&effect.in)){stencilOp(effect.ops[0]);return;}
- if(effect.depth&&!test(effect.df,s.z,pixel.z)){if(effect.stencil)stencilOp(effect.ops[1]);return;}
+ const auto& s=samples[tri];if(!s.covers)continue;
+ if(effect.alpha&&!test(effect.af,s.alpha,effect.ar))continue;
+ if(effect.stencil&&!test(effect.sf,effect.sr&effect.in,pixel.stencil&effect.in)){stencilOp(effect.ops[0]);continue;}
+ if(effect.depth&&!test(effect.df,s.z,pixel.z)){if(effect.stencil)stencilOp(effect.ops[1]);continue;}
  if(effect.stencil)stencilOp(effect.ops[2]);
  const float a=s.alpha/255.f,da=pixel.alpha;
  if(effect.writes&GPU_WRITE_RED)pixel.red=blend(s.red,pixel.red,a,da,effect.src,effect.dst,effect.eq);
  if(effect.writes&GPU_WRITE_ALPHA)pixel.alpha=blend(a,da,a,da,effect.srcA,effect.dstA,effect.eqA);
  if(effect.writes&GPU_WRITE_DEPTH)pixel.z=s.z;
+ }
 }
 }
 namespace dusk::native {
@@ -283,6 +291,64 @@ PreparedPicaMaterial preparePicaMaterial(const PicaMaterialPlan&){return {};}
 void applyPreparedPicaMaterial(const PreparedPicaMaterial&){}
 }
 
+// Alpha-union layers through the real submitGxCommandGeometry: one pair of
+// draws per triangle (Alpha 6) against two whole-mesh passes. The predicate
+// admits only blends whose result ignores the fragment order; for those both
+// forms leave the same pixel, and the whole-mesh form takes two draws.
+void unionTests(){
+ auto unionRaster=[](unsigned src,unsigned dst){
+  RasterPlan r;r.alphaUnion=true;r.alpha={3,65};r.alphaSecond={6,210};r.depth={true,3,false};
+  r.writeRgb=true;r.blend={1,std::uint8_t(src),std::uint8_t(dst),0};r.scissor={0,0,240,400,false};return r;};
+ struct Case {unsigned src,dst;bool depthWrite,storesAlpha,writeAlpha,subtract,expected;};
+ const Case cases[]{
+  {4,1,false,false,false,false,true},{1,1,false,false,false,false,true},{0,1,false,false,false,false,true},{5,1,false,false,false,false,true},
+  {4,1,true,false,false,false,false},  // depth write: the order decides which fragment wins
+  {4,5,false,false,false,false,false}, // alpha mixing reads the destination colour
+  {2,1,false,false,false,false,false}, // source factor = destination colour
+  {4,0,false,false,false,false,false},{4,2,false,false,false,false,false},
+  {4,6,false,false,false,false,true},  // RGB8: destination-alpha factor is one
+  {4,6,false,true,false,false,false},  // stored alpha: destination factor reads it
+  {6,1,false,true,false,false,true},   // destination alpha read, never written by the mesh
+  {6,1,false,true,true,false,false},   // ... and written by the mesh
+  {4,1,false,false,false,true,false}}; // subtract
+ for(const auto& c:cases){
+  auto r=unionRaster(c.src,c.dst);r.depth.write=c.depthWrite;r.storesAlpha=c.storesAlpha;r.writeAlpha=c.writeAlpha;r.subtractBlend=c.subtract;
+  assert(picaAlphaUnionMesh(r)==c.expected&&picaAlphaUnionGpu(r)==c.expected);
+  r.alphaUnion=false;assert(!picaAlphaUnionMesh(r)&&!picaAlphaUnionGpu(r));
+ }
+ setAlphaUnionPasses(true,false);assert(picaAlphaUnionMesh(unionRaster(4,1))&&!picaAlphaUnionGpu(unionRaster(4,1)));
+ setAlphaUnionPasses(false,true);assert(!picaAlphaUnionMesh(unionRaster(4,1))&&!picaAlphaUnionGpu(unionRaster(4,1)));
+ PicaMaterialPlan material;meshDraws=true;
+ std::uint32_t seed=0x5eed;auto next=[&]{seed=seed*1664525+1013904223;return seed>>8;};
+ unsigned trials=0;
+ for(unsigned trial=0;trial<3000;++trial){
+  std::vector<Sample> scene(6);
+  // Dyadic colours keep the float model's sums exact (ONE/ONE); the
+  // source-alpha blend is compared within float rounding.
+  for(auto& f:scene)f={next()&255,float(next()%5)/4,float(next()%64)/256,(next()&3)!=0};
+  const float start=float(next()%64)/256,depth=float(next()%5)/4;
+  for(const unsigned src:{1u,4u}){
+   float result[2]{};
+   for(unsigned form=0;form<2;++form){
+    setAlphaUnionPasses(form==1,false);
+    reset();samples=scene;pixel.red=start;pixel.z=depth;auto b=batch(6);
+    assert(submitCommand(unionRaster(src,1),material,b));
+    std::vector<unsigned> order;
+    if(form)for(unsigned pass=0;pass<2;++pass)for(unsigned t=0;t<6;++t)order.push_back(t);
+    else for(unsigned t=0;t<6;++t)order.insert(order.end(),{t,t});
+    assert(emitted==order&&prepareCalls==(form?3u:13u)); // one before the state, one per draw
+    result[form]=pixel.red;
+   }
+   if(src==1)assert(result[0]==result[1]);
+   else assert(std::abs(result[0]-result[1])<=1e-6f);
+   ++trials;
+  }
+ }
+ meshDraws=false;setAlphaUnionPasses(true,true);
+ std::printf("PASS alpha-union passes: predicate admits only order-free blends (%zu cases); %u scenes give the same pixel per triangle and as two whole-mesh draws\n",
+  std::size(cases),trials);
+}
+
 void signedQBackendTests(){
     auto r=raster();r.alphaInterval={};r.alphaUnion=false;r.alpha={7,0};
     PicaMaterialPlan material;material.textureCount=1;material.projectiveTexture0=true;
@@ -308,4 +374,4 @@ void signedQBackendTests(){
     std::puts("PASS signed-q real material wrapper: direct token preserved, full bytes unchanged; unavailable/invalid/multipass/rigid fail before prepare/emission");
 }
 
-int main(){signedQBackendTests();truthTests();plannerTests();sequenceTests();failures();destroyGxGeometry();std::puts("PASS alpha interval real backend mock emission (native untested)");}
+int main(){signedQBackendTests();unionTests();truthTests();plannerTests();sequenceTests();failures();destroyGxGeometry();std::puts("PASS alpha interval real backend mock emission (native untested)");}

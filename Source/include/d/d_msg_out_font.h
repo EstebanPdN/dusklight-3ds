@@ -5,6 +5,9 @@
 
 class J2DPicture;
 class J2DTextBox;
+#if defined(DUSK_TARGET_3DS)
+class JKRHeap;
+#endif
 
 class COutFontSet_c {
 public:
@@ -61,6 +64,13 @@ public:
     /* 0x240 */ bool field_0x240;
     /* 0x241 */ u8 mRupeeColor;
     /* 0x242 */ u8 field_0x242;
+
+private:
+    void createPanes(int first, int end);
+    void deletePanes();
+#if defined(DUSK_TARGET_3DS)
+    JKRHeap* mPaneHeap = NULL;
+#endif
 };
 
 #endif /* D_MSG_D_MSG_OUT_FONT_H */

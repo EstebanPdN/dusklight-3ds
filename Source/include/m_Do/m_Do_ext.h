@@ -621,6 +621,13 @@ public:
 
     cXyz* getPos(int i_idx) { return mpLines[i_idx].field_0x0; }
     f32* getSize(int i_idx) { return mpLines[i_idx].field_0x4; }
+#if defined(DUSK_TARGET_3DS)
+    // Instance batches for lines (m_Do_ext.cpp): this material and the ones
+    // after it in the sort packet that set the same state drawn as one strip;
+    // returns the first material after them.
+    mDoExt_3DlineMat_c* nativeDrawRun();
+    bool nativeSameDraw(const mDoExt_3DlineMat1_c& other) const;
+#endif
 
 private:
     /* 0x08 */ TGXTexObj mTextureObject;
@@ -857,6 +864,20 @@ void mDoExt_removeMesgFont();
 
 void mDoExt_modelUpdate(J3DModel* i_model);
 void mDoExt_modelUpdateDL(J3DModel* i_model);
+#if defined(DUSK_TARGET_3DS)
+struct J3DNativeInstances;
+// Instance batches (sdmc:/3ds/DuskLight/batch-instances.txt: 0 off, v verify;
+// JSystem/J3DGraphBase/J3DNativeInstances.h). In place of, for i = 0 to
+// count - 1, in the current draw lists:
+//     g_env_light.setLightTevColorType_MAJI(models[i], tevStr);
+//     mDoExt_modelUpdateDL(models[i]);
+// every model is calculated, the light is set once and only the last model
+// is entered; its shapes draw them all where the original entries would have
+// been drawn. `batch` (the actor's) and `models` stay valid until the
+// picture is painted. False: nothing was done; the caller runs that code.
+bool mDoExt_nativeInstancesUpdateDL(J3DModel* const* models, int count, dKy_tevstr_c* tevStr,
+                                    J3DNativeInstances* batch);
+#endif
 J3DModel* mDoExt_J3DModel__create(J3DModelData* i_modelData, u32 i_modelFlag,
                                   u32 i_differedDlistFlag);
 

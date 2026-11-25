@@ -12,6 +12,15 @@
 #include "dusk/version.hpp"
 #endif
 
+#if defined(DUSK_TARGET_3DS)
+static void fontPaneOutOfMemory(int index) {
+    JKRHeap* heap = JKRGetCurrentHeap();
+    OSPanic(__FILE__, __LINE__, "Original font pane allocation failed: pane=%d heap=%lu free=%lu",
+            index, static_cast<unsigned long>(heap->getSize()),
+            static_cast<unsigned long>(heap->getTotalFreeSize()));
+}
+#endif
+
 COutFontSet_c::COutFontSet_c() {
     initialize();
 }
@@ -65,9 +74,16 @@ COutFont_c::~COutFont_c() {
         mpOfs[i] = NULL;
     }
 
-    if (field_0x240) {
-        field_0x240 = 0;
+    deletePanes();
 
+    if (dComIfGp_getExpHeap2D() == NULL) {
+        dComIfGp_getItemIconArchive()->removeResourceAll();
+    }
+}
+
+void COutFont_c::deletePanes() {
+    if (field_0x240) {
+        field_0x240 = false;
         for (int i = 0; i < 70; i++) {
             if (mpPane[i] != NULL) {
                 JKR_DELETE(mpPane[i]);
@@ -75,13 +91,13 @@ COutFont_c::~COutFont_c() {
             }
         }
     }
-
-    if (dComIfGp_getExpHeap2D() == NULL) {
-        dComIfGp_getItemIconArchive()->removeResourceAll();
-    }
 }
 
 void COutFont_c::setPane(J2DPicture* i_pic) {
+#if defined(DUSK_TARGET_3DS)
+    deletePanes();
+    mPaneHeap = NULL;
+#endif
     for (int i = 0; i < 70; i++) {
         mpPane[i] = i_pic;
         i_pic++;
@@ -91,9 +107,24 @@ void COutFont_c::setPane(J2DPicture* i_pic) {
 }
 
 void COutFont_c::createPane() {
-    ResTIMG* img;
+#if defined(DUSK_TARGET_3DS)
+    if (field_0x240) {
+        return;
+    }
+    // Glyphs may be queued while another menu or dialogue heap is current.
+    mPaneHeap = JKRGetCurrentHeap();
+    for (J2DPicture*& pane : mpPane) {
+        pane = NULL;
+    }
+#else
+    createPanes(0, ARRAY_SIZE(mpPane));
+#endif
+    field_0x240 = true;
+}
 
-    for (int i = 0; i < 70; i++) {
+void COutFont_c::createPanes(int first, int end) {
+    for (int i = first; i < end; i++) {
+        ResTIMG* img;
         if (i == 41) {
             img = (ResTIMG*)dComIfGp_getItemIconArchive()->getResource('TIMG', getBtiName(i));
         } else {
@@ -102,8 +133,9 @@ void COutFont_c::createPane() {
 
         mpPane[i] = JKR_NEW J2DPicture(img);
 #if defined(DUSK_TARGET_3DS)
-        if(!mpPane[i])OSPanic(__FILE__,__LINE__,"Original font pane allocation failed: pane=%d heap=%lu free=%lu",i,
-            static_cast<unsigned long>(JKRGetCurrentHeap()->getSize()),static_cast<unsigned long>(JKRGetCurrentHeap()->getTotalFreeSize()));
+        if (mpPane[i] == NULL || (img != NULL && mpPane[i]->getTexture(0) == NULL)) {
+            fontPaneOutOfMemory(i);
+        }
 #endif
         switch (i) {
         case 0:
@@ -284,9 +316,12 @@ void COutFont_c::createPane() {
                                      JUtility::TColor(255, 255, 255, 255));
             break;
         }
+#if defined(DUSK_TARGET_3DS)
+        if (img != NULL && mpPane[i]->getTexture(mpPane[i]->getTextureCount() - 1) == NULL) {
+            fontPaneOutOfMemory(i);
+        }
+#endif
     }
-
-    field_0x240 = true;
 }
 
 void COutFont_c::initialize() {
@@ -297,6 +332,11 @@ void COutFont_c::initialize() {
 
 void COutFont_c::drawFont(J2DTextBox* i_textbox, u8 i_type, f32 i_posX, f32 i_posY, f32 i_sizeX,
                           f32 i_sizeY, u32 i_color, u8 i_alpha) {
+#if defined(DUSK_TARGET_3DS)
+    if (i_type >= ARRAY_SIZE(mpPane)) {
+        return;
+    }
+#endif
 #if TARGET_PC || VERSION != VERSION_GCN_JPN
     IF_DUSK_BLOCK(!dusk::version::isRegionJpn())
     i_posY += 1.0f;
@@ -304,6 +344,20 @@ void COutFont_c::drawFont(J2DTextBox* i_textbox, u8 i_type, f32 i_posX, f32 i_po
 #endif
     for (int i = 0; i < 35; i++) {
         if (mpOfs[i]->getType() == 0x47) {
+#if defined(DUSK_TARGET_3DS)
+            if (mPaneHeap != NULL &&
+                (mpPane[i_type] == NULL || (i_type == 25 && mpPane[26] == NULL))) {
+                JKRHeap* previousHeap = JKRSetCurrentHeap(mPaneHeap);
+                if (mpPane[i_type] == NULL) {
+                    createPanes(i_type, i_type + 1);
+                }
+                // The portal draws a second glyph even when it was not queued.
+                if (i_type == 25 && mpPane[26] == NULL) {
+                    createPanes(26, 27);
+                }
+                JKRSetCurrentHeap(previousHeap);
+            }
+#endif
             mpOfs[i]->drawFont(i_textbox, i_type, i_posX, i_posY, i_sizeX, i_sizeY, i_color,
                                i_alpha);
             return;

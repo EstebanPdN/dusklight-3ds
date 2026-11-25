@@ -39,37 +39,35 @@ void C_MTXCopy(const Mtx src, Mtx dst) {
 }
 
 void C_MTXConcat(const Mtx a, const Mtx b, Mtx ab) {
-  Mtx mTmp;
-  MtxPtr m;
-
   assert(a && "MTXConcat():  NULL MtxPtr 'a'  ");
   assert(b && "MTXConcat():  NULL MtxPtr 'b'  ");
   assert(ab && "MTXConcat():  NULL MtxPtr 'ab' ");
 
-  if (ab == a || ab == b) {
-    m = mTmp;
-  } else {
-    m = ab;
-  }
+  /* Every input is read once into locals before any output is written, so
+     ab may alias a or b with no temporary and copy, and the compiler need
+     not reload inputs after each store (it cannot prove they do not alias).
+     The expressions and their order are unchanged: same results, bit for bit. */
+  const f32 a00 = a[0][0], a01 = a[0][1], a02 = a[0][2], a03 = a[0][3];
+  const f32 a10 = a[1][0], a11 = a[1][1], a12 = a[1][2], a13 = a[1][3];
+  const f32 a20 = a[2][0], a21 = a[2][1], a22 = a[2][2], a23 = a[2][3];
+  const f32 b00 = b[0][0], b01 = b[0][1], b02 = b[0][2], b03 = b[0][3];
+  const f32 b10 = b[1][0], b11 = b[1][1], b12 = b[1][2], b13 = b[1][3];
+  const f32 b20 = b[2][0], b21 = b[2][1], b22 = b[2][2], b23 = b[2][3];
 
-  m[0][0] =       0 +  a[0][2] * b[2][0] + ((a[0][0] * b[0][0]) + (a[0][1] * b[1][0]));
-  m[0][1] =       0 +  a[0][2] * b[2][1] + ((a[0][0] * b[0][1]) + (a[0][1] * b[1][1]));
-  m[0][2] =       0 +  a[0][2] * b[2][2] + ((a[0][0] * b[0][2]) + (a[0][1] * b[1][2]));
-  m[0][3] = a[0][3] + (a[0][2] * b[2][3] +  (a[0][0] * b[0][3]  + (a[0][1] * b[1][3])));
+  ab[0][0] =   0 + a02 * b20 + ((a00 * b00) + (a01 * b10));
+  ab[0][1] =   0 + a02 * b21 + ((a00 * b01) + (a01 * b11));
+  ab[0][2] =   0 + a02 * b22 + ((a00 * b02) + (a01 * b12));
+  ab[0][3] = a03 + (a02 * b23 +  (a00 * b03  + (a01 * b13)));
 
-  m[1][0] =       0 +  a[1][2] * b[2][0] + ((a[1][0] * b[0][0]) + (a[1][1] * b[1][0]));
-  m[1][1] =       0 +  a[1][2] * b[2][1] + ((a[1][0] * b[0][1]) + (a[1][1] * b[1][1]));
-  m[1][2] =       0 +  a[1][2] * b[2][2] + ((a[1][0] * b[0][2]) + (a[1][1] * b[1][2]));
-  m[1][3] = a[1][3] + (a[1][2] * b[2][3] +  (a[1][0] * b[0][3]  + (a[1][1] * b[1][3])));
+  ab[1][0] =   0 + a12 * b20 + ((a10 * b00) + (a11 * b10));
+  ab[1][1] =   0 + a12 * b21 + ((a10 * b01) + (a11 * b11));
+  ab[1][2] =   0 + a12 * b22 + ((a10 * b02) + (a11 * b12));
+  ab[1][3] = a13 + (a12 * b23 +  (a10 * b03  + (a11 * b13)));
 
-  m[2][0] =       0 +  a[2][2] * b[2][0] + ((a[2][0] * b[0][0]) + (a[2][1] * b[1][0]));
-  m[2][1] =       0 +  a[2][2] * b[2][1] + ((a[2][0] * b[0][1]) + (a[2][1] * b[1][1]));
-  m[2][2] =       0 +  a[2][2] * b[2][2] + ((a[2][0] * b[0][2]) + (a[2][1] * b[1][2]));
-  m[2][3] = a[2][3] + (a[2][2] * b[2][3] +  (a[2][0] * b[0][3]  + (a[2][1] * b[1][3])));
-
-  if (m == mTmp) {
-    C_MTXCopy(mTmp, ab);
-  }
+  ab[2][0] =   0 + a22 * b20 + ((a20 * b00) + (a21 * b10));
+  ab[2][1] =   0 + a22 * b21 + ((a20 * b01) + (a21 * b11));
+  ab[2][2] =   0 + a22 * b22 + ((a20 * b02) + (a21 * b12));
+  ab[2][3] = a23 + (a22 * b23 +  (a20 * b03  + (a21 * b13)));
 }
 
 void C_MTXConcatArray(const Mtx a, const Mtx* srcBase, Mtx* dstBase, u32 count) {

@@ -15,6 +15,10 @@
 
 #if !defined(DUSK_TARGET_3DS)
 #include <tracy/Tracy.hpp>
+#else
+#include <cmath>
+#include <cstring>
+#include "../../../../platforms/3ds/runtime/gx_stream.hpp"
 #endif
 #endif
 
@@ -562,12 +566,16 @@ void JPANativePrjTexMtx(JPAEmitterWorkData const* work, Mtx out) {
 }
 #endif
 
-static u8 jpa_dl[32] = {
+// const (3DS port, Alpha 15): constant data, inside the range the second-core
+// worker's queue takes particle runs from (CommandProcessor::setImmutableMemory);
+// as writable statics every particle quad was drawn on the game thread after
+// a sync that handed it the whole queued picture.
+static const u8 jpa_dl[32] = {
     0x80, 0x00, 0x04, 0x00, 0x00, 0x01, 0x01, 0x02, 0x02, 0x03, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
-static u8 jpa_dl_x[32] = {
+static const u8 jpa_dl_x[32] = {
     0x80, 0x00, 0x08, 0x00, 0x00, 0x01, 0x01, 0x02, 0x02, 0x03, 0x03, 0x48, 0x00, 0x49, 0x01, 0x4A,
     0x02, 0x4B, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
@@ -581,12 +589,116 @@ static projectionFunc p_prj[3] = {
 };
 
 #if TARGET_PC
+#if defined(DUSK_TARGET_3DS)
+// Native batch extras, set by the batch loop around its particles
+// (JPAResource.cpp, native_draw_particle_batch).
+// rawUv: TEX1 carries the particle's own coordinates for the secondary (mask)
+//   stage. TEX0 carries the projected or matrix-transformed ones computed
+//   here; the original reads both stages from the one TEX0 index, through
+//   two texture matrices, so without TEX1 the mask would follow the
+//   projection or the scroll of the main texture.
+// sway: a frame-copy refraction particle. The PICA has no indirect stage;
+//   the quad is drawn as four triangles around its centre, whose frame-copy
+//   coordinates sway while the border stays put (the heat haze grid of
+//   gx_pica.cpp, one cell per particle).
+static struct {
+    bool rawUv;
+    bool sway;
+    f32 swayS, swayT; // largest shift, as a fraction of the frame copy
+} sNativeBatchExtra;
+
+void JPANativeBatchExtra(bool rawUv, bool sway, f32 swayS, f32 swayT) {
+    sNativeBatchExtra.rawUv = rawUv;
+    sNativeBatchExtra.sway = sway;
+    sNativeBatchExtra.swayS = swayS;
+    sNativeBatchExtra.swayT = swayT;
+}
+
+// TEX0 of one batch vertex: projected from its view-space position,
+// transformed by the particle's texture matrix, or its own coordinates.
+static void native_batch_uv(const ParticleDrawCtx* ctx, const Vec& p, f32 rawS, f32 rawT,
+                            f32& texS, f32& texT) {
+    texS = rawS;
+    texT = rawT;
+    if (ctx->prj) {
+        // Projected texture: the divide is done per corner here; across
+        // one small quad the difference from a per-pixel divide is nil.
+        const f32 q = ctx->texMtx[2][0] * p.x + ctx->texMtx[2][1] * p.y +
+                      ctx->texMtx[2][2] * p.z + ctx->texMtx[2][3];
+        if (q > 1.0e-6f || q < -1.0e-6f) {
+            texS = (ctx->texMtx[0][0] * p.x + ctx->texMtx[0][1] * p.y +
+                    ctx->texMtx[0][2] * p.z + ctx->texMtx[0][3]) / q;
+            texT = (ctx->texMtx[1][0] * p.x + ctx->texMtx[1][1] * p.y +
+                    ctx->texMtx[1][2] * p.z + ctx->texMtx[1][3]) / q;
+        } else {
+            texS = texT = 0.0f;
+        }
+    } else if (ctx->useTexMtx) {
+        texS = ctx->texMtx[0][0] * rawS + ctx->texMtx[0][1] * rawT + ctx->texMtx[0][3];
+        texT = ctx->texMtx[1][0] * rawS + ctx->texMtx[1][1] * rawT + ctx->texMtx[1][3];
+    }
+}
+
+// The vertices of one particle go to the GX stream in one block, the bytes
+// the vertex calls write (XYZ F32, RGBA8 with a vertex colour, ST F32 and
+// with rawUv a second ST F32): a call chain per value cost about 16
+// microseconds a particle, 8 to 16 calls for its four corners.
+static u8 sNativeBatchBytes[32 * 24];
+static unsigned sNativeBatchUsed;
+
+static void native_batch_flush() {
+    if (sNativeBatchUsed == 0) {
+        return;
+    }
+    auto* stream = dusk::native::gx::commandStream();
+    if (stream == NULL || !stream->write({sNativeBatchBytes, sNativeBatchUsed})) {
+        OSPanic(__FILE__, __LINE__, "Native particle batch stream failed");
+    }
+    sNativeBatchUsed = 0;
+}
+
+static inline void native_batch_put(f32 value) {
+    u32 bits;
+    std::memcpy(&bits, &value, 4);
+    bits = __builtin_bswap32(bits);
+    std::memcpy(sNativeBatchBytes + sNativeBatchUsed, &bits, 4);
+    sNativeBatchUsed += 4;
+}
+
+static void native_batch_vertex(const ParticleDrawCtx* ctx, const Vec& p, f32 texS, f32 texT,
+                                f32 rawS, f32 rawT) {
+    if (sNativeBatchUsed + 32 > sizeof(sNativeBatchBytes)) {
+        native_batch_flush();
+    }
+    native_batch_put(p.x);
+    native_batch_put(p.y);
+    native_batch_put(p.z);
+    if (ctx->useClr0) {
+        u8* out = sNativeBatchBytes + sNativeBatchUsed;
+        out[0] = ctx->clr0.r;
+        out[1] = ctx->clr0.g;
+        out[2] = ctx->clr0.b;
+        out[3] = ctx->clr0.a;
+        sNativeBatchUsed += 4;
+    }
+    // The environment colour stays in TEV register 1.
+    native_batch_put(texS);
+    native_batch_put(texT);
+    if (sNativeBatchExtra.rawUv) {
+        native_batch_put(rawS);
+        native_batch_put(rawT);
+    }
+}
+
+static f32 native_clamp(f32 value, f32 low, f32 high) {
+    return value < low ? low : value > high ? high : value;
+}
+
 static void emit_batch_quad(JPAEmitterWorkData* work, ParticleDrawCtx* ctx,
                             const Mtx posMtx) {
     const JPAResource::BatchInfo& info =
         ctx->child ? work->mpRes->mChildBatchInfo : work->mpRes->mBatchInfo;
 
-#if defined(DUSK_TARGET_3DS)
     // Native batch: a quad with every corner outside one side of the view is
     // not sent at all. mPrjMtx maps view space to (s*q, t*q, q) with the
     // screen at 0..1, for perspective and orthographic groups alike.
@@ -608,38 +720,97 @@ static void emit_batch_quad(JPAEmitterWorkData* work, ParticleDrawCtx* ctx,
         return;
     }
     if (!ctx->open) {
-        GXBegin(GX_QUADS, GX_VTXFMT1, GX_AUTO);
+        GXBegin(sNativeBatchExtra.sway ? GX_TRIANGLES : GX_QUADS, GX_VTXFMT1, GX_AUTO);
         ctx->open = true;
     }
-#endif
+
+    if (!sNativeBatchExtra.sway) {
+        for (int i = 0; i < info.vtxCount; i++) {
+            f32 texS, texT;
+            native_batch_uv(ctx, corners[i], info.vtxUv[i][0], info.vtxUv[i][1], texS, texT);
+            native_batch_vertex(ctx, corners[i], texS, texT, info.vtxUv[i][0], info.vtxUv[i][1]);
+        }
+        native_batch_flush();
+        return;
+    }
+
+    // Refraction: the sway follows the particle's age at the heat haze's
+    // speed (0.19 radian a tick) from a random start, so neighbouring
+    // particles do not move together.
+    const JPABaseParticle* ptcl = work->mpCurNode->getObject();
+    const f32 phase = 0.19f * f32(ptcl->mAge) + 0.0246f * f32(ptcl->mAnmRandom);
+    const f32 waveS = std::sin(phase);
+    const f32 waveT = std::cos(1.31f * phase + 0.7f);
+    for (int first = 0; first < info.vtxCount; first += 4) {
+        f32 texS[4], texT[4];
+        Vec centre = {0.0f, 0.0f, 0.0f};
+        f32 rawS = 0.0f, rawT = 0.0f;
+        bool inFront = true;
+        for (int k = 0; k < 4; k++) {
+            const int i = first + k;
+            const Vec& p = corners[i];
+            native_batch_uv(ctx, p, info.vtxUv[i][0], info.vtxUv[i][1], texS[k], texT[k]);
+            inFront = inFront && ctx->texMtx[2][0] * p.x + ctx->texMtx[2][1] * p.y +
+                                 ctx->texMtx[2][2] * p.z + ctx->texMtx[2][3] > 1.0e-6f;
+            centre.x += 0.25f * p.x;
+            centre.y += 0.25f * p.y;
+            centre.z += 0.25f * p.z;
+            rawS += 0.25f * info.vtxUv[i][0];
+            rawT += 0.25f * info.vtxUv[i][1];
+        }
+        f32 centreS, centreT;
+        native_batch_uv(ctx, centre, rawS, rawT, centreS, centreT);
+        // The shift stays within 0.35 of the distance from the centre to the
+        // nearest edge of the quad on the copy, so the four triangles never
+        // fold over (thin streaks included); it never leaves the frame copy
+        // (its padding beyond the picture is not part of the frame); and a
+        // quad reaching behind the eye keeps its plain projection.
+        if (inFront && centreS >= 0.0f && centreS <= 1.0f && centreT >= 0.0f && centreT <= 1.0f) {
+            f32 nearest = 1.0e30f;
+            for (int k = 0; k < 4; k++) {
+                const int j = (k + 1) & 3;
+                const f32 edgeS = texS[j] - texS[k], edgeT = texT[j] - texT[k];
+                const f32 length = std::sqrt(edgeS * edgeS + edgeT * edgeT);
+                if (length > 1.0e-9f) {
+                    const f32 distance =
+                        std::fabs(edgeS * (centreT - texT[k]) - edgeT * (centreS - texS[k])) / length;
+                    nearest = distance < nearest ? distance : nearest;
+                }
+            }
+            f32 shiftS = sNativeBatchExtra.swayS * waveS;
+            f32 shiftT = sNativeBatchExtra.swayT * waveT;
+            const f32 limit = nearest < 1.0e29f ? 0.35f * nearest : 0.0f;
+            const f32 shift = std::sqrt(shiftS * shiftS + shiftT * shiftT);
+            if (shift > limit) {
+                const f32 scale = limit / shift;
+                shiftS *= scale;
+                shiftT *= scale;
+            }
+            centreS = native_clamp(centreS + shiftS, 0.0f, 1.0f);
+            centreT = native_clamp(centreT + shiftT, 0.0f, 1.0f);
+        }
+        for (int k = 0; k < 4; k++) {
+            const int a = first + k, b = first + ((k + 1) & 3);
+            native_batch_vertex(ctx, centre, centreS, centreT, rawS, rawT);
+            native_batch_vertex(ctx, corners[a], texS[k], texT[k], info.vtxUv[a][0], info.vtxUv[a][1]);
+            native_batch_vertex(ctx, corners[b], texS[(k + 1) & 3], texT[(k + 1) & 3], info.vtxUv[b][0], info.vtxUv[b][1]);
+        }
+    }
+    native_batch_flush();
+}
+#else
+static void emit_batch_quad(JPAEmitterWorkData* work, ParticleDrawCtx* ctx,
+                            const Mtx posMtx) {
+    const JPAResource::BatchInfo& info =
+        ctx->child ? work->mpRes->mChildBatchInfo : work->mpRes->mBatchInfo;
 
     for (int i = 0; i < info.vtxCount; i++) {
-#if defined(DUSK_TARGET_3DS)
-        const Vec drawPos = corners[i];
-#else
         Vec localPos = {info.vtxPos[i][0], info.vtxPos[i][1], info.vtxPos[i][2]};
         Vec drawPos;
         MTXMultVec(posMtx, &localPos, &drawPos);
-#endif
 
         f32 texS = info.vtxUv[i][0];
         f32 texT = info.vtxUv[i][1];
-#if defined(DUSK_TARGET_3DS)
-        if (ctx->prj) {
-            // Projected texture: the divide is done per corner here; across
-            // one small quad the difference from a per-pixel divide is nil.
-            const f32 q = ctx->texMtx[2][0] * drawPos.x + ctx->texMtx[2][1] * drawPos.y +
-                          ctx->texMtx[2][2] * drawPos.z + ctx->texMtx[2][3];
-            if (q > 1.0e-6f || q < -1.0e-6f) {
-                texS = (ctx->texMtx[0][0] * drawPos.x + ctx->texMtx[0][1] * drawPos.y +
-                        ctx->texMtx[0][2] * drawPos.z + ctx->texMtx[0][3]) / q;
-                texT = (ctx->texMtx[1][0] * drawPos.x + ctx->texMtx[1][1] * drawPos.y +
-                        ctx->texMtx[1][2] * drawPos.z + ctx->texMtx[1][3]) / q;
-            } else {
-                texS = texT = 0.0f;
-            }
-        } else
-#endif
         if (ctx->useTexMtx) {
             f32 srcS = texS;
             f32 srcT = texT;
@@ -651,15 +822,13 @@ static void emit_batch_quad(JPAEmitterWorkData* work, ParticleDrawCtx* ctx,
         if (ctx->useClr0) {
             GXColor4u8(ctx->clr0.r, ctx->clr0.g, ctx->clr0.b, ctx->clr0.a);
         }
-#if !defined(DUSK_TARGET_3DS)
-        // Native 3DS batch: the environment colour stays in TEV register 1.
         if (ctx->useClr1) {
             GXColor4u8(ctx->clr1.r, ctx->clr1.g, ctx->clr1.b, ctx->clr1.a);
         }
-#endif
         GXTexCoord2f32(texS, texT);
     }
 }
+#endif
 
 static void submit_particle_quad(
     JPAEmitterWorkData* work, ParticleDrawCtx* ctx, const Mtx posMtx, const u8* dl, u32 dlSize) {
@@ -973,7 +1142,7 @@ static planeFunc p_plane[3] = {
     basePlaneTypeX,
 };
 
-static u8* p_dl[2] = {
+static const u8* const p_dl[2] = {
     jpa_dl,
     jpa_dl_x,
 };
@@ -1136,6 +1305,38 @@ void JPADrawDBillboard(JPAEmitterWorkData* param_0, JPABaseParticle* param_1 JPA
     GXCallDisplayList(jpa_dl, sizeof(jpa_dl));
 #endif
 }
+
+#if defined(DUSK_TARGET_3DS)
+// Native particle culling (JPAResource.cpp): the direction draw functions
+// also carry each particle's base axis from one picture to the next (a
+// parallel-transported frame around its direction). A particle the native
+// path leaves out because it is off screen still takes that step, exactly as
+// JPADrawDirection/JPADrawRotDirection take it, so its roll is the original's
+// when it comes back into view.
+bool JPANativeDrawKeepsBaseAxis(JPAResource::DrawParticleFunc func) {
+    return func == JPADrawDirection || func == JPADrawRotDirection;
+}
+
+void JPANativeKeepBaseAxis(JPAEmitterWorkData* work, JPABaseParticle* ptcl) {
+    if (ptcl->checkStatus(JPAPtclStts_Invisible)) {
+        return;
+    }
+    JGeometry::TVec3<f32> axisY;
+    JGeometry::TVec3<f32> axisZ;
+    p_direction[work->mDirType](work, ptcl, &axisY);
+    if (axisY.isZero()) {
+        return;
+    }
+    axisY.normalize();
+    axisZ.cross(ptcl->mBaseAxis, axisY);
+    if (axisZ.isZero()) {
+        return;
+    }
+    axisZ.normalize();
+    ptcl->mBaseAxis.cross(axisY, axisZ);
+    ptcl->mBaseAxis.normalize();
+}
+#endif
 
 void JPADrawRotation(JPAEmitterWorkData* param_0, JPABaseParticle* param_1 JPA_DRAW_CTX_PARAM) {
     if (param_1->checkStatus(JPAPtclStts_Invisible)) {

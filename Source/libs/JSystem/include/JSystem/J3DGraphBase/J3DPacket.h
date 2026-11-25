@@ -239,7 +239,16 @@ public:
 
 public:
     /* 0x10 */ u32 mFlags;
+#if defined(DUSK_TARGET_3DS)
+    // Native packets (platforms/3ds/runtime/native_packets.hpp): bit 0 marks
+    // a material packet of a room model (daBg_c::createHeap). The padding of
+    // the original layout holds it.
+    enum { NATIVE_ROOM_MODEL = 0x01 };
+    /* 0x14 */ u32 mNativeFlags;
+    /* 0x18 */ char unk_0x18[0x20 - 0x18];
+#else
     /* 0x14 */ char unk_0x14[0x20 - 0x14];
+#endif
     /* 0x20 */ J3DDisplayListObj* mpDisplayListObj;
     /* 0x24 */ J3DTexMtxObj* mpTexMtxObj;
 };  // Size: 0x28
@@ -255,6 +264,9 @@ public:
     int newDifferedDisplayList(u32);
     void prepareDraw() const;
     void drawFast();
+#if defined(DUSK_TARGET_3DS) && !defined(DUSK_PICA_GAME_DRAW)
+    int drawNativeDirect(); // drawFast as a direct record (J3DPacket.cpp): a J3DShape::NativeDirect
+#endif
 
     virtual ~J3DShapePacket();
     virtual void draw();
@@ -282,6 +294,16 @@ public:
     /* 0x30 */ Mtx* mpBaseMtxPtr;
     /* 0x34 */ u32 mDiffFlag;
     /* 0x38 */ J3DModel* mpModel;
+#if defined(DUSK_TARGET_3DS)
+    // Native levels of detail (platforms/3ds/runtime/model_lod.hpp): the
+    // shape's levels and the level chosen for the scene when the model was
+    // entered (m_Do_ext.cpp), valid only in draw phase mNativeLodPhase
+    // (include/d/d_native_lod.h drawPhase); the level is also the state of
+    // the choice's hysteresis.
+    const void* mNativeLodShape;
+    u32 mNativeLodPhase;
+    u8 mNativeLod;
+#endif
 };  // Size: 0x3C
 
 /**
@@ -319,6 +341,12 @@ public:
     virtual ~J3DMatPacket();
     virtual int entry(J3DDrawBuffer*);
     virtual void draw();
+#if !defined(DUSK_PICA_GAME_DRAW)
+    void drawAfterLoad();
+#endif
+#if defined(DUSK_TARGET_3DS) && !defined(DUSK_PICA_GAME_DRAW)
+    bool drawNativeDirect(int kind);
+#endif
 
 public:
     /* 0x28 */ J3DShapePacket* mpInitShapePacket;

@@ -16,21 +16,25 @@ class cBgS_PolyPassChk;
 class dBgPc;
 struct dBgS_CaptPoly;
 
+// TARGET_PC: dBgWKCol::initKCollision converts the prisms and the block tree
+// (32-bit node words, 16-bit prism lists) to host byte order once at load,
+// as it already did for the positions and normals; the queries read them
+// without byte swaps (the file data is big-endian).
 struct KC_PrismData {
-    /* 0x0 */ BE(f32) height;
-    /* 0x4 */ BE(u16) pos_i;
-    /* 0x6 */ BE(u16) fnrm_i;
-    /* 0x8 */ BE(u16) enrm1_i;
-    /* 0xA */ BE(u16) enrm2_i;
-    /* 0xC */ BE(u16) enrm3_i;
-    /* 0xE */ BE(u16) attribute;
+    /* 0x0 */ f32 height;
+    /* 0x4 */ u16 pos_i;
+    /* 0x6 */ u16 fnrm_i;
+    /* 0x8 */ u16 enrm1_i;
+    /* 0xA */ u16 enrm2_i;
+    /* 0xC */ u16 enrm3_i;
+    /* 0xE */ u16 attribute;
 };  // Size: 0x10
 
 struct KC_Header {
     /* 0x00 */ OFFSET_PTR(Vec) m_pos_data;
     /* 0x04 */ OFFSET_PTR(Vec) m_nrm_data;
     /* 0x08 */ OFFSET_PTR(KC_PrismData) m_prism_data;
-    /* 0x0C */ OFFSET_PTR(BE(u32)) m_block_data;
+    /* 0x0C */ OFFSET_PTR(u32) m_block_data;
     /* 0x10 */ f32 m_prism_thickness;
     /* 0x14 */ Vec m_area_min_pos;
     /* 0x20 */ u32 m_area_x_width_mask;
@@ -53,6 +57,7 @@ public:
     void getPolyCode(int, dBgPc*) const;
     bool chkPolyThrough(dBgPc*, cBgS_PolyPassChk*, cBgS_GrpPassChk*, cXyz&) const;
     bool ChkShdwDrawThrough(dBgPc*);
+    template<bool waterOnly> bool scanSpecialGroup(dBgS_SplGrpChk*, unsigned&);
 
     virtual ~dBgWKCol();
     virtual bool ChkNotReady() const;
@@ -113,16 +118,27 @@ public:
                                              csXyz*, csXyz*);
 
     KC_PrismData* getPrismData(int poly_index) const {
-        KC_PrismData* pd = &m_pkc_head->m_prism_data[poly_index];
-        JUT_ASSERT(0x12E, pd < (KC_PrismData*)m_pkc_head->m_block_data);
+        KC_PrismData* pd = &m_prism_data[poly_index];
+        JUT_ASSERT(0x12E, pd < (KC_PrismData*)m_block_data);
         return pd;
     }
 
-    void getTri1Pos(KC_PrismData* pd, Vec** nrm) const { *nrm = &m_pkc_head->m_pos_data[pd->pos_i]; }
+    void getTri1Pos(KC_PrismData* pd, Vec** nrm) const { *nrm = &m_pos_data[pd->pos_i]; }
 
     /* 0x18 */ KC_Header* m_pkc_head;
     /* 0x1C */ dBgPlc m_code;
     /* 0x20 */ cM3dGAab m_bnd;
+    // The header's tables, resolved once by create(): on TARGET_PC each
+    // header pointer is a byte-swapped self-relative offset decoded per use.
+    Vec* m_pos_data;
+    Vec* m_nrm_data;
+    KC_PrismData* m_prism_data;
+    u32* m_block_data;
+#if defined(DUSK_TARGET_3DS)
+    // Half-open range of PLC attributes that can belong to the water group.
+    u16 mWaterAttrBegin;
+    u16 mWaterAttrEnd;
+#endif
 };
 
 #endif /* D_BG_D_BG_W_KCOL_H */

@@ -95,15 +95,30 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_shader.cpp"
         "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_shader.cpp" -DSYMBOL=gx_rigid_shader -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
     DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid.shbin" embed_shader.cmake VERBATIM)
 
+# The general multi-texture program first (program 0), then its variants in the
+# order of runtime/gx_vertex_variant.hpp (vertexVariants), then their shared
+# parts: one binary, so that a change of variant sends no shader code
+# (Citro3D sends the code only for another binary; the vertex unit holds 512
+# words for all of them, picasso refuses more).
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin"
-    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin.unchecked" "${CMAKE_CURRENT_SOURCE_DIR}/gx_rigid_mt.v.pica"
+    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin.unchecked" "${CMAKE_CURRENT_SOURCE_DIR}/gx_rigid_mt.v.pica" "${CMAKE_CURRENT_SOURCE_DIR}/gx_rigid_mt_tex_fog.v.pica" "${CMAKE_CURRENT_SOURCE_DIR}/gx_rigid_mt_tex_ramp.v.pica" "${CMAKE_CURRENT_SOURCE_DIR}/gx_rigid_mt_projected_ramp.v.pica" "${CMAKE_CURRENT_SOURCE_DIR}/gx_rigid_mt_projected_tex2.v.pica" "${CMAKE_CURRENT_SOURCE_DIR}/gx_rigid_mt_parts.v.pica"
     COMMAND "${DUSK_SHADER_PYTHON}" -I "${DUSK_SHADER_CHECK}" "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin.unchecked"
     COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin.unchecked" "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin"
-    DEPENDS "${DUSK_SHADER_CHECK}" gx_rigid_mt.v.pica VERBATIM)
+    DEPENDS "${DUSK_SHADER_CHECK}" gx_rigid_mt.v.pica gx_rigid_mt_tex_fog.v.pica gx_rigid_mt_tex_ramp.v.pica gx_rigid_mt_projected_ramp.v.pica
+        gx_rigid_mt_projected_tex2.v.pica gx_rigid_mt_parts.v.pica VERBATIM)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt_shader.cpp"
     COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin"
         "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt_shader.cpp" -DSYMBOL=gx_rigid_mt_shader -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
     DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt.shbin" embed_shader.cmake VERBATIM)
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gx_caster.shbin"
+    COMMAND "${PICASSO}" -o "${CMAKE_CURRENT_BINARY_DIR}/gx_caster.shbin.unchecked" "${CMAKE_CURRENT_SOURCE_DIR}/gx_caster.v.pica"
+    COMMAND "${DUSK_SHADER_PYTHON}" -I "${DUSK_SHADER_CHECK}" "${CMAKE_CURRENT_BINARY_DIR}/gx_caster.shbin.unchecked"
+    COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_BINARY_DIR}/gx_caster.shbin.unchecked" "${CMAKE_CURRENT_BINARY_DIR}/gx_caster.shbin"
+    DEPENDS "${DUSK_SHADER_CHECK}" gx_caster.v.pica VERBATIM)
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gx_caster_shader.cpp"
+    COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_BINARY_DIR}/gx_caster.shbin"
+        "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/gx_caster_shader.cpp" -DSYMBOL=gx_caster_shader -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
+    DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/gx_caster.shbin" embed_shader.cmake VERBATIM)
 
 add_library(dusk_native_kernel OBJECT
     runtime/video_retrace.cpp
@@ -177,6 +192,9 @@ add_library(dusk_native_display_list OBJECT
     runtime/gx_raster_color.cpp
     gx_command_draw.cpp gx_command_probe.cpp
     runtime/gx_commands.cpp
+    runtime/gx_worker.cpp
+    runtime/native_packets.cpp
+    runtime/pica_blocks.cpp
     runtime/gx_stream.cpp
     runtime/gx_transform_commands.cpp
     runtime/gx_vertex_commands.cpp
@@ -210,10 +228,10 @@ target_compile_definitions(dusk_native_display_list PRIVATE TARGET_PC=1 DUSK_TAR
 add_executable(dusklight-native
     main.cpp diagnostics.cpp preview.cpp gx_pica.cpp gx_texture_pica.cpp gx_material_pica.cpp gx_geometry_pica.cpp
     runtime/gx_state.cpp runtime/gx_pica_math.cpp runtime/gx_pica_tev.cpp
-    "${CMAKE_CURRENT_BINARY_DIR}/gx_color_shader.cpp" "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_shader.cpp" "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt_shader.cpp" runtime/disc.cpp runtime/dump_io.cpp runtime/developer_script.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/gx_color_shader.cpp" "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_shader.cpp" "${CMAKE_CURRENT_BINARY_DIR}/gx_rigid_mt_shader.cpp" "${CMAKE_CURRENT_BINARY_DIR}/gx_caster_shader.cpp" runtime/disc.cpp runtime/dump_io.cpp runtime/developer_script.cpp
     runtime/resource_archive.cpp runtime/texture_ia8.cpp runtime/texture_i4.cpp runtime/texture_gx.cpp "${CMAKE_CURRENT_BINARY_DIR}/preview_shader.cpp"
-    runtime/os_sync.cpp runtime/os_thread.cpp runtime/thread_backend_ctru.cpp
-    runtime/os_time.cpp runtime/os_arena.cpp runtime/primitives_ctru.cpp runtime/video_retrace_ctru.cpp runtime/gpu_sync_ctru.cpp runtime/gpu_canary_ctru.cpp runtime/durable_file_ctru.cpp
+    runtime/os_sync.cpp runtime/os_thread.cpp runtime/thread_backend_ctru.cpp runtime/eh_globals.cpp
+    runtime/os_time.cpp runtime/os_arena.cpp runtime/primitives_ctru.cpp runtime/video_retrace_ctru.cpp runtime/gpu_sync_ctru.cpp runtime/gpu_list_capture_ctru.cpp runtime/gx_worker_ctru.cpp runtime/gpu_canary_ctru.cpp runtime/hud_tape_ctru.cpp runtime/screen_tape_ctru.cpp runtime/core_probe_ctru.cpp runtime/durable_file_ctru.cpp
     runtime/gx_framebuffer_ctru.cpp runtime/font_pages.cpp runtime/font_batch.cpp runtime/texture_resources.cpp
     runtime/os_system.cpp runtime/os_system_ctru.cpp runtime/video_mode.cpp
     $<TARGET_OBJECTS:dusk_native_kernel> $<TARGET_OBJECTS:dusk_native_math>
@@ -226,12 +244,30 @@ add_custom_target(dusk_check_ctru_abi
     COMMAND "${DUSK_SHADER_PYTHON}" -I "${DUSK_ABI_CHECK}" "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Checking SDK struct access (enum size boundary)" VERBATIM)
 add_dependencies(dusklight-native dusk_check_ctru_abi)
+# Code that runs once per vertex must be part of its loop. Whether the
+# compiler inlines it depends on the size of the code around it, so the linked
+# image is what is checked (three silent regressions while Alpha 9 was written).
+get_filename_component(DUSK_INLINING_CHECK "${CMAKE_CURRENT_SOURCE_DIR}/../../../Tools/3ds/check_hot_inlining.py" ABSOLUTE)
+add_custom_command(TARGET dusklight-native POST_BUILD
+    COMMAND "${DUSK_SHADER_PYTHON}" -I "${DUSK_INLINING_CHECK}" "${CMAKE_NM}" "$<TARGET_FILE:dusklight-native>"
+    COMMENT "Checking that per-vertex code is inlined" VERBATIM)
+# Every exception-state access of libstdc++ goes to the per-thread block of
+# runtime/eh_globals.cpp: concurrent unwinds (the worker barrier at exit)
+# aborted on the console with the shared one (Alpha 13, Alpha 15).
+get_filename_component(DUSK_EH_GLOBALS_CHECK "${CMAKE_CURRENT_SOURCE_DIR}/../../../Tools/3ds/check_eh_globals.py" ABSOLUTE)
+add_custom_command(TARGET dusklight-native POST_BUILD
+    COMMAND "${DUSK_SHADER_PYTHON}" -I "${DUSK_EH_GLOBALS_CHECK}" "$<TARGET_FILE:dusklight-native>"
+    COMMENT "Checking that C++ exception state is per thread" VERBATIM)
 target_include_directories(dusklight-native PRIVATE
     "${DUSK_ROOT}/include" "${DUSK_ROOT}/extern/aurora/include" "${DUSK_ROOT}/src" "${DEVKITPRO}/libctru/include")
 target_compile_definitions(dusklight-native PRIVATE TARGET_PC=1 DUSK_TARGET_3DS=1 DUSK_NATIVE_THREAD_RUNTIME=1)
+# -fno-math-errno: sqrtf becomes the VFP instruction instead of a call into
+# newlib's bit-by-bit routine (both round correctly, so results are equal);
+# the original game sources, which take these options from the kernel target
+# below, normalize vectors and measure distances in every actor.
 foreach(target dusk_native_kernel dusk_native_math dusk_native_display_list dusklight-native)
     target_compile_options(${target} PRIVATE -O2 -g -mword-relocations
-        -ffunction-sections -fdata-sections -fno-strict-aliasing)
+        -ffunction-sections -fdata-sections -fno-strict-aliasing -fno-math-errno)
 endforeach()
 # The native GX translation runs per draw and per vertex; small fixed loops
 # must unroll on the ARM11. Original game sources keep their -O2 build.
@@ -243,6 +279,14 @@ target_link_options(dusklight-native PRIVATE -specs=3dsx.specs
     "-Wl,--wrap=GX_BindQueue"
     "-Wl,--wrap=GX_ProcessCommandList"
     "-Wl,--wrap=C3D_DrawElements"
+    # main.cpp: report silent process ends (abort, exit, _exit) in the log.
+    "-Wl,--wrap=abort"
+    "-Wl,--wrap=exit"
+    "-Wl,--wrap=_exit"
+    # runtime/eh_globals.cpp: the C++ exception state per thread (libstdc++
+    # falls back to one block for the process without pthread keys).
+    "-Wl,--wrap=__cxa_get_globals"
+    "-Wl,--wrap=__cxa_get_globals_fast"
     "-Wl,-Map,${CMAKE_CURRENT_BINARY_DIR}/dusklight-native.map")
 # Keep the pinned queue body unchanged. A strong public IRQ forwarding gate is
 # necessary: --wrap cannot intercept the event TU's co-located weak default.
@@ -252,8 +296,19 @@ target_sources(dusklight-native PRIVATE runtime/ctru_gxqueue.c)
 target_link_libraries(dusklight-native PRIVATE citro3d ctru m)
 # Packaging consumes only the owner-supplied icon. No ISO, cache or ROMFS content.
 set(ICON "${WORKSPACE}/assets/3ds/icon-48.png" CACHE FILEPATH "Owner-supplied icon")
+option(DUSK_GAME_DIAGNOSTICS "Boot the game with the test console on the lower screen" OFF)
+if(DUSK_GAME_STARTUP AND DUSK_GAME_DIAGNOSTICS)
+    set(smdh_title "DuskLight Alpha 21")
+    set(smdh_description "START+SELECT: Test everything, A: capture")
+elseif(DUSK_GAME_STARTUP)
+    set(smdh_title "DuskLight Public Beta 01")
+    set(smdh_description "Public Beta 01")
+else()
+    set(smdh_title "Dusklight New3DS")
+    set(smdh_description "Native diagnostic bootstrap - not gameplay")
+endif()
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/dusklight-native.smdh"
-    COMMAND "${SMDHTOOL}" --create "Dusklight New3DS" "Native diagnostic bootstrap - not gameplay"
+    COMMAND "${SMDHTOOL}" --create "${smdh_title}" "${smdh_description}"
         "Twilit Realm / local port" "${ICON}" "${CMAKE_CURRENT_BINARY_DIR}/dusklight-native.smdh"
     DEPENDS "${ICON}" VERBATIM)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/dusklight-native.3dsx"
@@ -451,12 +506,26 @@ if(DUSK_GAMEPLAY_LINK_GATE)
         "-Wl,--end-group" citro3d ctru m)
 endif()
 if(DUSK_GAME_STARTUP)
+    if(DUSK_GAME_DIAGNOSTICS)
+        target_compile_definitions(dusk_native_kernel PRIVATE DUSK_GAME_DIAGNOSTICS=1)
+        target_compile_definitions(dusklight-native PRIVATE DUSK_GAME_DIAGNOSTICS=1)
+    else()
+        add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/beta_face.cpp"
+            COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/native/beta_face.zst"
+                "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/beta_face.cpp" -DSYMBOL=beta_face
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_shader.cmake"
+            DEPENDS native/beta_face.zst embed_shader.cmake VERBATIM)
+        target_sources(dusk_native_kernel PRIVATE runtime/beta_screen.cpp "${CMAKE_CURRENT_BINARY_DIR}/beta_face.cpp")
+        set_property(SOURCE runtime/beta_screen.cpp APPEND PROPERTY INCLUDE_DIRECTORIES "${DEVKITPRO}/portlibs/3ds/include")
+    endif()
     set(DUSK_DUMP_BUILD_ID "unavailable-unsealed-native-integration" CACHE STRING
         "Private candidate/source fingerprint recorded in application RAM dumps")
     target_sources(dusk_native_kernel PRIVATE
         runtime/application_dump.cpp runtime/application_dump_ctru.cpp runtime/dev_console.cpp)
     set_property(SOURCE runtime/application_dump_ctru.cpp runtime/dev_console.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS DUSK_DUMP_BUILD_ID="${DUSK_DUMP_BUILD_ID}")
+    set_property(SOURCE runtime/game_startup.cpp APPEND PROPERTY
+        INCLUDE_DIRECTORIES "${DUSK_ROOT}/assets/GZ2E01")
     # Packed application dumps compress their blocks (zstd from portlibs).
     set_property(SOURCE runtime/application_dump_ctru.cpp APPEND PROPERTY
         INCLUDE_DIRECTORIES "${DEVKITPRO}/portlibs/3ds/include")
@@ -471,7 +540,8 @@ if(DUSK_GAME_STARTUP)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/embed_audio.cmake"
         DEPENDS vendor/opendsp/opendsp.cdc embed_audio.cmake embed_shader.cmake VERBATIM)
     target_sources(dusk_native_kernel PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/opendsp_component.cpp")
-    target_sources(dusk_native_kernel PRIVATE runtime/game_startup.cpp runtime/frame_telemetry.cpp runtime/fused_color_config.cpp runtime/aram.cpp runtime/gx_fifo.cpp runtime/card.cpp runtime/audio_ndsp.cpp
+    target_sources(dusk_native_kernel PRIVATE runtime/model_lod.cpp runtime/model_lod_store.cpp)
+    target_sources(dusk_native_kernel PRIVATE runtime/game_startup.cpp runtime/scene_transition.cpp runtime/frame_telemetry.cpp runtime/tour_cadence.cpp runtime/fused_color_config.cpp runtime/aram.cpp runtime/gx_fifo.cpp runtime/card.cpp runtime/audio_ndsp.cpp
         "${DUSK_ROOT}/src/dusk/audio/DuskDsp.cpp"
         "${DUSK_ROOT}/src/dusk/audio/Adpcm.cpp"
         "${DUSK_ROOT}/libs/freeverb/revmodel.cpp"
@@ -495,6 +565,18 @@ if(DUSK_GAME_STARTUP)
         "${DUSK_ROOT}/src/Z2AudioLib/Z2AudioArcLoader.cpp")
     target_include_directories(dusk_native_kernel PRIVATE "${DUSK_ROOT}/libs/freeverb/include" "${DUSK_ROOT}/libs/freeverb/include/freeverb")
     target_compile_definitions(dusklight-native PRIVATE DUSK_GAME_STARTUP=1)
+    # Second-core worker (runtime/gx_worker.hpp): the drawing side runs on
+    # another core while the game thread issues the picture. Every variable
+    # both can reach is listed from the objects just built and must have a
+    # verdict in Tools/3ds/shared_state_judged.tsv; a new one stops the build
+    # until both call chains are read (Tools/3ds/audit_shared_state.py).
+    get_filename_component(DUSK_SHARED_STATE_TOOLS "${CMAKE_CURRENT_SOURCE_DIR}/../../../Tools/3ds" ABSOLUTE)
+    get_filename_component(DUSK_TOOLCHAIN_BIN "${CMAKE_NM}" DIRECTORY)
+    add_custom_command(TARGET dusklight-native POST_BUILD
+        COMMAND "${DUSK_SHADER_PYTHON}" -I "${DUSK_SHARED_STATE_TOOLS}/audit_shared_state.py" "${CMAKE_CURRENT_BINARY_DIR}"
+            --roots "${DUSK_SHARED_STATE_TOOLS}/shared_state_roots.tsv" --judged "${DUSK_SHARED_STATE_TOOLS}/shared_state_judged.tsv"
+            --cxxfilt "${DUSK_TOOLCHAIN_BIN}/arm-none-eabi-c++filt" --quiet
+        COMMENT "Checking the state shared with the second-core worker" VERBATIM)
     target_compile_definitions(dusk_native_kernel PRIVATE DUSK_GAME_STARTUP=1)
 endif()
 option(DUSK_SCENE_MATERIAL_INSPECTION "Inspect admitted scene meshes with unsupported materials omitted; not gameplay" OFF)

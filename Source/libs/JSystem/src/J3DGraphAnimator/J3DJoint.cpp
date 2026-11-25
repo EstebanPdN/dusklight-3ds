@@ -7,6 +7,9 @@
 #include "JSystem/J3DGraphBase/J3DMaterial.h"
 #include "JSystem/JMath/JMath.h"
 #include "m_Do/m_Do_mtx.h"
+#if defined(DUSK_TARGET_3DS)
+#include "d/d_native_logic.h"
+#endif
 
 void J3DMtxCalcJ3DSysInitBasic::init(Vec const& scale, Mtx const& mtx) {
     J3DSys::mCurrentS = scale;
@@ -192,6 +195,9 @@ void J3DJoint::entryIn() {
 DUSK_GAME_DATA J3DMtxCalc* J3DJoint::mCurrentMtxCalc;
 
 void J3DJoint::recursiveCalc() {
+#if defined(DUSK_TARGET_3DS)
+    dNativeLogic::census.j3dJoints++;
+#endif
     J3DMtxCalc* prevMtxCalc = NULL;
     Mtx prevCurrentMtx;
     MTXCopy(J3DSys::mCurrentMtx, prevCurrentMtx);

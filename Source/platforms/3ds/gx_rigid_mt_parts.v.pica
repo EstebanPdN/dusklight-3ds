@@ -1,0 +1,157 @@
+; Parts of the variant programs of gx_rigid_mt.v.pica (features::Id::
+; vertexVariants, runtime/gx_vertex_variant.hpp). Each part is the general
+; program's code for one step without the uniform tests whose answer the
+; variants' plans fix: the same arithmetic in the same order on the same
+; values, so a variant writes the general program's output bits
+; (Tools/3ds/test_vertex_variants.py runs both). The variants call these
+; parts: the vertex unit holds 512 instruction words for the general program
+; and every variant together. A move into some components names all four
+; source components (k.xxyx): picasso keeps a shorter swizzle in place, so
+; "mov r5.zw, k.yx" would read x into z and w.
+.nodvle
+.fvec u[94]
+.ivec lightLoop
+.constf k(0.0,1.0,0.5,9.0)
+.constf epsilon(0.0000000001,0.000001,0.99609375,0.001953125)
+
+; Lighting and material colour into r3, as the general program computes them
+; without a paired texgen or an ambient vertex colour. In: r0 position in
+; camera space, r14.w = 1, a0.y the normal rows, r15 = 0. Uses r1, r4-r8,
+; r10, r11, r14.
+.proc litColour
+    mul r14.xyz, u[11].w, v1
+    dp3 r1.x, u[a0.y+0], r14
+    dp3 r1.y, u[a0.y+1], r14
+    dp3 r1.z, u[a0.y+2], r14
+    dp3 r4.x, r1, r1
+    cmp epsilon.x, lt, lt, r4.x
+    ifc cmp.x
+        rsq r4.x, r4.x
+        mul r1.xyz, r1, r4.x
+    .end
+    mov r3, u[10]
+    ; The constant 1 of (1, cos, cos^2) and of (1, d, d^2), set once: the
+    ; loop writes only the other components. d^2 goes straight into r7.z and
+    ; d into r7.y instead of through r5 (the same products, no copies).
+    mov r6.x, k.y
+    mov r7.x, k.y
+    for lightLoop
+        add r4.xyz, u[aL+19], -r0
+        dp3 r7.z, r4, r4
+        cmp k.x, lt, lt, r7.z
+        ifc cmp.x
+            rsq r5.y, r7.z
+            mul r7.y, r7.z, r5.y
+            mul r4.xyz, r4, r5.y
+            dp3 r6.y, u[aL+21], r4
+            max r6.y, k.x, r6.y
+            mul r6.z, r6.y, r6.y
+            mov r11.x, u[aL+19].w
+            mov r11.y, u[aL+21].w
+            mov r11.z, u[aL+22].w
+            dp3 r8.x, r11, r6
+            dp3 r8.y, u[aL+22], r7
+            rcp r8.y, r8.y
+            mul r8.x, r8.x, r8.y
+            max r8.x, k.x, r8.x
+            dp3 r8.y, r4, r1
+            max r8.y, k.x, r8.y
+            mul r8.x, r8.x, r8.y
+            mul r8.xyz, u[aL+20], r8.x
+            add r3.xyz, r3, r8
+        .end
+    .end
+    max r3.xyz, k.x, r3
+    min r3.xyz, k.y, r3
+    mov r10, u[93]
+    cmp u[14].w, gt, gt, r15.x
+    ifc cmp.x
+        mul r10.xyz, u[16].w, v3
+    .end
+    cmp u[15].w, ge, ge, r15.x
+    ifc cmp.x
+        mul r10.w, u[16].w, v3.w
+        mul r10.w, u[15].w, r10.w
+    .end
+    mul r10.xyz, r10, r3
+    mov r3, r10
+.end
+
+; Linear fog with the range adjustment (u[12].x = 1, u[12].y = 1): the fog
+; factor into r9.y. In: r2 clip position, r15 = 0. Uses r9-r12 and a0.x.
+; The general program tests w > 0 twice (depth, then range) on the same w:
+; one test here, the depth term written out in both branches.
+.proc fogRange
+    cmp k.x, lt, lt, r2.w
+    ifc cmp.x
+        rcp r9.w, r2.w
+        mul r9.x, r2.z, r9.w
+        add r9.x, k.y, r9.x
+        max r9.x, k.x, r9.x
+        min r9.x, k.y, r9.x
+        add r9.y, u[11].y, -r9.x
+        rcp r9.y, r9.y
+        mul r9.y, u[11].x, r9.y
+        mul r10.x, r2.y, r9.w
+        mul r10.x, u[13].x, r10.x
+        add r10.x, u[13].y, r10.x
+        max r10.y, r10.x, -r10.x
+        mul r10.y, k.w, r10.y
+        add r10.y, k.w, -r10.y
+        max r10.y, k.x, r10.y
+        min r10.y, k.w, r10.y
+        flr r10.z, r10.y
+        mul r12.x, k.z, r10.z
+        flr r12.x, r12.x
+        mova a0.x, r12.x
+        add r12.y, r12.x, r12.x
+        add r12.y, r10.z, -r12.y
+        add r10.w, r10.y, -r10.z
+        mov r11, u[a0.x+14]
+        cmp r12.y, gt, gt, r15.x
+        ifc cmp.x
+            mov r11.xy, r11.yz
+        .end
+        add r11.y, r11.y, -r11.x
+        mul r11.y, r11.y, r10.w
+        add r11.x, r11.x, r11.y
+        max r11.x, epsilon.y, r11.x
+        rcp r11.x, r11.x
+        mul r10.x, r10.x, r11.x
+        mul r10.x, r10.x, r10.x
+        add r10.x, k.y, r10.x
+        rsq r10.x, r10.x
+        rcp r10.x, r10.x
+        mul r9.y, r9.y, r10.x
+    .else
+        ; Behind the camera: depth 0 (near fog), no range adjustment.
+        mov r9.x, k.x
+        add r9.y, u[11].y, -r9.x
+        rcp r9.y, r9.y
+        mul r9.y, u[11].x, r9.y
+    .end
+    add r9.y, -u[11].z, r9.y
+    max r9.y, k.x, r9.y
+    min r9.y, k.y, r9.y
+.end
+
+; Unit 0 projected from the position and divided here (role 2, u[92].z = 0):
+; its coordinate into r5.xy. In: r13 = v5 (the vertex's warp). Uses r4, r10
+; and r14.
+.proc projectedHere
+    mov r14.xyz, v0
+    mov r14.w, k.y
+    dp4 r4.x, u[89], r14
+    dp4 r4.y, u[90], r14
+    dp4 r4.z, u[91], r14
+    mul r10.xy, u[92].ww, r13.xy
+    mul r10.xy, r4.zz, r10.xy
+    add r4.xy, r4.xy, r10.xy
+    max r4.z, epsilon.w, r4.z
+    rcp r4.w, r4.z
+    mul r4.x, u[92].x, r4.x
+    mul r5.x, r4.x, r4.w
+    mul r4.y, u[92].y, r4.y
+    mul r4.y, r4.y, r4.w
+    add r5.y, k.y, -r4.y
+.end

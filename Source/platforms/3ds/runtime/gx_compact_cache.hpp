@@ -140,28 +140,68 @@ private:
 // Native static geometry: decoded compact vertices for display lists of J3D
 // models that draw their original archive arrays. The owner (J3DShape) marks
 // such draws with a vertex data generation that is never reused, so entries
-// are trusted without byte comparison. A full pool resets every entry.
+// are trusted without byte comparison. The pool empties at each new play
+// scene (clearAtStageChange); a pool that fills up within a scene resets.
+// Per thread: with the second-core worker on (gx_worker.hpp) the worker
+// draws a queued shape's list while the game thread marks the next one.
 struct StaticGeometryHint {std::uint32_t generation{};const void* list{};std::uint32_t batch{};bool trustedIndices{};};
-extern StaticGeometryHint staticGeometryHint;
+extern thread_local StaticGeometryHint staticGeometryHint;
 // Native shape records: notified when a static display list call ends.
 inline void (*staticListEnded)(const void* list,std::uint32_t batches)=nullptr;
+// Set by native shape replay once it rebuilds compact palettes and compares
+// their normal rows (gx_command_draw.cpp). Until then a compact-palette batch
+// only reuses its decoded entry through the frame arena: a record the replay
+// cannot place would be refused every frame after its plans and textures.
+inline bool compactPaletteRecords=false;
+// Normal rows of each placed matrix (offset >= 0) as one bit: set when they
+// are the position rows (compact palette, proportional normal matrix), clear
+// when they follow at +3. With the offsets this fixes every compact record's
+// v4 exactly. False for any other placement, which a key cannot express.
+inline bool sharedNormalMask(const std::array<std::int8_t,10>& offsets,const std::array<std::int8_t,10>& normals,std::uint16_t& mask){
+    mask=0;
+    for(unsigned m=0;m<10;++m){
+        if(offsets[m]<0)continue; // no record can select it
+        if(normals[m]==offsets[m])mask|=std::uint16_t(1u<<m);
+        else if(normals[m]!=offsets[m]+3)return false;
+    }
+    return true;
+}
 class StaticCompactCache {
 public:
     struct Key {
         std::uint32_t generation{},batch{},count{},stride{},layout{};
         std::uintptr_t list{};
         std::array<std::int8_t,10> offsets{};
+        // sharedNormalMask: a compact palette's layout depends on live matrix
+        // values, so each layout is its own entry. Fills the former padding.
+        std::uint16_t sharedNormals{};
         bool operator==(const Key&)const=default;
     };
+    static_assert(sizeof(void*)!=4||sizeof(Key)==36,"the 8192 entries stay in the measured BSS budget");
+    enum class Clear:std::uint8_t {start,full,stage};
     // gpuResident: the pool is GPU-readable linear memory. Entries are flushed
     // once on store and stay immutable until a reset at a frame boundary.
     bool attach(std::span<std::uint8_t> bytes,bool resident=false,void(*flushRange)(void*,std::size_t)=nullptr){
         if(bytes.size()<4096||(resident&&!flushRange))return false;
-        pool=bytes;gpuResident=resident;flush=flushRange;clear();return true;
+        pool=bytes;gpuResident=resident;flush=flushRange;clear();lastClear=Clear::start;return true;
     }
     bool resident()const{return gpuResident;}
-    // Call only after the previous frame's GPU work completed.
-    void frameBegin(){if(resetPending){clear();++resets;resetPending=false;}}
+    // A new play scene: the deleted scene's models never draw again (their
+    // generations are not reused); models kept across scenes decode once
+    // more. Emptied at the next frameBegin, behind the loading fade, instead
+    // of by a full-pool reset (all records invalid) during play.
+    void clearAtStageChange(){if(!pool.empty())stagePending=true;}
+    // Call only after the previous frame's GPU work completed. True when the
+    // pool emptied for a stage change (the caller drops resident indices).
+    bool frameBegin(){
+        if(!resetPending&&!stagePending)return false;
+        const bool stage=stagePending;
+        clearedBytes=cursor;clear();
+        if(stage)++stageClears;else ++resets;
+        lastClear=stage?Clear::stage:Clear::full;
+        resetPending=stagePending=false;
+        return stage;
+    }
     bool attached()const{return !pool.empty();}
     void clear(){entries.fill({});cursor=0;used=0;++epoch;}
     std::uint32_t epoch=1; // bumps on every reset; native records check it
@@ -174,22 +214,32 @@ public:
         }
         ++misses;return nullptr;
     }
-    void store(const Key& key,std::span<const std::byte> output){
-        if(pool.empty()||output.empty()||output.size()>pool.size()/4||resetPending)return;
+    // True when the output is now an entry.
+    bool store(const Key& key,std::span<const std::byte> output){
+        if(pool.empty()||output.empty()||output.size()>pool.size()/4||resetPending)return false;
         if(used>=entries.size()*3/4||output.size()>pool.size()-cursor){
             // Resident entries may still be read by queued GPU work this frame.
-            if(gpuResident){resetPending=true;return;}
-            clear();++resets;
+            if(gpuResident){resetPending=true;return false;}
+            clearedBytes=cursor;clear();++resets;lastClear=Clear::full;
         }
         std::size_t slot=hash(key);
         for(std::size_t probe=0;entries[slot].bytes;++probe,slot=(slot+1)&(entries.size()-1))
-            if(probe>=maxProbe||entries[slot].key==key)return;
+            if(probe>=maxProbe||entries[slot].key==key)return false;
         std::memcpy(pool.data()+cursor,output.data(),output.size());
         if(flush)flush(pool.data()+cursor,output.size());
         entries[slot]={key,cursor,output.size()};
         cursor=(cursor+output.size()+15)&~std::size_t(15);++used;++stores;
+        return true;
     }
-    std::uint64_t hits{},misses{},stores{},resets{};
+    // resets: full pool during a scene; stageClears: clearAtStageChange.
+    std::uint64_t hits{},misses{},stores{},resets{},stageClears{};
+    // Compact-palette batches (decoders): hits, stores, and hits copied into
+    // the frame arena because the batch is not its list's first. Native shape
+    // replay (gx_command_draw.cpp): compact records replayed, and refused
+    // because the live layout differs from the recorded one.
+    std::uint64_t paletteHits{},paletteStores{},paletteArena{},paletteReplays{},paletteRefusals{};
+    std::size_t clearedBytes{}; // bytes in use when the pool last emptied
+    Clear lastClear{Clear::start};
     std::size_t bytesUsed()const{return cursor;}
     std::size_t capacity()const{return pool.size();}
 private:
@@ -200,12 +250,13 @@ private:
         auto mix=[&](std::uint32_t v){h=(h^v)*16777619u;};
         mix(k.generation);mix(k.batch);mix(k.count);mix(k.stride);mix(k.layout);mix(std::uint32_t(k.list));
         for(auto o:k.offsets)mix(std::uint8_t(o));
+        mix(k.sharedNormals);
         return h&(8192-1);
     }
     std::array<Entry,8192> entries{};
     std::span<std::uint8_t> pool{};
     std::size_t cursor{},used{};
-    bool gpuResident{},resetPending{};
+    bool gpuResident{},resetPending{},stagePending{};
     void(*flush)(void*,std::size_t){};
 };
 StaticCompactCache* staticCompactCache();

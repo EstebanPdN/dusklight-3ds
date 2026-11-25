@@ -208,6 +208,13 @@ int daObj_Pumpkin_c::create() {
         reset();
         mObjAcch.Set(fopAcM_GetPosition_p(this), fopAcM_GetOldPosition_p(this), this, 1, &mAcchCir,
                         fopAcM_GetSpeed_p(this), fopAcM_GetAngle_p(this), fopAcM_GetShapeAngle_p(this));
+#if defined(DUSK_TARGET_3DS)
+        // The pumpkin finds water with fopAcM_getWaterY and reads only the
+        // ground and wall results of mObjAcch; the water pass of CrrPos (one
+        // walk over every background per pumpkin per tick, 12 pumpkins in
+        // Ordon village) wrote results nothing reads.
+        mObjAcch.SetWaterNone();
+#endif
         mStts.Init(mpHIO->m.weight, 0, this);
         mCyl0.Set(l_ccDCyl);
         mCyl0.SetStts(&mStts);

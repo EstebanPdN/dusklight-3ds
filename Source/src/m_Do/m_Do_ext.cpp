@@ -27,6 +27,15 @@
 #include <cstring>
 #if defined(DUSK_TARGET_3DS)
 #include "../../platforms/3ds/runtime/texture_resources.hpp"
+#include "../../platforms/3ds/runtime/gx_leaf_wire.hpp"
+#include "../../platforms/3ds/runtime/gx_stream.hpp"
+#include "JSystem/J3DGraphBase/J3DShapeMtx.h"
+#include "d/d_native_lod.h"
+#include "../../platforms/3ds/runtime/model_lod.hpp"
+#include "../../platforms/3ds/runtime/perf_features.hpp"
+#include "JSystem/J3DGraphBase/J3DNativeInstances.h"
+#include "d/d_kankyo.h"
+#include "m_Do/m_Do_lib.h"
 #endif
 
 #if TARGET_PC
@@ -334,16 +343,530 @@ static inline void modelMtxErrorCheck(J3DModel* i_model) {
 #endif
 }
 
-static void mDoExt_modelDiff(J3DModel* i_model) {
+#if defined(DUSK_TARGET_3DS)
+// Native level of detail, rule "parts" (include/d/d_native_lod.h): the parts
+// of an ordinary actor's model too small on the top screen are not entered.
+// The game's own hidden shapes stay as they are; the shapes this rule hides
+// are shown again right after the entry (the model data is shared by every
+// instance of the model).
+namespace {
+struct LodPicture {
+    unsigned picture = 0;
+    float unitPixels = 208.0f;
+    bool event = false;
+    const void* player = nullptr;
+    const void* horse = nullptr;
+    const void* lockon = nullptr;
+    const void* owner = nullptr;
+    bool ownerEligible = false;
+};
+LodPicture l_lodPicture;
+
+bool lodOwnerEligible() {
+    LodPicture& p = l_lodPicture;
+    const void* owner = dNativeLod::drawOwner;
+    if (owner != p.owner) {
+        p.owner = owner;
+        p.ownerEligible = owner != NULL && !p.event && owner != p.player && owner != p.horse &&
+                          owner != p.lockon && dNativeLod::drawOwnerName != fpcNm_BG_e &&
+                          fopAc_IsActor(const_cast<void*>(owner));
+    }
+    return p.ownerEligible;
+}
+
+f32 lodColumnScale2(const Mtx m) {
+    const f32 a = m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0];
+    const f32 b = m[0][1] * m[0][1] + m[1][1] * m[1][1] + m[2][1] * m[2][1];
+    const f32 c = m[0][2] * m[0][2] + m[1][2] * m[1][2] + m[2][2] * m[2][2];
+    return a > b ? (a > c ? a : c) : (b > c ? b : c);
+}
+
+// Where a shape of i_model lies for the picture: the radius of its bound
+// (world units), the camera depth of the bound's near edge and the scale
+// that turns its model units into world units. Skinned shapes: their boxes
+// are bind-pose extents in the model's space, which the base matrix and
+// scale place in the world; the root joint's animated offset widens the
+// bound. False for shapes whose size is not known (billboards face the
+// camera, empty boxes).
+struct LodModelPlace {
+    Mtx base;
+    f32 baseScale2;
+    f32 rootOffset;
+};
+void lodModelPlace(J3DModel* i_model, LodModelPlace& o_place) {
+    MTXCopy(i_model->getBaseTRMtx(), o_place.base);
+    const Vec& baseScale = *i_model->getBaseScale();
+    for (int r = 0; r < 3; r++) {
+        o_place.base[r][0] *= baseScale.x;
+        o_place.base[r][1] *= baseScale.y;
+        o_place.base[r][2] *= baseScale.z;
+    }
+    o_place.baseScale2 = lodColumnScale2(o_place.base);
+    MtxP root = i_model->getAnmMtx(0);
+    const f32 rx = root[0][3] - o_place.base[0][3], ry = root[1][3] - o_place.base[1][3],
+              rz = root[2][3] - o_place.base[2][3];
+    o_place.rootOffset = std::sqrt(rx * rx + ry * ry + rz * rz);
+}
+bool lodShapeBound(J3DModel* i_model, J3DModelData* data, J3DShape* shape, LodModelPlace& place, MtxP view,
+                   f32& o_radius, f32& o_depth, f32& o_scale) {
+    const Vec& mn = *shape->getMin();
+    const Vec& mx = *shape->getMax();
+    const f32 dx = mx.x - mn.x, dy = mx.y - mn.y, dz = mx.z - mn.z;
+    const f32 half = 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (!(half > 0.0f) || !(half < 1.0e7f)) {
+        return false;
+    }
+    const Vec center = {(mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f, (mn.z + mx.z) * 0.5f};
+    J3DShapeMtx* shapeMtx = shape->getShapeMtx(0);
+    const u32 type = shapeMtx->getType();
+    MtxP at;
+    f32 slack = 0.0f;
+    if (shape->getMtxGroupNum() == 1 && (type == 'SMTX' || type == 'SMCV')) {
+        const u16 drw = shapeMtx->getUseMtxIndex(0);
+        if (drw < data->getDrawMtxNum() && data->getDrawMtxFlag(drw) == 0 &&
+            data->getDrawMtxIndex(drw) < data->getJointNum())
+        {
+            // One joint: the box is the part's extent in that joint's space.
+            at = i_model->getAnmMtx(data->getDrawMtxIndex(drw));
+            o_scale = std::sqrt(lodColumnScale2(at));
+            o_radius = half * o_scale;
+        } else {
+            at = place.base;
+            o_scale = std::sqrt(place.baseScale2);
+            o_radius = 1.5f * half * o_scale;
+            slack = place.rootOffset;
+        }
+    } else if (type == 'SMML' || type == 'SMMC' || type == 'SMTX' || type == 'SMCV') {
+        at = place.base;
+        o_scale = std::sqrt(place.baseScale2);
+        o_radius = 1.5f * half * o_scale;
+        slack = place.rootOffset;
+    } else {
+        return false;
+    }
+    const f32 wx = at[0][0] * center.x + at[0][1] * center.y + at[0][2] * center.z + at[0][3];
+    const f32 wy = at[1][0] * center.x + at[1][1] * center.y + at[1][2] * center.z + at[1][3];
+    const f32 wz = at[2][0] * center.x + at[2][1] * center.y + at[2][2] * center.z + at[2][3];
+    o_depth = -(view[2][0] * wx + view[2][1] * wy + view[2][2] * wz + view[2][3]) - o_radius - slack;
+    return true;
+}
+
+// Hides the visible shapes of i_model that project under the parts threshold;
+// returns how many, their indices in o_hidden.
+int lodHideParts(J3DModel* i_model, u16* o_hidden, int i_capacity) {
+    const dNativeLod::Config& cfg = dNativeLod::config();
+    if (cfg.partPixels <= 0.0f || i_model->getMtxCalcMode() != 0 || !lodOwnerEligible()) {
+        return 0;
+    }
+    J3DModelData* data = i_model->getModelData();
+    const u16 shapeNum = data->getShapeNum();
+    if (shapeNum == 0 || shapeNum > i_capacity || data->getJointNum() == 0) {
+        return 0;
+    }
+    MtxP view = j3dSys.getViewMtx();
+    const f32 unitPixels = l_lodPicture.unitPixels;
+    LodModelPlace place;
+    lodModelPlace(i_model, place);
+    int hidden = 0;
+    for (u16 i = 0; i < shapeNum; i++) {
+        J3DShape* shape = data->getShapeNodePointer(i);
+        if (shape == NULL || shape->checkFlag(J3DShpFlag_Visible) || shape->checkFlag(J3DShpFlag_NoMtx) ||
+            shape->getMtxGroupNum() == 0)
+        {
+            continue;
+        }
+        f32 radius, depth, scale;
+        if (!lodShapeBound(i_model, data, shape, place, view, radius, depth, scale)) {
+            continue;
+        }
+        if (dNativeLod::partTooSmall(radius, depth, unitPixels, cfg.partPixels)) {
+            shape->hide();
+            o_hidden[hidden++] = i;
+            dNativeLod::census.partShapes++;
+            dNativeLod::census.partGroups += shape->getMtxGroupNum();
+        }
+    }
+    return hidden;
+}
+
+// Rules "levels" and "shadowlevels" (d_native_lod.h): the shape packets of
+// an entered model get the shape's levels and the level for the scene. The
+// painter uses them for this draw phase only (J3DPacket.cpp), so a model
+// entered another way, or not this time, is drawn whole.
+void lodChooseLevels(J3DModel* i_model) {
+    namespace features = dusk::native::features;
+    namespace model_lod = dusk::native::model_lod;
+    const bool scene = features::on(features::Id::modelLod), shadow = features::on(features::Id::shadowLod);
+    if (!scene && !shadow) {
+        return;
+    }
+    J3DModelData* data = i_model->getModelData();
+    const model_lod::Model* levels = model_lod::find(data);
+    if (levels == NULL || levels->shapes != data->getShapeNum() || data->getJointNum() == 0) {
+        return;
+    }
+    const dNativeLod::Config& cfg = dNativeLod::config();
+    const LodPicture& p = l_lodPicture;
+    const void* owner = dNativeLod::drawOwner;
+    // Never Link; an actor not during an event; room models always.
+    const bool eligible = scene && cfg.levelPixels > 0.0f && i_model->getMtxCalcMode() == 0 && owner != p.player &&
+                          (dNativeLod::drawOwnerName == fpcNm_BG_e ||
+                           (owner != NULL && !p.event && fopAc_IsActor(const_cast<void*>(owner))));
+    MtxP view = j3dSys.getViewMtx();
+    LodModelPlace place;
+    lodModelPlace(i_model, place);
+    model_lod::Counters& counted = model_lod::counters();
+    for (u16 i = 0; i < levels->shapes; i++) {
+        J3DShapePacket* packet = i_model->getShapePacket(i);
+        const model_lod::Shape& lod = levels->shape[i];
+        J3DShape* shape = data->getShapeNodePointer(i);
+        if (lod.levels == 0 || shape == NULL || shape->checkFlag(J3DShpFlag_Visible)) {
+            continue;
+        }
+        packet->mNativeLodShape = &lod;
+        packet->mNativeLodPhase = dNativeLod::drawPhase;
+        unsigned level = 0;
+        f32 radius, depth, scale;
+        if (eligible && lodShapeBound(i_model, data, shape, place, view, radius, depth, scale) && depth > 1.0f) {
+            level = dNativeLod::chooseLevel(lod.error.data(), lod.levels, scale * p.unitPixels / depth,
+                                            cfg.levelPixels, packet->mNativeLod);
+        }
+        packet->mNativeLod = u8(level);
+        counted.shapesSeen++;
+        counted.shapesReduced += level != 0;
+        counted.levelChoices[level]++;
+    }
+}
+void lodCountEntered(J3DModel* i_model, bool i_tiny) {
+    J3DModelData* data = i_model->getModelData();
+    unsigned shapes = 0, groups = 0;
+    for (u16 i = 0; i < data->getShapeNum(); i++) {
+        J3DShape* shape = data->getShapeNodePointer(i);
+        if (shape != NULL && !shape->checkFlag(J3DShpFlag_Visible)) {
+            shapes++;
+            groups += shape->getMtxGroupNum();
+        }
+    }
+    if (i_tiny) {
+        dNativeLod::census.actorGroups += groups;
+        return;
+    }
+    dNativeLod::census.shapes += shapes;
+    dNativeLod::census.groups += groups;
+    const short name = dNativeLod::drawOwnerName;
+    if (name >= 0 && name < 800) {
+        dNativeLod::census.groupsByProc[name] += groups;
+    }
+}
+}  // namespace
+
+static bool mDoExt_entry(J3DModel* i_model) {
+    if (dNativeLod::drawOwnerTiny) {
+        // Rule "actor": the draw method of a tiny actor runs, its models
+        // are not entered.
+        if (dNativeLod::config().census) {
+            lodCountEntered(i_model, true);
+        }
+        return false;
+    }
+    u16 hidden[128];
+    const int count = lodHideParts(i_model, hidden, 128);
+    lodChooseLevels(i_model);
+    if (dNativeLod::config().census) {
+        lodCountEntered(i_model, false);
+    }
+    i_model->entry();
+    J3DModelData* data = i_model->getModelData();
+    for (int i = 0; i < count; i++) {
+        data->getShapeNodePointer(hidden[i])->show();
+    }
+    return true;
+}
+
+// Instance batches (m_Do_ext.h mDoExt_nativeInstancesUpdateDL and the 3D line
+// runs of mDoExt_3DlineMat1_c::nativeDrawRun; the J3D side is
+// JSystem/J3DGraphBase/J3DNativeInstances.h). Game thread only.
+namespace {
+// sdmc:/3ds/DuskLight/batch-instances.txt, read once: "0" off (the original
+// per-model code and one strip per line material), "v" verify (every model of
+// a batch also gets its light and differed list as the original code gives
+// them, and those lists are compared with the carrier's), anything else or
+// no file: on.
+int nativeInstancesMode() {
+    static const int mode = [] {
+        int value = 1;
+        if (FILE* file = std::fopen("sdmc:/3ds/DuskLight/batch-instances.txt", "rb")) {
+            char text[8] = {};
+            (void)std::fread(text, 1, sizeof(text) - 1, file);
+            std::fclose(file);
+            value = text[0] == '0' ? 0 : (text[0] == 'v' || text[0] == 'V') ? 2 : 1;
+        }
+        OSReport("Native instance batches: %s (SD switch batch-instances.txt: 0 off, v verify)\n",
+                 value == 0 ? "off" : value == 2 ? "verify" : "on");
+        return value;
+    }();
+    return mode;
+}
+
+struct NativeInstanceCounts {
+    unsigned pictures, batches, models, refused, verified, differed, lineRuns, lineMaterials;
+    const char* refusal;
+};
+NativeInstanceCounts l_nativeInstances;
+
+bool nativeMaterialAnimated(const J3DMaterialAnm* anm) {
+    if (anm == NULL) {
+        return false;
+    }
+    if (anm->hasMaterialAnimation()) {
+        return true;
+    }
+    for (int i = 0; i < 8; i++) {
+        if (anm->getTexNoAnm(i).getAnmFlag()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+const char* nativeInstancesRefusal(J3DModel* const* models, int count, dKy_tevstr_c* tevStr) {
+    if (count < 2 || count > J3DNativeInstances::maxModels) {
+        return "count";
+    }
+    // dKy_setLight_nowroom_actor scales the room lights by the move ratio on
+    // every call for these types: per-model calls compound, one call would not.
+    if (tevStr == NULL || tevStr->Type == 9 || tevStr->Type == 10) {
+        return "light type";
+    }
+    // The parts rule decides model by model.
+    if (dNativeLod::config().partPixels > 0.0f) {
+        return "lod parts";
+    }
+    if (models[0] == NULL) {
+        return "model";
+    }
+    J3DModelData* data = models[0]->getModelData();
+    if (data == NULL || data->getShapeNum() == 0 || data->getMaterialNum() == 0) {
+        return "model";
+    }
+    for (int i = 0; i < count; i++) {
+        J3DModel* model = models[i];
+        if (model == NULL || model->getModelData() != data) {
+            return "model";
+        }
+        if (model->checkFlag(J3DMdlFlag_SkinPosCpu | J3DMdlFlag_SkinNrmCpu | J3DMdlFlag_EnableLOD) ||
+            model->getMtxCalcMode() == 2) {
+            return "model flags";
+        }
+        // Arrays the CPU rewrites per model, or a calc callback (it could
+        // read what the other models' code changed in between).
+        if (model->mDeformData != NULL || model->mSkinDeform != NULL || model->mVtxColorCalc != NULL ||
+            model->mUnkCalc1 != NULL || model->mUnkCalc2 != NULL || model->mCalcCallBack != NULL) {
+            return "model calc";
+        }
+        for (int k = 0; k < i; k++) {
+            if (models[k] == model) {
+                return "model twice";
+            }
+        }
+    }
+    for (u16 i = 0; i < data->getMaterialNum(); i++) {
+        J3DMaterial* material = data->getMaterialNodePointer(i);
+        // dRes_info_c gives every material of a loaded model an empty
+        // J3DMaterialAnm (all tracks off): its calc changes nothing, so only a
+        // track that is on refuses the batch.
+        if (nativeMaterialAnimated(material->getMaterialAnm())) {
+            return "material animation";
+        }
+        // The batch is drawn where the last model's entry is, which is where
+        // the original draws them all only in lists that keep a model's
+        // entries together in reverse order (by material, or unsorted).
+        const int sort = j3dSys.getDrawBuffer(material->isDrawModeOpaTexEdge() == FALSE)->getSortMode();
+        if (sort != J3DDrawBufSortMode_Mat && sort != J3DDrawBufSortMode_MatAnm && sort != J3DDrawBufSortMode_Non) {
+            return "draw list";
+        }
+    }
+    for (u16 i = 0; i < data->getShapeNum(); i++) {
+        if (const char* why = J3DNativeInstancesShapeRefusal(data->getShapeNodePointer(i))) {
+            return why;
+        }
+    }
+    return NULL;
+}
+
+// Verify: the differed lists of `model` (made as the original code makes
+// them) are the bytes the carrier's give every model of the batch.
+bool nativeSameDifferedLists(J3DModel* model, J3DModel* carrier) {
+    J3DModelData* data = carrier->getModelData();
+    for (u16 i = 0; i < data->getShapeNum(); i++) {
+        J3DDisplayListObj* a = model->getShapePacket(i)->getDisplayListObj();
+        J3DDisplayListObj* b = carrier->getShapePacket(i)->getDisplayListObj();
+        if ((a == NULL) != (b == NULL)) {
+            return false;
+        }
+        if (a != NULL && (a->getDisplayListSize() != b->getDisplayListSize() ||
+                          std::memcmp(a->getDisplayList(0), b->getDisplayList(0), a->getDisplayListSize()) != 0)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Every draw phase: a new picture for the J3D side; every 300 a report.
+void nativeInstancesPicture() {
+    J3DNativeInstancesBeginPicture();
+    NativeInstanceCounts& c = l_nativeInstances;
+    if (++c.pictures < 300) {
+        return;
+    }
+    if (nativeInstancesMode() != 0) {
+        J3DNativeInstanceStats& s = J3DNativeInstancesStats();
+        u32 lists = 0, bytes = 0, capacity = 0;
+        J3DNativeInstancesStore(lists, bytes, capacity);
+        const f32 n = 1.0f / c.pictures;
+        OSReport("Native instance batches, last %u pictures, per picture: batches %.1f of %.1f models, drawn %.1f "
+                 "models in %.1f draws (%.1f draws saved), one by one %.1f (last: %s); refused %.1f (last: %s); "
+                 "lists made %u kept %u, %u/%u bytes, store emptied %u\n",
+                 c.pictures, c.batches * n, c.models * n, s.instances * n, s.draws * n,
+                 (s.instances - s.draws) * n, s.alone * n, s.why != NULL ? s.why : "-", c.refused * n,
+                 c.refusal != NULL ? c.refusal : "-", s.listsMade, lists, bytes, capacity, s.recycled);
+        // A second line: OSReport cuts one line at its buffer size.
+        OSReport("Native instance batches, per picture: 3D line runs %.1f of %.1f materials (%.1f draws saved); "
+                 "verify models %u differed %u\n",
+                 c.lineRuns * n, c.lineMaterials * n, (c.lineMaterials - c.lineRuns) * n, c.verified,
+                 c.differed);
+    }
+    J3DNativeInstanceStats& s = J3DNativeInstancesStats();
+    s.draws = s.instances = s.alone = s.listsMade = s.recycled = 0;
+    c = NativeInstanceCounts{};
+}
+}  // namespace
+
+bool mDoExt_nativeInstancesUpdateDL(J3DModel* const* models, int count, dKy_tevstr_c* tevStr,
+                                    J3DNativeInstances* batch) {
+    const int mode = nativeInstancesMode();
+    const char* why = mode == 0 ? "off" : nativeInstancesRefusal(models, count, tevStr);
+    if (why == NULL) {
+        batch->models = models;
+        batch->count = u16(count);
+        if (!J3DNativeInstancesRegister(models[count - 1], batch)) {
+            why = "carriers";
+        }
+    }
+    if (why != NULL) {
+        if (mode != 0) {
+            l_nativeInstances.refused++;
+            l_nativeInstances.refusal = why;
+        }
+        return false;
+    }
+    J3DModel* carrier = models[count - 1];
+    J3DModelData* data = carrier->getModelData();
+    // mDoExt_modelUpdateDL's branch: diff() writes the differed lists.
+    const bool differed = data->getMaterialNodePointer(0)->getSharedDisplayListObj() != NULL && !data->isLocked();
+    for (int i = 0; i < count - 1; i++) {
+        J3DModel* model = models[i];
+        if (mode == 2) {
+            // The original code for this model but its entry (and viewCalc,
+            // which only the entered packets read).
+            g_env_light.setLightTevColorType_MAJI(model, tevStr);
+            model->calc();
+            if (differed) {
+                model->calcMaterial();
+                model->diff();
+            }
+        } else {
+            model->calc();
+        }
+    }
+    g_env_light.setLightTevColorType_MAJI(carrier, tevStr);
+    mDoExt_modelUpdateDL(carrier);
+    if (mode == 2 && differed) {
+        for (int i = 0; i < count - 1; i++) {
+            l_nativeInstances.verified++;
+            if (!nativeSameDifferedLists(models[i], carrier)) {
+                l_nativeInstances.differed++;
+            }
+        }
+    }
+    l_nativeInstances.batches++;
+    l_nativeInstances.models += count;
+    return true;
+}
+
+void dNativeLod::beginDrawPhase() {
+    nativeInstancesPicture();
+    LodPicture& p = l_lodPicture;
+    p.picture++;
+    p.unitPixels = dNativeLod::pixelsPerUnit(mDoLib_clipper::getFovyRate());
+    p.event = dComIfGp_event_runCheck() != FALSE;
+    p.player = dComIfGp_getPlayer(0);
+    p.horse = dComIfGp_getHorseActor();
+    p.lockon = dComIfGp_getAttention() != NULL ? dComIfGp_getAttention()->LockonTarget(0) : NULL;
+    p.owner = reinterpret_cast<const void*>(1);  // no process has this address
+    p.ownerEligible = false;
+    dNativeLod::drawPhase++;
+    dNativeLod::unitPixels = p.unitPixels;
+
+    const dNativeLod::Config& cfg = dNativeLod::config();
+    if (!cfg.census) {
+        return;
+    }
+    dNativeLod::Census& c = dNativeLod::census;
+    c.eventPictures += p.event;
+    if (++c.pictures < 300) {
+        return;
+    }
+    const f32 n = 1.0f / c.pictures;
+    const unsigned skinDone = J3DModel::sNativeEnvelopeCount[0];
+    const unsigned skinDeferred = J3DModel::sNativeEnvelopeCount[1];
+    const unsigned skinLate = J3DModel::sNativeEnvelopeCount[2];
+    OSReport("Native LOD, last %u pictures, per picture: entered shapes %.1f groups %.1f; parts rule "
+             "left out shapes %.1f groups %.1f; actor rule %.1f actors groups %.1f; other casters' model "
+             "shadows %.1f, %.1f made blobs; grass/flowers tested %.1f thinned %.1f; skin matrices made "
+             "%.1f deferred %.1f (%.1f of them at draw); event pictures %u\n",
+             c.pictures, c.shapes * n, c.groups * n, c.partShapes * n, c.partGroups * n, c.actors * n,
+             c.actorGroups * n,
+             (c.shadowKept + c.shadowBlobs) * n, c.shadowBlobs * n, c.foliageTested * n,
+             c.foliageHidden * n, skinDone * n, skinDeferred * n, skinLate * n, c.eventPictures);
+    char line[256];
+    int at = std::snprintf(line, sizeof(line), "Native LOD groups by process (f_pc_name.h ids):");
+    for (int rank = 0; rank < 14 && at < int(sizeof(line)) - 16; rank++) {
+        int best = 0;
+        for (int i = 1; i < 800; i++) {
+            if (c.groupsByProc[i] > c.groupsByProc[best]) {
+                best = i;
+            }
+        }
+        if (c.groupsByProc[best] == 0) {
+            break;
+        }
+        at += std::snprintf(line + at, sizeof(line) - at, " %d=%.1f", best, c.groupsByProc[best] * n);
+        c.groupsByProc[best] = 0;
+    }
+    OSReport("%s\n", line);
+    c = dNativeLod::Census{};
+    dusk::native::model_lod::report();
+    J3DModel::sNativeEnvelopeCount[0] = J3DModel::sNativeEnvelopeCount[1] =
+        J3DModel::sNativeEnvelopeCount[2] = 0;
+}
+#else
+static bool mDoExt_entry(J3DModel* i_model) {
+    i_model->entry();
+    return true;
+}
+#endif
+
+static bool mDoExt_modelDiff(J3DModel* i_model) {
     modelMtxErrorCheck(i_model);
     i_model->calcMaterial();
     i_model->diff();
 #if TARGET_PC
     if (!dusk::game_clock::is_sim_frame()) {
-        return;
+        return false;
     }
 #endif
-    i_model->entry();
+    return mDoExt_entry(i_model);
 }
 
 void mDoExt_modelUpdate(J3DModel* i_model) {
@@ -357,7 +880,9 @@ void mDoExt_modelUpdate(J3DModel* i_model) {
         i_model->calc();
         mDoExt_modelDiff(i_model);
     } else {
-        i_model->update();
+        // J3DModel::update(): calc() and entry().
+        i_model->calc();
+        mDoExt_entry(i_model);
         i_model->lock();
     }
 
@@ -376,14 +901,16 @@ void mDoExt_modelUpdateDL(J3DModel* i_model) {
         mDoExt_modelDiff(i_model);
     } else {
         i_model->unlock();
-        i_model->update();
+        // J3DModel::update(): calc() and entry().
+        i_model->calc();
+        mDoExt_entry(i_model);
         i_model->lock();
     }
 
     i_model->viewCalc();
 }
 
-void mDoExt_modelEntryDL(J3DModel* i_model) {
+static bool enterModelDisplayList(J3DModel* i_model) {
 #if TARGET_PC
     if (!dusk::game_clock::is_sim_frame()) {
         // FRAME INTERP NOTE: This fixes issue #355 where some lights would flicker.
@@ -391,7 +918,7 @@ void mDoExt_modelEntryDL(J3DModel* i_model) {
         // but it's unclear what exactly needs to be added.
         i_model->calcMaterial();
         i_model->diff();
-        return;
+        return false;
     }
 #endif
 
@@ -399,17 +926,23 @@ void mDoExt_modelEntryDL(J3DModel* i_model) {
 
     J3DModelData* model_data = i_model->getModelData();
 
+    bool entered;
     if (model_data->getMaterialNodePointer(0)->getSharedDisplayListObj() != NULL &&
         !model_data->isLocked())
     {
-        mDoExt_modelDiff(i_model);
+        entered = mDoExt_modelDiff(i_model);
     } else {
         i_model->unlock();
-        i_model->entry();
+        entered = mDoExt_entry(i_model);
         i_model->lock();
     }
 
     i_model->viewCalc();
+    return entered;
+}
+
+void mDoExt_modelEntryDL(J3DModel* i_model) {
+    enterModelDisplayList(i_model);
 }
 
 void mDoExt_btkAnmRemove(J3DModelData* i_modelData) {
@@ -591,8 +1124,16 @@ void mDoExt_invisibleModel::entryDL(cXyz* param_0) {
     J3DDrawBuffer* buffer0 = j3dSys.getDrawBuffer(0);
     J3DDrawBuffer* buffer1 = j3dSys.getDrawBuffer(1);
     dComIfGd_setListZxlu();
+#if defined(DUSK_TARGET_3DS)
+    // The joint depth pass replays the material packet built by model entry.
+    // An omitted model has no matching color pass and may have an empty list.
+    if (enterModelDisplayList(mModel)) {
+        entryJoint(param_0);
+    }
+#else
     mDoExt_modelEntryDL(mModel);
     entryJoint(param_0);
+#endif
     j3dSys.setDrawBuffer(buffer0, 0);
     j3dSys.setDrawBuffer(buffer1, 1);
 }
@@ -2409,6 +2950,44 @@ ATTRIBUTE_ALIGN(32) static u8 l_matDL[132] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
+#if defined(DUSK_TARGET_3DS)
+// One line as direct vertices inside an open triangle strip: position, normal
+// and, with `tex`, texture coordinate. `joinBefore` repeats the first vertex
+// and `joinAfter` the last one: with both, two lines are tied by four
+// triangles without area, and since a line has an even number of vertices the
+// next one starts on an even place of the strip and keeps its winding.
+// Written in blocks: the GX vertex calls cost a call chain per value (2,100
+// vertices of lines took 8 ms of a picture in Ordon Spring through them).
+static void nativeLineStrip(const cXyz* pos, const mDoExt_3Dline_field_0x10_c* nrm, const cXy* tex, int vertices,
+                            bool joinBefore, bool joinAfter) {
+    auto* stream = dusk::native::gx::commandStream();
+    if (stream == NULL) {
+        OSPanic(__FILE__, __LINE__, "Native 3D line stream unavailable");
+    }
+    u8 bytes[23 * 48];
+    unsigned used = 0;
+    const int last = vertices + (joinAfter ? 1 : 0);
+    for (int k = joinBefore ? -1 : 0; k < last; k++) {
+        const int j = k < 0 ? 0 : k >= vertices ? vertices - 1 : k;
+        const float position[3] = {pos[j].x, pos[j].y, pos[j].z};
+        const s8 normal[3] = {nrm[j].x, nrm[j].y, nrm[j].z};
+        const float st[2] = {tex != NULL ? tex[j].x : 0.0f, tex != NULL ? tex[j].y : 0.0f};
+        used += dusk::native::gx::lineVertexWire(bytes + used, position, normal, tex != NULL ? st : NULL);
+        if (used + 23 > sizeof(bytes) || k + 1 == last) {
+            if (!stream->write({bytes, used})) {
+                OSPanic(__FILE__, __LINE__, "Native 3D line stream failed");
+            }
+            used = 0;
+        }
+    }
+}
+// Lines of `vertices` vertices each that fit one strip: the count of a GXBegin
+// is 16 bits wide, and a strip of 21,000 vertices is 62,994 triangle corners.
+static int nativeLinesPerStrip(int vertices) {
+    return vertices + 2 < 21000 ? 21000 / (vertices + 2) : 1;
+}
+#endif
+
 void mDoExt_3DlineMat0_c::setMaterial() {
 #if !defined(DUSK_TARGET_3DS)
     ZoneScoped;
@@ -2440,6 +3019,24 @@ void mDoExt_3DlineMat0_c::draw() {
     mDoExt_3Dline_c* var_r28 = field_0x18;
     int var_r26 = (field_0x14 << 1) & 0xFFFF;
 
+#if defined(DUSK_TARGET_3DS)
+    // One strip for all the lines of this material (see
+    // mDoExt_3DlineMat1_c::draw).
+    if (field_0x10 > 0 && var_r26 >= 3) {
+        GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+        GXSetVtxDesc(GX_VA_NRM, GX_DIRECT);
+        const int linesPerStrip = nativeLinesPerStrip(var_r26);
+        for (int first = 0; first < field_0x10; first += linesPerStrip) {
+            const int count = field_0x10 - first < linesPerStrip ? field_0x10 - first : linesPerStrip;
+            GXBegin(GX_TRIANGLESTRIP, GX_VTXFMT0, u16(count * var_r26 + (count - 1) * 2));
+            for (int i = 0; i < count; i++) {
+                nativeLineStrip(var_r28[first + i].field_0x8[field_0x16], var_r28[first + i].field_0x10[field_0x16], NULL, var_r26,
+                                i > 0, i + 1 < count);
+            }
+            GXEnd();
+        }
+    }
+#else
     for (int i = 0; i < field_0x10; i++) {
         GXSETARRAY(GX_VA_POS, var_r28->field_0x8[field_0x16], sizeof(cXyz) * var_r26, sizeof(cXyz), true);
         GXSETARRAY(GX_VA_NRM, var_r28->field_0x10[field_0x16], 3 * var_r26, 3, true);
@@ -2455,6 +3052,7 @@ void mDoExt_3DlineMat0_c::draw() {
         GXEnd();
         var_r28++;
     }
+#endif
 
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
     if (!dusk::interp::is_enabled())
@@ -2788,6 +3386,31 @@ void mDoExt_3DlineMat1_c::draw() {
     }
     mDoExt_3Dline_c* lines = mpLines;
     u16 vert_num = field_0x34 << 1;
+#if defined(DUSK_TARGET_3DS)
+    // One strip with direct attributes for all the lines of this material,
+    // instead of one indexed strip per line. A strip is a complete draw on
+    // the 3DS (93 of them a picture in Ordon Spring, 0.3 ms each in Azahar),
+    // and every line has arrays of its own, so indexed vertices cannot share
+    // a draw. Two lines are tied by repeating the last vertex of one and the
+    // first of the next (nativeLineStrip). A triangle list did the same in
+    // one draw with three times the vertices, and one long rope then cost
+    // 1.2 ms more than its strip (Death Mountain, 100 vertices).
+    if (mNumLines > 0 && vert_num >= 3) {
+        GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+        GXSetVtxDesc(GX_VA_NRM, GX_DIRECT);
+        GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+        const int linesPerStrip = nativeLinesPerStrip(vert_num);
+        for (int first = 0; first < mNumLines; first += linesPerStrip) {
+            const int count = mNumLines - first < linesPerStrip ? mNumLines - first : linesPerStrip;
+            GXBegin(GX_TRIANGLESTRIP, GX_VTXFMT0, u16(count * vert_num + (count - 1) * 2));
+            for (int i = 0; i < count; i++) {
+                nativeLineStrip(lines[first + i].field_0x8[mIsDrawn], lines[first + i].field_0x10[mIsDrawn],
+                                lines[first + i].field_0x18[mIsDrawn], vert_num, i > 0, i + 1 < count);
+            }
+            GXEnd();
+        }
+    }
+#else
     for (s32 i = 0; i < mNumLines; i++) {
         GXSETARRAY(GX_VA_POS, lines->field_0x8[mIsDrawn], vert_num * sizeof(cXyz), sizeof(cXyz), true);
         GXSETARRAY(GX_VA_NRM, lines->field_0x10[mIsDrawn],
@@ -2809,6 +3432,7 @@ void mDoExt_3DlineMat1_c::draw() {
         GXEnd();
         lines++;
     }
+#endif
     GXSetTexCoordScaleManually(GX_TEXCOORD0, 0, 0, 0);
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
     if (!dusk::interp::is_enabled())
@@ -2817,6 +3441,105 @@ void mDoExt_3DlineMat1_c::draw() {
         mIsDrawn ^= (u8)1;
     }
 }
+
+#if defined(DUSK_TARGET_3DS)
+// The texture object is a handle of its own in each material (the port tags
+// its storage), made by init() from the BTI alone: the same BTI is the same
+// image, format, wrap and filter.
+bool mDoExt_3DlineMat1_c::nativeSameDraw(const mDoExt_3DlineMat1_c& other) const {
+    return mNativeTextureResource != NULL && other.mNativeTextureResource == mNativeTextureResource &&
+           other.mpTevStr == mpTevStr && other.mColor.r == mColor.r && other.mColor.g == mColor.g &&
+           other.mColor.b == mColor.b && other.mColor.a == mColor.a;
+}
+
+// The materials of a run set the same texture, texture scale, colour and
+// ambient (what draw() sets before its lines and after them), so their lines
+// are one strip, tied as nativeLineStrip ties the lines of one material:
+// every line has an even number of vertices, the joins are triangles without
+// area and each line keeps its winding. The bridge's rope materials (one per
+// plank and the side ropes) were one draw each. Lines in the original order;
+// each material's double-buffer index flips as its draw() flips it.
+mDoExt_3DlineMat_c* mDoExt_3DlineMat1_c::nativeDrawRun() {
+    struct LineRef {
+        const cXyz* pos;
+        const mDoExt_3Dline_field_0x10_c* nrm;
+        const cXy* tex;
+        int vertices;
+    };
+    static LineRef lines[512];
+    const int id = getMaterialID();
+    mDoExt_3DlineMat_c* end = field_0x4;
+    int materials = 1;
+    int count = 0;
+    bool fits = true;
+    for (mDoExt_3DlineMat1_c* mat = this;;) {
+        const int vertices = mat->field_0x34 << 1;
+        if (mat->mNumLines > 0 && vertices >= 3) {
+            for (int i = 0; i < mat->mNumLines; i++) {
+                if (count == 512) {
+                    fits = false;
+                    break;
+                }
+                const mDoExt_3Dline_c& line = mat->mpLines[i];
+                lines[count].pos = line.field_0x8[mat->mIsDrawn];
+                lines[count].nrm = line.field_0x10[mat->mIsDrawn];
+                lines[count].tex = line.field_0x18[mat->mIsDrawn];
+                lines[count].vertices = vertices;
+                count++;
+            }
+        }
+        if (!fits || end == NULL || end->getMaterialID() != id ||
+            !nativeSameDraw(*static_cast<mDoExt_3DlineMat1_c*>(end))) {
+            break;
+        }
+        mat = static_cast<mDoExt_3DlineMat1_c*>(end);
+        end = end->field_0x4;
+        materials++;
+    }
+    if (materials == 1 || !fits) {
+        draw();
+        return field_0x4;
+    }
+    l_nativeInstances.lineRuns++;
+    l_nativeInstances.lineMaterials += materials;
+
+    // draw() of the first material, for the lines of all of them.
+    if(!dusk::native::retainArchiveTextureForLifetime(mNativeTextureResource))
+        OSPanic(__FILE__,__LINE__,"Native 3D-line texture: %s",dusk::native::textureResourceFailure());
+    GXLoadTexObj(&mTextureObject, GX_TEXMAP0);
+    GXSetTexCoordScaleManually(GX_TEXCOORD0, 1, GXGetTexObjWidth(&mTextureObject), GXGetTexObjHeight(&mTextureObject));
+    GXSetTevColor(GX_TEVREG2, mColor);
+    if (mpTevStr != NULL) {
+        dKy_Global_amb_set(mpTevStr);
+    }
+    if (count > 0) {
+        GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+        GXSetVtxDesc(GX_VA_NRM, GX_DIRECT);
+        GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+    }
+    // Strips of at most 21,000 vertices (nativeLinesPerStrip).
+    for (int first = 0; first < count;) {
+        int total = lines[first].vertices;
+        int last = first + 1;
+        while (last < count && total + 2 + lines[last].vertices <= 21000) {
+            total += 2 + lines[last].vertices;
+            last++;
+        }
+        GXBegin(GX_TRIANGLESTRIP, GX_VTXFMT0, u16(total));
+        for (int i = first; i < last; i++) {
+            nativeLineStrip(lines[i].pos, lines[i].nrm, lines[i].tex, lines[i].vertices, i > first, i + 1 < last);
+        }
+        GXEnd();
+        first = last;
+    }
+    GXSetTexCoordScaleManually(GX_TEXCOORD0, 0, 0, 0);
+    mDoExt_3DlineMat_c* mat = this;
+    for (int i = 0; i < materials; i++, mat = mat->field_0x4) {
+        static_cast<mDoExt_3DlineMat1_c*>(mat)->mIsDrawn ^= (u8)1;
+    }
+    return end;
+}
+#endif
 
 void mDoExt_3DlineMat1_c::update(int param_0, f32 param_1, GXColor& param_2, u16 param_3, dKy_tevstr_c* param_4) {
     mColor = param_2;
@@ -3166,6 +3889,18 @@ void mDoExt_3DlineMatSortPacket::setMat(mDoExt_3DlineMat_c* i_3DlineMat) {
 void mDoExt_3DlineMatSortPacket::draw() {
     mp3DlineMat->setMaterial();
     mDoExt_3DlineMat_c* lineMat = mp3DlineMat;
+#if defined(DUSK_TARGET_3DS)
+    // Materials 1 and 2 (mDoExt_3DlineMat2_c draws as 1): runs that set the
+    // same state are one strip (nativeDrawRun; batch-instances.txt 0: off).
+    const int id = lineMat->getMaterialID();
+    if ((id == 1 || id == 2) && nativeInstancesMode() != 0) {
+        do {
+            lineMat = static_cast<mDoExt_3DlineMat1_c*>(lineMat)->nativeDrawRun();
+        } while (lineMat != NULL);
+        J3DShape::resetVcdVatCache();
+        return;
+    }
+#endif
     do {
         lineMat->draw();
         lineMat = lineMat->field_0x4;

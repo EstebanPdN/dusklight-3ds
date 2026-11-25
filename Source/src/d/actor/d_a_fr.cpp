@@ -717,6 +717,12 @@ static int daFr_Create(fopAc_ac_c* a_this) {
 
         i_this->mAcch.Set(fopAcM_GetPosition_p(actor), fopAcM_GetOldPosition_p(actor),
             actor, 1, &i_this->mAcchCir, fopAcM_GetSpeed_p(actor), NULL, NULL);
+#if defined(DUSK_TARGET_3DS)
+        // The frog finds water with its own checks (wd_check, the Spl ground
+        // check) and reads only the ground and wall results of mAcch; the
+        // water pass of CrrPos was one unused walk over every background.
+        i_this->mAcch.SetWaterNone();
+#endif
         i_this->mAcchCir.SetWall(20.0f, 20.0f);
 
         i_this->field_0x5cd = i_this->field_0x5b4;

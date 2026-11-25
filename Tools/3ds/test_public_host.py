@@ -53,6 +53,8 @@ def main():
         ('texture-ia8', [native / 'tests/texture_ia8_test.cpp', native / 'runtime/texture_ia8.cpp'], [], []),
         ('pica-math', [native / 'tests/gx_pica_math_test.cpp', native / 'runtime/gx_pica_math.cpp'], [], []),
         ('boot-stage', [native / 'tests/boot_stage_test.cpp'], [], []),
+        ('particle-cull', [native / 'tests/particle_native_cull_test.cpp'],
+         ['-I' + str(source / 'libs/JSystem/include')], []),
     ]
     kernel = ['platforms/3ds/tests/host_primitives.cpp', 'platforms/3ds/runtime/bootstrap.cpp',
               'platforms/3ds/runtime/os_sync.cpp', 'platforms/3ds/runtime/os_arena.cpp',

@@ -1,4 +1,5 @@
 #include "gpu_sync.hpp"
+#include "gx_worker_sync.hpp"
 #include <dolphin/gx.h>
 #include <dolphin/os.h>
 #include <atomic>
@@ -15,6 +16,7 @@ struct CompletionGuard {
     ~CompletionGuard() { completing.clear(std::memory_order_release); }
 };
 void finishPixels() {
+    dusk::native::syncGxWorker();
     GXFlush(); // Reject incomplete CPU commands before a GPU wait or callback.
     const auto result = dusk::native::platformCompleteGpu(500000000);
     if (result != dusk::native::GpuCompletion::complete)
@@ -67,11 +69,24 @@ void GXPixModeSync() {
     else GXFlush();
 }
 void GXInvalidateTexAll() {
+    // The images are marked dirty behind every draw issued so far: as a job
+    // in the worker's queue (gx_worker_sync.hpp), or here once what is queued
+    // is drawn. The painter calls this after each of its frame copies, in
+    // the middle of the 3D lists: as a sync it handed 8 to 33 shapes of every
+    // picture to the game thread (Alpha 10, three zones). Every image a draw
+    // reads is a copy this port keeps and rewrites itself, in draw order, so
+    // nothing the game writes meanwhile reaches a queued draw.
+    if (!dusk::native::nativeGxSyncWaits()) {
+        GXFlush();
+        const std::uint32_t none = 0;
+        if (dusk::native::queueGxJob(dusk::native::gxJobInvalidateTextures, &none, sizeof(none))) return;
+    }
+    dusk::native::syncGxWorker();
     CompletionGuard guard;
     if (dusk::native::nativeGxSyncWaits()) finishPixels();
     else GXFlush();
-    // Marks the images dirty; a changed image waits for the GPU before its
-    // pixels are rewritten (bindGxTexture).
+    // Marks the images dirty; a changed image is rewritten where no queued
+    // draw reads it, or after one GPU wait (bindGxTexture).
     if (!dusk::native::platformInvalidateGpuTextures())
         OSPanic(__FILE__, __LINE__, "Native GPU texture invalidation failed");
 }

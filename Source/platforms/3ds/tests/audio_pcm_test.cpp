@@ -28,6 +28,12 @@ int main(int argc,char** argv){
     assert(nativePcm16(-2)==-32768&&nativePcm16(2)==32767);
     assert(nativePcm16(-.5f)==-16384&&nativePcm16(.5f)==16384&&nativePcm16(0)==0);
     assert(nativePcm16(1.f/65536)==0&&nativePcm16(-1.f/65536)==0); // truncation, not rounding
+    // The mixer's form (value*32768, then truncation and saturation) gives the same sample.
+    for(int i=-140000;i<=140000;++i){
+        const float value=i/65536.0f+i*1e-7f;
+        assert(nativePcm16Scaled(value*32768)==nativePcm16(value));
+    }
+    for(const float value:{-1e9f,-70000.f,-1.0f,-1.0f+1.f/32768,32767.f/32768,1.0f,3.5f,1e9f})assert(nativePcm16Scaled(value*32768)==nativePcm16(value));
     // Disabled path must tolerate unreadable PCM and invalid output paths: no allocation, scan or output.
     AudioPcmCapture disabled;
     assert(disabled.initialize((root/"absent").c_str(),800,48000)==AudioPcmResult::disabled);

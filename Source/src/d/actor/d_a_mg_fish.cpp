@@ -127,12 +127,136 @@ static void* s_hitfish_sub(void* a, void* b) {
     return NULL;
 }
 
+#if defined(DUSK_TARGET_3DS)
+// Searches of one logic tick (Alpha 13, Ordon village F_SP103 r0: 16 fish).
+// Every fish walked every process of every layer (about 140) three times per
+// tick: pl_check for a hooked fish, search_lure for a rod, and
+// fopAcM_SearchByID(-1) on the actor list when no rod was found; 48 walks per
+// tick, up to 4 ticks per picture. The judges below accept only MG_FISH,
+// MG_ROD and FR actors, so the first fish of a tick walks once and keeps those
+// three kinds in walk order; later searches of the same tick ask the same
+// judge on that short list, in the same order, so they return the same
+// process. Within the execute pass of a tick no process enters the layer
+// trees (creation finishes in fpcCt_Handler before the pass; none of these
+// kinds is fast-created), and a process deleted during the pass leaves its
+// layer tree at once (fpcEx_ExecuteQTo clears layer_tag.layer) while its
+// memory lives until the next fpcDt_Handler: such entries are skipped. The
+// key is g_Counter.mCounter0, which fapGm_Execute advances once per tick after
+// the pass. The fish's own create calls its execute while other processes may
+// still enter the trees: that call walks as before.
+static bool l_fishSearchInCreate = false;
+
+namespace {
+struct FishSearchList {
+    enum { CAPACITY = 64 };
+    u8 count;
+    void* process[CAPACITY];
+};
+
+struct FishSearchCache {
+    bool built;
+    bool usable;
+    u32 counter;
+    FishSearchList fish;
+    FishSearchList rod;
+    FishSearchList frog;
+};
+
+FishSearchCache l_fishSearch;
+
+void fishSearchKeep(FishSearchList& list, void* process) {
+    if (list.count >= FishSearchList::CAPACITY) {
+        l_fishSearch.usable = false;
+        return;
+    }
+    list.process[list.count++] = process;
+}
+
+void* fishSearchCollect(void* a, void*) {
+    if (fopAc_IsActor(a)) {
+        switch (fopAcM_GetName(a)) {
+        case fpcNm_MG_FISH_e:
+            fishSearchKeep(l_fishSearch.fish, a);
+            break;
+        case fpcNm_MG_ROD_e:
+            fishSearchKeep(l_fishSearch.rod, a);
+            break;
+        case fpcNm_FR_e:
+            fishSearchKeep(l_fishSearch.frog, a);
+            break;
+        default:
+            break;
+        }
+    }
+    return NULL;
+}
+
+bool fishSearchReady() {
+    if (l_fishSearchInCreate) {
+        return false;
+    }
+    if (!l_fishSearch.built || l_fishSearch.counter != g_Counter.mCounter0) {
+        l_fishSearch.built = true;
+        l_fishSearch.usable = true;
+        l_fishSearch.counter = g_Counter.mCounter0;
+        l_fishSearch.fish.count = 0;
+        l_fishSearch.rod.count = 0;
+        l_fishSearch.frog.count = 0;
+        fpcM_Search(fishSearchCollect, NULL);
+    }
+    return l_fishSearch.usable;
+}
+
+void* fishSearchIn(const FishSearchList& list, fpcLyIt_JudgeFunc judge, void* data) {
+    for (int i = 0; i < list.count; i++) {
+        base_process_class* process = (base_process_class*)list.process[i];
+        if (process->layer_tag.layer == NULL) {
+            continue;
+        }
+        void* found = judge(process, data);
+        if (found != NULL) {
+            return found;
+        }
+    }
+    return NULL;
+}
+}  // namespace
+
+// fpcEx_Search / fpcM_Search for a judge that accepts only one of the kept kinds.
+static void* fish_search(const FishSearchList& list, fpcLyIt_JudgeFunc judge, void* data) {
+    if (fishSearchReady()) {
+        return fishSearchIn(list, judge, data);
+    }
+    return fpcM_Search(judge, data);
+}
+
+// fopAcM_SearchByID: process ids count up from 1 (fpcBs_MakeOfId), so the
+// error id that search_lure and search_bait return matches no process and the
+// walk over the actor list always ended with NULL.
+static fopAc_ac_c* fish_search_by_id(fpc_ProcID id) {
+    if (id == fpcM_ERROR_PROCESS_ID_e) {
+        return NULL;
+    }
+    return fopAcM_SearchByID(id);
+}
+
+#define DUSK_FISH_SEARCH_FISH(judge, data) fish_search(l_fishSearch.fish, judge, data)
+#define DUSK_FISH_SEARCH_ROD(judge, data) fish_search(l_fishSearch.rod, judge, data)
+#define DUSK_FISH_SEARCH_FROG(judge, data) fish_search(l_fishSearch.frog, judge, data)
+#define DUSK_FISH_SEARCH_BY_ID(id) fish_search_by_id(id)
+#else
+#define DUSK_FISH_SEARCH_FISH(judge, data) fpcEx_Search(judge, data)
+#define DUSK_FISH_SEARCH_ROD(judge, data) fpcM_Search(judge, data)
+#define DUSK_FISH_SEARCH_FROG(judge, data) fpcM_Search(judge, data)
+#define DUSK_FISH_SEARCH_BY_ID(id) fopAcM_SearchByID(id)
+#endif
+
 static s32 pl_check(mg_fish_class* i_this, f32 speed) {
     if (i_this->mDistToPlayer < fabsf(dComIfGp_getPlayer(0)->speedF) * 10.0f + speed) {
         return 1;
     }
 
-    fopAc_ac_c* actor = (fopAc_ac_c*)fpcEx_Search(s_hitfish_sub, i_this);
+    fopAc_ac_c* actor = (fopAc_ac_c*)DUSK_FISH_SEARCH_FISH(s_hitfish_sub, i_this);
     if (actor != NULL) {
         if ((actor->current.pos - i_this->actor.current.pos).abs() < speed) {
             return 3;
@@ -235,11 +359,11 @@ static s32 search_lure(mg_fish_class* i_this, int param_2) {
     };
 
     if (param_2 == 0) {
-        fopAc_ac_c* rod_actor = (fopAc_ac_c*)fpcM_Search(s_lure_sub, i_this);
+        fopAc_ac_c* rod_actor = (fopAc_ac_c*)DUSK_FISH_SEARCH_ROD(s_lure_sub, i_this);
         if (rod_actor != NULL) {
             dmg_rod_class* rod = (dmg_rod_class*)rod_actor;
             s_fish_ct = 0;
-            fpcM_Search(s_other_search_sub, i_this);
+            DUSK_FISH_SEARCH_FISH(s_other_search_sub, i_this);
             if (s_fish_ct <= 1) {
                 f32 fVar1 = i_this->field_0x5ec;
                 if (rod->lure_type == MG_LURE_SP) {
@@ -271,7 +395,7 @@ static s32 search_lure(mg_fish_class* i_this, int param_2) {
             }
         }
     } else if (param_2 == 1) {
-        fopAc_ac_c* rod_actor = (fopAc_ac_c*)fpcM_Search(s_esa_sub, i_this);
+        fopAc_ac_c* rod_actor = (fopAc_ac_c*)DUSK_FISH_SEARCH_ROD(s_esa_sub, i_this);
         if (rod_actor != NULL) {
             dmg_rod_class* rod = (dmg_rod_class*)rod_actor;
             if (i_this->mGedouKind == GEDOU_KIND_KS_2 && rod->hook_kind != 1) {
@@ -353,10 +477,10 @@ static void* s_other_bait_sub(void* a, void* b) {
 }
 
 static s32 search_bait(mg_fish_class* i_this) {
-    void* searchRes = fpcM_Search(s_bait_sub, i_this);
+    void* searchRes = DUSK_FISH_SEARCH_FROG(s_bait_sub, i_this);
     if (searchRes != NULL) {
         i_this->mBaitId = fopAcM_GetID(searchRes);
-        if (fpcM_Search(s_other_bait_sub, i_this) == NULL) {
+        if (DUSK_FISH_SEARCH_FISH(s_other_bait_sub, i_this) == NULL) {
             f32 fVar1 = i_this->field_0x5ec + KREG_F(8);
             cXyz acStack_38 = ((fopAc_ac_c*)searchRes)->current.pos - i_this->actor.current.pos;
             f32 fVar5 = acStack_38.abs();
@@ -2970,7 +3094,7 @@ static void action(mg_fish_class* i_this) {
                 unkSint2 = 1;
             }
             i_this->mRodId = search_lure(i_this, unkSint2);
-            if (fopAcM_SearchByID(i_this->mRodId) != NULL) {
+            if (DUSK_FISH_SEARCH_BY_ID(i_this->mRodId) != NULL) {
                 if (unkSint2 == 0) {
                     i_this->mCurAction = ACTION_MG_FISH_MF_LURE_SEARCH;
                 } else {
@@ -2980,7 +3104,7 @@ static void action(mg_fish_class* i_this) {
             } else {
                 if (unkSint2 == 0) {
                     i_this->mBaitId = search_bait(i_this);
-                    if (fopAcM_SearchByID(i_this->mBaitId) != NULL) {
+                    if (DUSK_FISH_SEARCH_BY_ID(i_this->mBaitId) != NULL) {
                         i_this->mCurAction = ACTION_MG_FISH_MF_BAIT_SEARCH;
                         i_this->mActionPhase = 0;
                     }
@@ -3942,6 +4066,15 @@ static int daMg_Fish_Create(fopAc_ac_c* i_this) {
         fopAcM_SetMax(i_this, 200.0f, 200.0f, 200.0f);
         a_this->mAcch.Set(&i_this->current.pos, &i_this->old.pos, i_this, 1, &a_this->mAcchCir,
             &i_this->speed, NULL, NULL);
+#if defined(DUSK_TARGET_3DS)
+        // The fish reads only the ground and wall results of its mAcch (and
+        // the ground polygon for its shadow), never the water ones; the fish
+        // knows the surface from get_surface_y. The water pass of CrrPos was
+        // one walk over every background (SplGrpChk) per fish per tick, its
+        // result unused; it only writes into this mAcch. Ground, wall and the
+        // order of those checks are unchanged.
+        a_this->mAcch.SetWaterNone();
+#endif
         a_this->field_0xc44 = dComIfGs_getEventReg(0xf11f);
         a_this->mJointScale = 0.0001f + (fopAcM_GetParam(i_this) >> 8 & 0xff) * 0.01f;
         if (a_this->mGedouKind >= GEDOU_KIND_BG) {
@@ -4070,10 +4203,79 @@ static int daMg_Fish_Create(fopAc_ac_c* i_this) {
         } else {
             a_this->field_0xc40 = 300.0f;
         }
+#if defined(DUSK_TARGET_3DS)
+        // Called from creation, outside the tick's execute pass: no search cache.
+        l_fishSearchInCreate = true;
+#endif
         daMg_Fish_Execute(a_this);
+#if defined(DUSK_TARGET_3DS)
+        l_fishSearchInCreate = false;
+#endif
     }
     return retval;
 }
+
+#if defined(DUSK_TARGET_3DS)
+// features::farLogic (f_op_actor.cpp): a fish that the last drawn picture
+// culled (out of view) rests, its execute not run, while
+// - it swims calmly (swim, stay, path, school or river swim): the lure, bait,
+//   hit, jump, catch, flee and aquarium states always run;
+// - no fishing rod exists: a cast lure draws fish from anywhere (search_lure),
+//   and only a hooked fish jumps, splashes or changes the music;
+// - every frog is beyond its bait reach (search_bait) by 500 units: a frog it
+//   would turn to keeps it awake;
+// - the player is more than 3000 units away in XZ: it flees only within
+//   |player speed| * 10 + its own reach, well under 1000 (the original itself
+//   stops F_SP127's fish beyond 2000 and 4500);
+// - no event runs (an event that moves it runs it anyway: move approval 2).
+// Kept: the fish as it was (place, pose, state). When the camera turns to it
+// it is drawn where and as it rested and runs again from the next tick; when
+// the player comes within 3000 it runs while still out of view. Drifting: the
+// path it would have swum meanwhile, its animation phase, the push between
+// resting fish, and the random numbers it would have drawn (so the global
+// sequence differs for every later caller).
+bool daMg_Fish_FarRest(fopAc_ac_c* i_actor) {
+    mg_fish_class* i_this = (mg_fish_class*)i_actor;
+    switch (i_this->mCurAction) {
+    case ACTION_MG_FISH_MF_SWIM:
+    case ACTION_MG_FISH_MF_STAY:
+    case ACTION_MG_FISH_MF_SWIM_P:
+    case ACTION_MG_FISH_MF_SWIM_S:
+    case ACTION_MG_FISH_RI_SWIM:
+        break;
+    default:
+        return false;
+    }
+    if (i_this->field_0xc3c != 0 || dComIfGp_event_runCheck()) {
+        return false;
+    }
+    const fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    if (player == NULL) {
+        return false;
+    }
+    const f32 dx = player->current.pos.x - i_actor->current.pos.x;
+    const f32 dz = player->current.pos.z - i_actor->current.pos.z;
+    if (dx * dx + dz * dz <= 3000.0f * 3000.0f) {
+        return false;
+    }
+    // The tick's kept rods and frogs (built here when no fish ran yet).
+    if (!fishSearchReady() || l_fishSearch.rod.count != 0) {
+        return false;
+    }
+    const f32 reach = i_this->field_0x5ec + KREG_F(8) + 500.0f;
+    for (int i = 0; i < l_fishSearch.frog.count; i++) {
+        const fopAc_ac_c* frog = (const fopAc_ac_c*)l_fishSearch.frog.process[i];
+        if (frog->layer_tag.layer == NULL) {
+            continue;
+        }
+        const cXyz d = frog->current.pos - i_actor->current.pos;
+        if (d.x * d.x + d.y * d.y + d.z * d.z < reach * reach) {
+            return false;
+        }
+    }
+    return true;
+}
+#endif
 
 static DUSK_CONST actor_method_class l_daMg_Fish_Method = {
     (process_method_func)daMg_Fish_Create,

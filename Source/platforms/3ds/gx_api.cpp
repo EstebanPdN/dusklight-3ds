@@ -23,6 +23,27 @@ void invalidateNativeCamera(){
 }
 void scalar(float value){GXCmd1u32(std::bit_cast<u32>(value));}
 [[noreturn]] void streamFailure(const char* call){OSPanic(__FILE__,__LINE__,"Native typed GX vertex failure: %s",call);}
+// The values of one typed vertex call, in GX's byte order: one stream lookup
+// and one append (CommandStream::writeValue) instead of a GXCmd per value.
+// False without a stream.
+bool vertexBytes(const u8* bytes,unsigned count,const char* call){
+    auto* stream=bridge::commandStream();
+    if(!stream)return false;
+    if(!stream->writeValue(bytes,count))streamFailure(call);
+    return true;
+}
+u32 bigWord(float value){
+    const u32 bits=std::bit_cast<u32>(value);
+    return std::endian::native==std::endian::little?__builtin_bswap32(bits):bits;
+}
+bool vertexFloats(float a,float b,const char* call){
+    const u32 words[2]{bigWord(a),bigWord(b)};
+    return vertexBytes(reinterpret_cast<const u8*>(words),8,call);
+}
+bool vertexFloats(float a,float b,float c,const char* call){
+    const u32 words[3]{bigWord(a),bigWord(b),bigWord(c)};
+    return vertexBytes(reinterpret_cast<const u8*>(words),12,call);
+}
 void packed8(const char* call,u8 x){
     if(!bridge::commandStream())streamFailure(call);
     GXCmd1u8(x);
@@ -135,11 +156,11 @@ void GXBeginIndexed(GXVtxFmt format,u16 count,const u16* indices,u32 indexCount)
         streamFailure("GXBeginIndexed/capacity");
 }
 void GXPosition3f32(f32 x,f32 y,f32 z) {
-    if(bridge::commandStream()){scalar(x);scalar(y);scalar(z);return;}
+    if(vertexFloats(x,y,z,"GXPosition3f32"))return;
     bridge::position(x,y,z);
 }
 void GXPosition2f32(f32 x,f32 y) {
-    if(bridge::commandStream()){scalar(x);scalar(y);return;}
+    if(vertexFloats(x,y,"GXPosition2f32"))return;
     bridge::position(x,y,0);
 }
 // Preserve the original packed wire representation. The active VAT, including
@@ -156,7 +177,7 @@ void GXPosition2s8(s8 x,s8 y){packed8("GXPosition2s8",u8(x));GXCmd1u8(u8(y));}
 void GXPosition1x16(u16 i){packed16("GXPosition1x16",i);}
 void GXPosition1x8(u8 i){packed8("GXPosition1x8",i);}
 void GXNormal3f32(f32 x,f32 y,f32 z) {
-    if(bridge::commandStream()){scalar(x);scalar(y);scalar(z);return;}
+    if(vertexFloats(x,y,z,"GXNormal3f32"))return;
     bridge::unsupportedOperation("GXNormal3f32");
 }
 void GXNormal3s16(s16 x,s16 y,s16 z){packed16("GXNormal3s16",u16(x));GXCmd1u16(u16(y));GXCmd1u16(u16(z));}
@@ -164,7 +185,8 @@ void GXNormal3s8(s8 x,s8 y,s8 z){packed8("GXNormal3s8",u8(x));GXCmd1u8(u8(y));GX
 void GXNormal1x16(u16 i){packed16("GXNormal1x16",i);}
 void GXNormal1x8(u8 i){packed8("GXNormal1x8",i);}
 void GXColor1u32(u32 color) {
-    if(bridge::commandStream()){GXCmd1u32(color);return;}
+    const u8 bytes[4]{u8(color>>24),u8(color>>16),u8(color>>8),u8(color)};
+    if(vertexBytes(bytes,4,"GXColor1u32"))return;
     bridge::color(color);
 }
 void GXColor4u8(u8 r,u8 g,u8 b,u8 a) {GXColor1u32((u32(r)<<24)|(u32(g)<<16)|(u32(b)<<8)|a);}
@@ -173,11 +195,12 @@ void GXColor1u16(u16 c){packed16("GXColor1u16",c);}
 void GXColor1x16(u16 i){packed16("GXColor1x16",i);}
 void GXColor1x8(u8 i){packed8("GXColor1x8",i);}
 void GXTexCoord2f32(f32 u,f32 v) {
-    if(bridge::commandStream()){scalar(u);scalar(v);return;}
+    if(vertexFloats(u,v,"GXTexCoord2f32"))return;
     bridge::textureCoordinate(u,v);
 }
 void GXTexCoord2s16(s16 u,s16 v) {
-    if(bridge::commandStream()){GXCmd1u16(u16(u));GXCmd1u16(u16(v));return;}
+    const u8 bytes[4]{u8(u16(u)>>8),u8(u),u8(u16(v)>>8),u8(v)};
+    if(vertexBytes(bytes,4,"GXTexCoord2s16"))return;
     bridge::textureCoordinateShort(u,v);
 }
 void GXTexCoord2u16(u16 u,u16 v){packed16("GXTexCoord2u16",u);GXCmd1u16(v);}

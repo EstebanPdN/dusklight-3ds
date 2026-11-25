@@ -22,7 +22,8 @@ def main():
     aurora = ROOT/'Source/extern/aurora'
     sources = [native/'tests/gx_texture_backend_test.cpp', native/'gx_texture_pica.cpp', native/'runtime/texture_gx.cpp', native/'runtime/copy_lifecycle_probe.cpp', native/'runtime/fused_color.cpp', native/'runtime/gx_copy_pixels.cpp']
     headers = [native/'gx_texture_pica.hpp', native/'runtime/gx_state.hpp', native/'runtime/texture_gx.hpp',native/'runtime/gpu_sync.hpp',native/'runtime/copy_lifecycle_probe.hpp']
-    headers += [native/p for p in ['runtime/fused_color.hpp','runtime/gx_copy_pixels.hpp','runtime/gx_profile.hpp','tests/host_fused_copy_off.hpp']]
+    headers += [native/p for p in ['runtime/fused_color.hpp','runtime/gx_copy_pixels.hpp','runtime/gx_profile.hpp','tests/host_fused_copy_off.hpp',
+                               'runtime/gx_world_mips.hpp','runtime/perf_features.hpp']]
     inputs = [*sources, *headers, Path(__file__).resolve()]
     installed_headers = [(DEVKITPRO/'libctru/include')/h for h in ['3ds/types.h','3ds/result.h','3ds/services/gspgpu.h','3ds/gpu/enums.h','c3d/types.h','c3d/texture.h']]
     hashes = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}

@@ -17,10 +17,15 @@ private:
     friend struct VertexTransformDiagnostic;
     friend bool planVertexTransform(const CommandRegisters&,std::uint8_t,VertexTransformPlan&,VertexTransformError*);
     friend bool transformVertex(const VertexTransformPlan&,const DecodedVertex&,TransformedVertex&,VertexTransformError*,bool);
-    struct Texgen {std::uint8_t row{},type{},post{};bool normalize{},projection{};};
+    // matrix: the texture matrix the index registers select, read once per
+    // draw (a per-vertex selector overrides it); missingIndex when the
+    // register was never written.
+    static constexpr std::uint8_t missingIndex=255;
+    struct Texgen {std::uint8_t row{},type{},post{},matrix{missingIndex};bool normalize{},projection{};};
     const CommandRegisters* registers=nullptr;
     std::array<float,16> projection{};
     std::array<Texgen,8> texgen{};
+    std::uint8_t position{missingIndex}; // register-selected position matrix
     // Validated lazily once per selected palette slot, within this draw only.
     // No reuse across GX state writes or resource lifetimes.
     struct MatrixCache {std::array<float,12> values{};unsigned rows{};};
@@ -39,6 +44,8 @@ bool planVertexTransform(const CommandRegisters&,std::uint8_t requestedCoordinat
 // Position matrices are already produced by the original J3D joint/envelope
 // system. This consumes their GX palette; it does not reconstruct joint logic.
 // Output clears on failure. Texture q is preserved for later fragment sampling.
+// Every product is bit-identical to the straight per-row loops; normalized
+// texgens differ from a hypot-and-divide form by at most float rounding.
 bool transformVertex(const VertexTransformPlan&,const DecodedVertex&,TransformedVertex&,VertexTransformError* = nullptr,bool normalRequired = false);
 const char* vertexTransformErrorText(VertexTransformError);
 }

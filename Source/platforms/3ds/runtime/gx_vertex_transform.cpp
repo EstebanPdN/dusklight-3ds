@@ -10,19 +10,43 @@ bool scalar(const CommandRegisters& r,unsigned at,float& value,VertexTransformEr
     if(at>=r.xf.size()||!r.xfValid[at])return fail(VertexTransformError::missingState,error);
     value=std::bit_cast<float>(r.xf[at]);return std::isfinite(value)||fail(VertexTransformError::nonfinite,error);
 }
-template<class Cache>
-bool matrix(const CommandRegisters& r,unsigned address,unsigned rows,const float* input,float* output,VertexTransformError* error,Cache& cache,unsigned columns=4){
-    if(cache.rows<rows){
-        for(unsigned row=cache.rows;row<rows;++row)for(unsigned c=0;c<columns;++c)
-            if(!scalar(r,address+columns*row+c,cache.values[columns*row+c],error))return false;
-        cache.rows=rows;
-    }
-    for(unsigned row=0;row<rows;++row){
+// A palette slot's words are read and checked on its first use in the draw;
+// later vertices reuse them from the plan's cache.
+template<unsigned Rows,unsigned Columns,class Cache>
+bool loadRows(const CommandRegisters& r,unsigned address,VertexTransformError* error,Cache& cache){
+    for(unsigned row=cache.rows;row<Rows;++row)for(unsigned c=0;c<Columns;++c)
+        if(!scalar(r,address+Columns*row+c,cache.values[Columns*row+c],error))return false;
+    cache.rows=Rows;return true;
+}
+// Rows in the straight loop's accumulation order (0 + m0*x0 + m1*x1 ...),
+// so every result is bit-identical to it, unrolled at compile time. One
+// finiteness test per product instead of one per row: 0*x is NaN exactly
+// when x is not finite, so the sum of them is NaN exactly when a row is (each
+// test costs a VFP status transfer, which waits for the VFP pipeline).
+template<unsigned Rows,unsigned Columns,class Cache>
+bool product(const CommandRegisters& r,unsigned address,const float* input,float* output,VertexTransformError* error,Cache& cache){
+    if(cache.rows<Rows&&!loadRows<Rows,Columns>(r,address,error,cache))return false;
+    float poison=0;
+    for(unsigned row=0;row<Rows;++row){
         float total=0;
-        for(unsigned c=0;c<columns;++c)total+=cache.values[columns*row+c]*input[c];
-        if(!std::isfinite(total))return fail(VertexTransformError::nonfinite,error);
-        output[row]=total;
+        for(unsigned c=0;c<Columns;++c)total+=cache.values[Columns*row+c]*input[c];
+        output[row]=total;poison+=total*0.f;
     }
+    // A failure leaves partial rows; the caller's guard clears the output.
+    return std::isfinite(poison)||fail(VertexTransformError::nonfinite,error);
+}
+// GX texgen normalization. The vector is finite here (sources and products
+// are checked), so its squared length in double neither overflows nor rounds
+// a nonzero vector to zero. It fails where the float std::hypot form did:
+// a zero vector, or a length beyond the float range. One square root and
+// one divide replace hypot's scaling divides and the three divides by the
+// length; results agree within float rounding.
+bool normalizeTexgen(float* temp){
+    const double length2=double(temp[0])*temp[0]+double(temp[1])*temp[1]+double(temp[2])*temp[2];
+    const double length=std::sqrt(length2);
+    if(!(length2>0)||!std::isfinite(float(length)))return false;
+    const double inverse=1/length;
+    for(unsigned c=0;c<3;++c)temp[c]=float(temp[c]*inverse);
     return true;
 }
 bool source(const DecodedVertex& v,unsigned row,float* out,VertexTransformError* error){
@@ -40,8 +64,10 @@ bool source(const DecodedVertex& v,unsigned row,float* out,VertexTransformError*
         if(!(v.present&(1u<<(GX_VA_TEX0+row-5))))return fail(VertexTransformError::missingAttribute,error);
         data=v.texcoord[row-5];count=2;
     }else return fail(VertexTransformError::texgen,error);
-    for(unsigned c=0;c<count;++c){if(!std::isfinite(data[c]))return fail(VertexTransformError::nonfinite,error);out[c]=data[c];}
-    return true;
+    // One finiteness test for the attribute, as in product().
+    float poison=0;
+    for(unsigned c=0;c<count;++c){out[c]=data[c];poison+=data[c]*0.f;}
+    return std::isfinite(poison)||fail(VertexTransformError::nonfinite,error);
 }
 }
 bool planVertexTransform(const CommandRegisters& r,std::uint8_t requested,VertexTransformPlan& out,VertexTransformError* error){
@@ -79,7 +105,11 @@ bool planVertexTransform(const CommandRegisters& r,std::uint8_t requested,Vertex
         else if(t.type!=0||t.row>12)return fail(VertexTransformError::texgen,error);
         if(t.post!=61&&(t.post>57||t.post%3))return fail(VertexTransformError::matrixIndex,error);
         if(t.projection)p.projective|=1u<<i;
+        // The registers stay unchanged for the draw: select once here.
+        const unsigned slot=i/4,shift=slot?6*(i-4):6*(i+1);
+        if(t.type==0&&r.matrixIndexValid[slot])t.matrix=std::uint8_t((r.matrixIndex[slot]>>shift)&63);
     }
+    if(r.matrixIndexValid[0])p.position=std::uint8_t(r.matrixIndex[0]&63);
     p.registers=&r;p.mask=requested;reset.accepted=true;return true;
 }
 bool transformVertex(const VertexTransformPlan& p,const DecodedVertex& v,TransformedVertex& out,VertexTransformError* error,bool normalRequired){
@@ -91,23 +121,28 @@ bool transformVertex(const VertexTransformPlan& p,const DecodedVertex& v,Transfo
     if(!source(v,0,input,error))return false;
     unsigned position;
     if(v.present&1)position=v.matrix[0];
-    else{if(!r.matrixIndexValid[0])return fail(VertexTransformError::missingState,error);position=r.matrixIndex[0]&63;}
+    else{if(p.position==VertexTransformPlan::missingIndex)return fail(VertexTransformError::missingState,error);position=p.position;}
     if(position>27||position%3)return fail(VertexTransformError::matrixIndex,error);
-    if(!matrix(r,4*position,3,input,value.viewPosition.data(),error,p.matrices[position/3]))return false;
+    if(!product<3,4>(r,4*position,input,value.viewPosition.data(),error,p.matrices[position/3]))return false;
     if(normalRequired){
         float normal[4];if(!source(v,1,normal,error))return false;
-        if(!matrix(r,0x400+3*position,3,normal,value.viewNormal.data(),error,p.normals[position/3],3))return false;
+        if(!product<3,3>(r,0x400+3*position,normal,value.viewNormal.data(),error,p.normals[position/3]))return false;
         const auto& n=value.viewNormal;const float length2=n[0]*n[0]+n[1]*n[1]+n[2]*n[2];
         if(!std::isfinite(length2))return fail(VertexTransformError::normalLengthOverflow,error);
         if(length2>1e-10f){const float inverse=1/std::sqrt(length2);for(auto& c:value.viewNormal)c*=inverse;}
         value.normalValid=true;
     }
-    for(unsigned row=0;row<4;++row){
-        float n=p.projection[row*4+3];for(unsigned c=0;c<3;++c)n+=p.projection[row*4+c]*value.viewPosition[c];
-        if(!std::isfinite(n))return fail(VertexTransformError::nonfinite,error);
-        value.clip[row]=n;
+    {
+        float poison=0;
+        for(unsigned row=0;row<4;++row){
+            float n=p.projection[row*4+3];for(unsigned c=0;c<3;++c)n+=p.projection[row*4+c]*value.viewPosition[c];
+            value.clip[row]=n;poison+=n*0.f;
+        }
+        if(!std::isfinite(poison))return fail(VertexTransformError::nonfinite,error);
     }
-    for(unsigned i=0;i<8;++i)if(p.mask&(1u<<i)){
+    // Only the requested coordinates, in increasing order (the failure order).
+    for(unsigned bits=p.mask;bits;bits&=bits-1){
+        const unsigned i=unsigned(std::countr_zero(bits));
         const auto& t=p.texgen[i];if(!source(v,t.row,input,error))return false;
         float temp[4]{0,0,1,1};
         if(t.type==2||t.type==3){temp[0]=input[0];temp[1]=input[1];}
@@ -115,23 +150,19 @@ bool transformVertex(const VertexTransformPlan& p,const DecodedVertex& v,Transfo
             unsigned selected;
             if(v.present&(1u<<(GX_VA_TEX0MTXIDX+i)))selected=v.matrix[1+i];
             else{
-                const unsigned slot=i/4,shift=slot?6*(i-4):6*(i+1);
-                if(!r.matrixIndexValid[slot])return fail(VertexTransformError::missingState,error);
-                selected=(r.matrixIndex[slot]>>shift)&63;
+                if(t.matrix==VertexTransformPlan::missingIndex)return fail(VertexTransformError::missingState,error);
+                selected=t.matrix;
             }
             if(selected>60||selected%3)return fail(VertexTransformError::matrixIndex,error);
             if(selected==60){for(unsigned c=0;c<3;++c)temp[c]=input[c];}
-            else if(!matrix(r,4*selected,t.projection?3:2,input,temp,error,p.matrices[selected/3]))return false;
+            else if(!(t.projection?product<3,4>(r,4*selected,input,temp,error,p.matrices[selected/3]):
+                                   product<2,4>(r,4*selected,input,temp,error,p.matrices[selected/3])))return false;
             if(!t.projection)temp[2]=1;
         }
-        if(t.normalize){
-            const float length=std::hypot(temp[0],temp[1],temp[2]);
-            if(!std::isfinite(length)||length==0)return fail(VertexTransformError::normalization,error);
-            for(unsigned c=0;c<3;++c)temp[c]/=length;
-        }
+        if(t.normalize&&!normalizeTexgen(temp))return fail(VertexTransformError::normalization,error);
         auto& uv=value.texcoord[i];
         if(t.post==61){for(unsigned c=0;c<3;++c)uv[c]=temp[c];}
-        else if(!matrix(r,0x500+4*t.post,3,temp,uv.data(),error,p.postMatrices[t.post/3]))return false;
+        else if(!product<3,4>(r,0x500+4*t.post,temp,uv.data(),error,p.postMatrices[t.post/3]))return false;
         // For non-projective texgens the pinned shader consumes only s,t even
         // if a post matrix computed q. Preserve that contract for the GPU sink.
         if(!t.projection)uv[2]=1;
@@ -259,10 +290,9 @@ static bool run(const VertexTransformPlan& p,const DecodedVertex& v,TransformedV
         }
         if(t.normalize){
             trace.emit("stage",8,i);
-            const float length=std::hypot(temp[0],temp[1],temp[2]);
-            trace.bits("length",0,length);
-            if(!std::isfinite(length)||length==0){trace.emit("reason",7);return fail(VertexTransformError::normalization,error);}
-            for(unsigned c=0;c<3;++c)temp[c]/=length;
+            // The production arithmetic itself (normalizeTexgen).
+            trace.bits("length",0,float(std::sqrt(double(temp[0])*temp[0]+double(temp[1])*temp[1]+double(temp[2])*temp[2])));
+            if(!normalizeTexgen(temp)){trace.emit("reason",7);return fail(VertexTransformError::normalization,error);}
         }
         trace.emit("stage",9,i,t.post);
         auto& uv=value.texcoord[i];

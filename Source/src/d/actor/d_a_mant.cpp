@@ -18,6 +18,9 @@
 
 #if !defined(DUSK_TARGET_3DS)
 #include <aurora/texture.hpp>
+#else
+#include "../../../platforms/3ds/runtime/gx_worker_sync.hpp"
+#include "../../../platforms/3ds/runtime/texture_resources.hpp"
 #endif
 
 #include <type_traits>
@@ -54,7 +57,8 @@ DEFINE_MANT_ASSET(l_Egnd_mantTEX_U, u8, 0x4000, {
     {GameVersion::WiiJpn,     0x5900},
 });
 
-DEFINE_MANT_ASSET(l_Egnd_mantPAL, u8, 0x60, {
+static constexpr u16 mantPaletteEntries = 48;
+DEFINE_MANT_ASSET(l_Egnd_mantPAL, u8, mantPaletteEntries * sizeof(u16), {
     {GameVersion::GcnUsa,     0x9C00},
     {GameVersion::GcnPal,     0x9C00},
     {GameVersion::GcnJpn,     0x9C00},
@@ -76,6 +80,33 @@ static bool textureObjsInitialized = false;
 static TGXTlutObj tlutObj;
 static TGXTexObj mainTexObj;
 static TGXTexObj undersideTexObj;
+
+#if defined(DUSK_TARGET_3DS)
+static bool mantTexturesDirty = true;
+
+static void retainMantTextures() {
+    if (!mantTexturesDirty) return;
+    // Cuts change the CI8 texels in place. Drain earlier draws before retiring
+    // their snapshots, then register both current sides for the shared TLUT.
+    dusk::native::syncGxWorker();
+    dusk::native::releaseTextureResources(&tlutObj);
+    if (!dusk::native::collectTextureResources()) {
+        OSPanic(__FILE__, __LINE__, "Mant texture retirement: %s", dusk::native::textureResourceFailure());
+    }
+    const std::span<const u8> palette(l_Egnd_mantPAL, mantPaletteEntries * sizeof(u16));
+    const bool mainReady = dusk::native::retainRawCi8TextureResource(
+        &tlutObj, l_Egnd_mantTEX_copy, 128, 128, palette, GX_TL_RGB5A3);
+    const bool undersideReady = dusk::native::retainRawCi8TextureResource(
+        &tlutObj, {l_Egnd_mantTEX_U, 0x4000}, 128, 128, palette, GX_TL_RGB5A3);
+    mantTexturesDirty = !mainReady || !undersideReady;
+    if (mantTexturesDirty) {
+        static unsigned reported;
+        if (reported < 8 && ++reported) {
+            OSReport("Mant texture registration: %s\n", dusk::native::textureResourceFailure());
+        }
+    }
+}
+#endif
 
 // l_pos is unused
 // DEFINE_MANT_ASSET(l_pos, f32, 507, {
@@ -282,8 +313,15 @@ void daMant_packet_c::draw() {
     GXSetAlphaCompare(GX_GREATER, 0, GX_AOP_OR, GX_GREATER, 0);
 
 #if TARGET_PC
+#if defined(DUSK_TARGET_3DS)
+    retainMantTextures();
+#endif
     if (!textureObjsInitialized) {
+#if defined(DUSK_TARGET_3DS)
+        GXInitTlutObj(&tlutObj, lut, GX_TL_RGB5A3, mantPaletteEntries);
+#else
         GXInitTlutObj(&tlutObj, lut, GX_TL_RGB5A3, 0x100);
+#endif
         GXInitTexObjCI(&mainTexObj, image, 0x80, 0x80, GX_TF_C8, GX_CLAMP, GX_CLAMP, 0, 0);
         GXInitTexObjLOD(&mainTexObj, GX_LINEAR, GX_LINEAR, 0.0, 0.0, 0.0, 0, 0, GX_ANISO_1);
         GXInitTexObjCI(
@@ -791,10 +829,13 @@ static int daMant_Execute(mant_class* i_this) {
 
             if (0 <= uVar1 && uVar1 < 0x4000) {
                 int iVar5 = (uVar1 & 7) + (uVar1 & 0x78) * 4 + (uVar1 >> 4 & 0x18) + (uVar1 & 0x3e00);
+#if defined(DUSK_TARGET_3DS)
+                mantTexturesDirty |= l_Egnd_mantTEX_copy[iVar5] != 0 || l_Egnd_mantTEX_U[iVar5] != 0;
+#endif
                 DUSK_IF_ELSE(l_Egnd_mantTEX_copy[iVar5], l_Egnd_mantTEX[iVar5]) = l_Egnd_mantTEX_U[iVar5] = 0;
             }
 
-#if TARGET_PC
+#if TARGET_PC && !defined(DUSK_TARGET_3DS)
             if(textureObjsInitialized) {
                 GXInitTlutObjData(&tlutObj, l_Egnd_mantPAL);  // make sure the cached textures are updated
             }
@@ -810,6 +851,10 @@ static BOOL daMant_IsDelete(mant_class* i_this) {
 }
 
 static int daMant_Delete(mant_class* i_this) {
+#if defined(DUSK_TARGET_3DS)
+    dusk::native::releaseTextureResources(&tlutObj);
+    mantTexturesDirty = true;
+#endif
     fopAcM_RegisterDeleteID(i_this, "Mant");
     return 1;
 }
@@ -839,9 +884,13 @@ static int daMant_Create(fopAc_ac_c* i_this) {
 #if TARGET_PC
     memcpy(l_Egnd_mantTEX_copy, l_Egnd_mantTEX, sizeof(l_Egnd_mantTEX_copy));
 
+#if defined(DUSK_TARGET_3DS)
+    mantTexturesDirty = true;
+#else
     if(textureObjsInitialized) {
         GXInitTlutObjData(&tlutObj, l_Egnd_mantPAL); // make sure the cached textures are updated
     }
+#endif
 
     m_this->mMantRng.init(66, 16983, 855);
 #endif

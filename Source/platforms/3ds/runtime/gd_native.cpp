@@ -6,6 +6,9 @@
 // GD creates CPU-resident command lists. Each native thread owns its current
 // builder and callback; no GameCube interrupt/FIFO semantics are simulated here.
 extern "C" { thread_local GDLObj* __GDCurrentDL = nullptr; }
+// Written once by the game thread when logic.txt is read (d_native_logic.h:
+// gdwrite), before the drawing side starts; read by both after that.
+extern "C" { unsigned char dusk_native_gd_bytewise = 0; }
 namespace {
 thread_local GDOverflowCb overflowCallback = nullptr;
 [[noreturn]] void fail(const char* message) { OSPanic(__FILE__, __LINE__, "%s", message); }

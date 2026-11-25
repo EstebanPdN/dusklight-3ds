@@ -329,4 +329,10 @@ extern dScnPly_preset_HIO_c g_presetHIO;
 #define tREG_S(i) (0)
 #endif
 
+#if defined(DUSK_TARGET_3DS)
+// The logic of the play scene's draw phase for a logic tick that enters no
+// draw lists (see d_s_play.cpp). Iterator callback for fpcM_DrawIterater.
+int dScnPly_LogicOnlyDraw(void* i_proc, void*);
+#endif
+
 #endif /* D_S_D_S_PLAY_H */

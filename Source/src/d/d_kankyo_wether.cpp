@@ -1476,6 +1476,84 @@ static void pntwind_get_info(cXyz* param_0, cXyz* i_dir, f32* i_power, u8 param_
     }
 }
 
+#if defined(DUSK_TARGET_3DS)
+// Native New 3DS (logic.txt kytag12): pntwind_get_info(..., 1) over a list of
+// the point lights made once per tick. The body per influence is the body of
+// pntwind_get_info above, copied unchanged; pntwind_get_info itself is
+// untouched.
+int dKyw_pntlight_collision_list(WIND_INFLUENCE** o_list) {
+    int count = 0;
+    for (int i = 0; i < (int)ARRAY_SIZEU(g_env_light.pntwind); i++) {
+        WIND_INFLUENCE* influence = g_env_light.pntwind[i];
+        if (influence != NULL && influence->field_0x29 == 1) {
+            o_list[count++] = influence;
+        }
+    }
+    return count;
+}
+
+void dKyw_pntlight_collision_get_info_list(cXyz* param_0, cXyz* i_dir, f32* i_power,
+                                           WIND_INFLUENCE* const* i_list, int i_count) {
+    i_dir->x = 0.0f;
+    i_dir->y = 0.0f;
+    i_dir->z = 0.0f;
+    *i_power = 0.0f;
+
+    WIND_INFLUENCE* influence;
+    for (int i = 0; i < i_count; i++) {
+        influence = i_list[i];
+        {
+            f32 dist = param_0->abs(influence->position);
+
+            if (influence->mConstant == 0) {
+                if (dist < influence->mRadius && influence->mStrength > 0.0f && dist != 0.0f) {
+                    f32 temp_f0;
+                    if (influence->mRadius > 0.0f) {
+                        f32 temp_f0_4 = (dist / influence->mRadius);
+                        temp_f0 = 1.0f - (temp_f0_4 * temp_f0_4);
+                    } else {
+                        temp_f0 = 1.0f;
+                    }
+
+                    *i_power = influence->mStrength * temp_f0;
+
+                    cXyz sp10;
+                    sp10.x =
+                        influence->position.x + -(influence->mDirection.x) * influence->mRadius;
+                    sp10.y =
+                        influence->position.y + -(influence->mDirection.y) * influence->mRadius;
+                    sp10.z =
+                        influence->position.z + -(influence->mDirection.z) * influence->mRadius;
+                    dKyr_get_vectle_calc(&sp10, param_0, i_dir);
+
+                    if (param_0->abs(sp10) < influence->mRadius) {
+                        i_dir->x = 0.0f;
+                        i_dir->y = 0.0f;
+                        i_dir->z = 0.0f;
+                    }
+                    return;
+                }
+            } else {
+                if (dist < influence->mRadius && influence->mStrength > 0.0f && dist != 0.0f) {
+                    f32 temp_f0;
+                    if (influence->mRadius > 0.0f) {
+                        temp_f0 = 1.0f - (dist / influence->mRadius);
+                    } else {
+                        temp_f0 = 1.0f;
+                    }
+
+                    i_dir->x = influence->mDirection.x;
+                    i_dir->y = influence->mDirection.y;
+                    i_dir->z = influence->mDirection.z;
+                    *i_power = influence->mStrength * temp_f0;
+                    return;
+                }
+            }
+        }
+    }
+}
+#endif
+
 static void dKyw_pntwind_get_info(cXyz* param_0, cXyz* param_1, f32* param_2) {
     pntwind_get_info(param_0, param_1, param_2, 0);
 }

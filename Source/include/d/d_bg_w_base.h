@@ -24,6 +24,23 @@ enum dBgW_SpecialCode {
     dBgW_SPCODE_ICE = 8,
 };
 
+// Native New 3DS (logic.txt crrskip): every change a collision query could
+// see moves the object's slot version (d_bg_s.cpp).
+#if defined(DUSK_TARGET_3DS)
+#define DUSK_BG_NOTE(obj, site) dBgS_NativeNoteChange(obj, site)
+#else
+#define DUSK_BG_NOTE(obj, site) ((void)0)
+#endif
+// Notes only a value that really changes (a setter called every tick with the
+// same value changes nothing a query could see).
+#define DUSK_BG_SET(field, value, site)                                                            \
+    do {                                                                                           \
+        if ((field) != (value)) {                                                                  \
+            DUSK_BG_NOTE(this, site);                                                              \
+        }                                                                                          \
+        (field) = (value);                                                                         \
+    } while (0)
+
 class dBgW_Base : public cBgW_BgId {
 public:
     enum PushPullLabel {
@@ -108,6 +125,13 @@ public:
     virtual void DebugDraw() const {}
     virtual void DrawPoly(cBgS_PolyInfo const& param_0, GXColor const& param_1) const {}
     virtual void DrawBox() const {}
+#if defined(DUSK_TARGET_3DS)
+    // The dzb object behind this base when every query it answers is cBgW's own
+    // (they all start with the root group box); the broad phase of the cBgS
+    // walks (d_bg_s.cpp) reads that box first. A subclass that overrides a query,
+    // ChkNotReady or GetBnd must return NULL here.
+    virtual class cBgW* DuskBroadPhaseDzb() { return NULL; }
+#endif
 
     PushPull_CallBack GetPushPullCallback() const { return m_pushPull_Callback; }
     s16 GetDiffShapeAngleY() { return m_diff_ShapeAngleY; }
@@ -115,14 +139,22 @@ public:
     BOOL chkStickWall() { return field_0xb & 1; }
     BOOL chkStickRoof() { return field_0xb & 2; }
     bool ChkPushPullOk() const { return m_pushPull_Ok; }
-    void SetPushPullCallback(PushPull_CallBack i_callBack) { m_pushPull_Callback = i_callBack; }
-    void SetRoomId(int id) { m_roomId = id; }
+    void SetPushPullCallback(PushPull_CallBack i_callBack) { DUSK_BG_SET(m_pushPull_Callback, i_callBack, "SetPushPullCallback"); }
+    void SetRoomId(int id) { DUSK_BG_SET(m_roomId, (u8)id, "SetRoomId"); }
     bool ChkPriority(int prio) { return m_priority == prio; }
-    void SetPriority(PRIORITY priority) { m_priority = priority; }
-    void onStickWall() { field_0xb |= 1; }
-    void onStickRoof() { field_0xb |= 2; }
-    void OnPushPullOk() { m_pushPull_Ok = true; }
-    void OffPushPullOk() { m_pushPull_Ok = false; }
+#if defined(DUSK_TARGET_3DS)
+    void includeWallPriority() const;
+    void SetPriority(PRIORITY priority) {
+        DUSK_BG_SET(m_priority, (u8)priority, "SetPriority");
+        includeWallPriority();
+    }
+#else
+    void SetPriority(PRIORITY priority) { DUSK_BG_SET(m_priority, (u8)priority, "SetPriority"); }
+#endif
+    void onStickWall() { DUSK_BG_SET(field_0xb, (u8)(field_0xb | 1), "onStickWall"); }
+    void onStickRoof() { DUSK_BG_SET(field_0xb, (u8)(field_0xb | 2), "onStickRoof"); }
+    void OnPushPullOk() { DUSK_BG_SET(m_pushPull_Ok, true, "OnPushPullOk"); }
+    void OffPushPullOk() { DUSK_BG_SET(m_pushPull_Ok, false, "OffPushPullOk"); }
 
     /* 0x08 */ u8 m_priority;
     /* 0x09 */ u8 m_roomId;

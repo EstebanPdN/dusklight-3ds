@@ -23,7 +23,12 @@ public:
 public:
     virtual ~mDoDvdThd_command_c();
     mDoDvdThd_command_c();
+#if defined(DUSK_TARGET_3DS)
+    // Acquire: pairs with the release before mIsDone on the DVD thread's core.
+    inline s32 sync() { const s32 done = __atomic_load_n(&mIsDone, __ATOMIC_ACQUIRE); return done; }
+#else
     inline s32 sync() { return mIsDone; }
+#endif
     inline void destroy() { JKR_DELETE(this); }
     virtual s32 execute() = 0;
 };  // Size = 0x14

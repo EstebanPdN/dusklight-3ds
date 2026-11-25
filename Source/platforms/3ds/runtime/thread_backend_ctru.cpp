@@ -23,7 +23,8 @@ bool platformJoinThread(NativeThreadHandle input, std::uint64_t timeout) {
     // libctru's threadJoin may return immediately after its finished flag is
     // set, before svcExitThread. Wait on the captured actual kernel handle so
     // the real stack/TLS cannot be freed while the thread is still exiting.
-    return input && R_SUCCEEDED(svcWaitSynchronization(input.kernel, timeout));
+    // Result 0 only: the kernel's timeout (0x09401BFE) passes R_SUCCEEDED.
+    return input && svcWaitSynchronization(input.kernel, timeout) == 0;
 }
 void platformFreeThread(NativeThreadHandle input) { threadFree(static_cast<Thread>(input.owner)); }
 bool platformSetThreadPriority(NativeThreadHandle input, int priority) {

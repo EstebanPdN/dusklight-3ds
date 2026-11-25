@@ -54,6 +54,11 @@ JKRHeap* JKRHeap::sCurrentHeap;
 
 DUSK_GAME_DATA JKRHeap* JKRHeap::sRootHeap;
 
+#if defined(DUSK_TARGET_3DS)
+// The second-core worker's overlap hook (null in host builds and until set).
+#include "../../../../platforms/3ds/runtime/gx_worker_sync.hpp"
+#endif
+
 #if PLATFORM_WII || PLATFORM_SHIELD
 JKRHeap* JKRHeap::sRootHeap2;
 #endif
@@ -73,6 +78,11 @@ JKRHeap::JKRHeap(void* data, u32 size, JKRHeap* parent, bool errorFlag)
         becomeSystemHeap();
         becomeCurrentHeap();
     } else {
+#if defined(DUSK_TARGET_3DS)
+        // The second-core worker walks the heap tree (live array bounds):
+        // the tree changes only with nothing of the last picture still drawn.
+        dusk::native::syncGxOverlap(1);
+#endif
         parent->mChildTree.appendChild(&mChildTree);
 
         if (sSystemHeap == sRootHeap) {
@@ -99,6 +109,9 @@ JKRHeap::JKRHeap(void* data, u32 size, JKRHeap* parent, bool errorFlag)
 }
 
 JKRHeap::~JKRHeap() {
+#if defined(DUSK_TARGET_3DS)
+    dusk::native::syncGxOverlap(1); // as in the constructor
+#endif
     mChildTree.getParent()->removeChild(&mChildTree);
     JSUTree<JKRHeap>* nextRootHeap = sRootHeap->mChildTree.getFirstChild();
 
@@ -222,7 +235,12 @@ JKRHeap* JKRHeap::becomeCurrentHeap() {
 // renderer keeps array-liveness proofs only while this value stands. Loader
 // threads free memory too, so the counter is updated atomically.
 extern "C" { std::uint32_t duskNativeHeapEpoch = 1; }
-#define DUSK_HEAP_MUTATION() ((void)__atomic_fetch_add(&duskNativeHeapEpoch, 1, __ATOMIC_RELAXED))
+// Second-core worker overlap (platforms/3ds runtime/gx_worker.hpp): the worker
+// may still draw the last picture's shapes while the next logic tick runs;
+// an allocation ending or a heap joining the tree first has them drawn (on
+// the game thread only; a no-op elsewhere and when nothing is pending).
+#define DUSK_HEAP_MUTATION() do { (void)__atomic_fetch_add(&duskNativeHeapEpoch, 1, __ATOMIC_RELAXED); \
+    dusk::native::syncGxOverlap(1); } while (0)
 #else
 #define DUSK_HEAP_MUTATION() ((void)0)
 #endif

@@ -5,6 +5,7 @@
 #include "JSystem/JKernel/JKRHeap.h"
 #if defined(DUSK_TARGET_3DS)
 #include "JSystem/JKernel/JKRExpHeap.h"
+#include "JSystem/JKernel/JKRSolidHeap.h"
 #include "../../../../platforms/3ds/runtime/texture_resources.hpp"
 #include "../../../../platforms/3ds/runtime/gx_transform_commands.hpp"
 #include "../../../../platforms/3ds/runtime/gx_state.hpp"
@@ -61,9 +62,13 @@ void J3DTexture::retainNativeTexture(u16 index, const ResTIMG& source) {
             if (reported < 8 && ++reported) {
                 unsigned used = 0, capacity = 0;
                 gx::textureObjectUsage(used, capacity);
+                const char* problem = gx::textureObjectProblem(&mpTexObj[index]);
                 // The resource reason is only current when the collection failed.
-                OSReport("Native J3D texture object unavailable (index=%u): %s; GX texture objects %u/%u\n", unsigned(index),
-                    collected ? "no GX texture object for it" : textureResourceFailure(), used, capacity);
+                OSReport("Native J3D texture object unavailable (index=%u of %u): %s; image format=%u size=%ux%u wrap=%u,%u mipmap=%u "
+                    "offset=%ld; GX texture objects %u/%u\n", unsigned(index), unsigned(mNum),
+                    collected ? (problem ? problem : "query failed") : textureResourceFailure(),
+                    unsigned(source.format), unsigned(source.width), unsigned(source.height), unsigned(source.wrapS),
+                    unsigned(source.wrapT), unsigned(source.mipmapEnabled), long(source.imageOffset), used, capacity);
             }
             return;
         }
@@ -71,12 +76,29 @@ void J3DTexture::retainNativeTexture(u16 index, const ResTIMG& source) {
     }
     if (retainArchiveTexture(&mpTexObj[index], &source, metadata.handle)) return;
     // ARAM archives can decompress a complete BMD into an independent EXP
-    // allocation. Use its actual live extent, never the heap's capacity.
+    // allocation, and Link's item models (slingshot, boomerang, bow...) are
+    // read from ARAM into the solid heap of daPy_anmHeap_c. Use the live
+    // extent of that allocation, never the heap's capacity.
     JKRHeap* heap=JKRHeap::findFromRoot(const_cast<ResTIMG*>(&source));
-    const s32 remaining=heap && heap->getHeapType()=='EXPH' ?
-        static_cast<JKRExpHeap*>(heap)->getRemainingAllocationSize(&source) : -1;
+    const u32 heapType=heap ? heap->getHeapType() : 0;
+    s32 remaining=-1;
+    if (heapType=='EXPH') remaining=static_cast<JKRExpHeap*>(heap)->getRemainingAllocationSize(&source);
+    else if (heapType=='SLID') remaining=static_cast<JKRSolidHeap*>(heap)->getRemainingUsedSize(&source);
     if (remaining>=32 && retainTextureResource(&mpTexObj[index],
         {reinterpret_cast<const u8*>(&source),static_cast<std::size_t>(remaining)},mpImgDataPtr[index])) return;
+    if (gx::commandSkipUnavailableTextures) {
+        // Game policy: the image has no live bounded storage this port can
+        // copy from, so it is never read; the draws that sample it are left
+        // out and counted (J3DTevs) instead of ending the game.
+        static unsigned reported;
+        if (reported < 8 && ++reported) {
+            const char type[5]{char(heapType>>24),char(heapType>>16),char(heapType>>8),char(heapType),0};
+            OSReport("Native J3D texture left out: %s (index=%u format=%u size=%ux%u heap=%s allocation=%ld)\n",
+                textureResourceFailure(),unsigned(index),unsigned(source.format),unsigned(source.width),unsigned(source.height),
+                heap ? type : "none",long(remaining));
+        }
+        return;
+    }
     OSPanic(__FILE__,__LINE__,"Native J3D texture bounds: %s (index=%u format=%u size=%ux%u allocation=%ld)",
         textureResourceFailure(),unsigned(index),unsigned(source.format),unsigned(source.width),unsigned(source.height),long(remaining));
 }

@@ -2,21 +2,41 @@
 ; generators evaluated on the GPU. Compact 32-byte vertices only:
 ;   v0 position.xyz (float), v1 normal.xyz (short), v2 TEX0.st (short),
 ;   v3 color (ubyte), v4 position/normal matrix uniform rows (byte x2),
-;   v5 TEX1.st (short).
+;   v5 TEX1.st (short), or in its place the warp of the vertex (an indirect
+;   warp: what the warp map adds at this vertex to the warp's mean,
+;   gx_indirect_gpu.hpp); in wide records (a material whose texgens read
+;   three GX coordinates) four shorts: TEX1.st and the third coordinate.
 ; Uniform layout matches gx_rigid.v.pica for 0..79 (matrix palette, projection,
 ; ambient, fog, flags, lights) plus:
 ;   Unit roles: 0 none, 1 texture coordinate, 0.5 fog ramp, 2 (unit 0 only)
-;              texture projected from the position. Unit 0 in u[13].z, unit 1
+;              texture projected from the position, -1 2x4 texgen from the
+;              normal (environment maps). Unit 0 in u[13].z, unit 1
 ;              in u[13].w, unit 2 in u[18].w (components the fog rows leave
 ;              free), so row 80 belongs to the matrix palette.
 ;   u[10].w    1 clamps clip z into [-w,0] (GX clip-disabled draws)
+;   u[12].x    0 no fog, 1 vertex ramp, 2 constant ramp coordinate in u[11].x
 ;   Unit rows  S0 (TEX0 input), S1 (TEX1 input), T0, T1: unit 0 in u[89..92],
 ;              unit 1 in u[85..88], unit 2 in u[81..84]. Units are used from
 ;              0 up, so the rows of unused units continue the palette upward
 ;              (one texture: palette to row 88, the single-texture capacity).
-;              s' = S0.(s0,t0,1,1) + S1.(s1,t1,0,0); t' likewise. Texture
-;              scale, fixed-point fraction and the vertical flip are folded in.
-;              Role 2: u[89..91] = S, T, Q rows on (position,1), u[92].xy scales.
+;              s' = S0.(s0,t0,1,1) + S1.(s1,t1,s2,t2); t' likewise, with
+;              (s2,t2) the third coordinate of a wide record. Only a unit
+;              that reads it has anything but zero in z and w of its S1 and
+;              T1 rows, so what v5 holds there otherwise (the PICA gives an
+;              attribute of two components 0 and 1) does not reach a
+;              coordinate. Texture scale, fixed-point fraction and the
+;              vertical flip are folded in.
+;              Role 2: u[89..91] = S, T, Q rows on (position,1), u[92].xy scales,
+;              u[92].z 1 = leave the divide to the PICA (projection mode),
+;              u[92].w the scale of the vertex's warp in v5.xy (0: none):
+;              the unit's coordinate moves by that warp, s/q + warp.x and
+;              t/q + warp.y. A unit of role 1 or -1 takes the warp through x
+;              and y of its S1 and T1 rows, as it would a second coordinate.
+;              Role -1: S at the S0 row, T at the T0 row, on (normal,1) with
+;              the decoded normal scale u[11].w applied; rows S1 and T1 are
+;              zero but for the coefficients of the vertex's warp.
+;   u[12].w    1: role -1 units read the normal after the bone's normal
+;              matrix (texture matrix selected per vertex, one per bone).
 ;   u[93]      material color.
 .fvec u[94]
 .ivec lightLoop
@@ -49,181 +69,249 @@
         mul r8.x, -epsilon.z, r2.w
         max r2.z, r8.x, r2.z
     .end
-    mul r14.xyz, u[11].w, v1
-    dp3 r1.x, u[a0.y+0], r14
-    dp3 r1.y, u[a0.y+1], r14
-    dp3 r1.z, u[a0.y+2], r14
-    dp3 r4.x, r1, r1
-    cmp epsilon.x, lt, lt, r4.x
-    ifc cmp.x
-        rsq r4.x, r4.x
-        mul r1.xyz, r1, r4.x
-    .end
-    mov r3, u[10]
-    cmp u[17].w, gt, gt, r15.x
-    ifc cmp.x
-        mul r3.xyz, u[16].w, v3
-    .end
-    for lightLoop
-        add r4.xyz, u[aL+19], -r0
-        dp3 r5.x, r4, r4
-        cmp k.x, lt, lt, r5.x
+    ; b0 is set only for the rigid fog redraw. The TEV consumes primary alpha;
+    ; position and fog alpha use the same instructions in both paths.
+    ifu b0
+        mov r3, k.xxxx
+        mov r5, k.xxyx
+        mov r6, k.xxxx
+        mov r7, k.xxxx
+    .else
+        mul r14.xyz, u[11].w, v1
+        dp3 r1.x, u[a0.y+0], r14
+        dp3 r1.y, u[a0.y+1], r14
+        dp3 r1.z, u[a0.y+2], r14
+        ; Units generated from the normal through a texture matrix of each bone
+        ; (role -1 with u[12].w = 1: environment maps on skinned models): r14
+        ; becomes the normal after this bone's normal matrix, before it is
+        ; normalised. The unit rows then hold what is left of the texture matrix,
+        ; the same for every bone (gx_rigid_vertex.hpp, pairedTexgenRows).
+        cmp u[12].w, gt, gt, r15.x
         ifc cmp.x
-            rsq r5.y, r5.x
-            mul r5.z, r5.x, r5.y
-            mul r4.xyz, r4, r5.y
-            dp3 r6.y, u[aL+21], r4
-            max r6.y, k.x, r6.y
-            mov r6.x, k.y
-            mul r6.z, r6.y, r6.y
-            mov r11.x, u[aL+19].w
-            mov r11.y, u[aL+21].w
-            mov r11.z, u[aL+22].w
-            dp3 r8.x, r11, r6
-            mov r7.x, k.y
-            mov r7.y, r5.z
-            mov r7.z, r5.x
-            dp3 r8.y, u[aL+22], r7
-            rcp r8.y, r8.y
-            mul r8.x, r8.x, r8.y
-            max r8.x, k.x, r8.x
-            dp3 r8.y, r4, r1
-            max r8.y, k.x, r8.y
-            mul r8.x, r8.x, r8.y
-            mul r8.xyz, u[aL+20], r8.x
-            add r3.xyz, r3, r8
+            mov r14.xyz, r1
         .end
-    .end
-    max r3.xyz, k.x, r3
-    min r3.xyz, k.y, r3
-    mov r10, u[93]
-    cmp u[14].w, gt, gt, r15.x
-    ifc cmp.x
-        mul r10.xyz, u[16].w, v3
-    .end
-    cmp u[15].w, ge, ge, r15.x
-    ifc cmp.x
-        mul r10.w, u[16].w, v3.w
-        mul r10.w, u[15].w, r10.w
-    .end
-    mul r10.xyz, r10, r3
-    ; The colour waits in r3 for the single write at the end (r10 is scratch
-    ; for the fog below, which may still replace one component of it).
-    mov r3, r10
-    ; Texture coordinate generators: in0=(TEX0,1,1), in1=(TEX1,0,0).
-    mov r12.xy, v2.xy
-    mov r12.zw, k.yy
-    mov r13.xy, v5.xy
-    mov r13.zw, k.xx
-    mov r5, k.xxxx
-    mov r6, k.xxxx
-    mov r7, k.xxxx
-    ; Only a unit with role 1 reads its rows: the rows of the others may hold
-    ; palette matrices, and a material can sample a role-less unit, whose
-    ; coordinate must then be a constant (0,0) (the minimap does).
-    mov r8.x, k.y
-    cmp u[13].z, eq, eq, r8.x
-    ifc cmp.x
-        dp4 r4.x, u[89], r12
-        dp4 r4.y, u[90], r13
-        add r5.x, r4.x, r4.y
-        dp4 r4.x, u[91], r12
-        dp4 r4.y, u[92], r13
-        add r5.y, r4.x, r4.y
-    .end
-    cmp u[13].w, eq, eq, r8.x
-    ifc cmp.x
-        dp4 r4.x, u[85], r12
-        dp4 r4.y, u[86], r13
-        add r6.x, r4.x, r4.y
-        dp4 r4.x, u[87], r12
-        dp4 r4.y, u[88], r13
-        add r6.y, r4.x, r4.y
-    .end
-    cmp u[18].w, eq, eq, r8.x
-    ifc cmp.x
-        dp4 r4.x, u[81], r12
-        dp4 r4.y, u[82], r13
-        add r7.x, r4.x, r4.y
-        dp4 r4.x, u[83], r12
-        dp4 r4.y, u[84], r13
-        add r7.y, r4.x, r4.y
-    .end
-    mov r5.z, k.y
-    ; Unit 0 projected from the position (role 2): rows S, T and Q on
-    ; (position,1), divided here per vertex as in gx_rigid.v.pica; u[92].xy
-    ; are the texture scales. A divisor at or behind the projector becomes a
-    ; small positive one (the sample lands far outside the image). r8.x is 1.
-    cmp u[13].z, gt, gt, r8.x
-    ifc cmp.x
-        mov r14.xyz, v0
-        mov r14.w, k.y
-        dp4 r4.x, u[89], r14
-        dp4 r4.y, u[90], r14
-        dp4 r4.z, u[91], r14
-        max r4.z, epsilon.w, r4.z
-        rcp r4.w, r4.z
-        mul r4.x, u[92].x, r4.x
-        mul r5.x, r4.x, r4.w
-        mul r4.y, u[92].y, r4.y
-        mul r4.y, r4.y, r4.w
-        add r5.y, k.y, -r4.y
+        dp3 r4.x, r1, r1
+        cmp epsilon.x, lt, lt, r4.x
+        ifc cmp.x
+            rsq r4.x, r4.x
+            mul r1.xyz, r1, r4.x
+        .end
+        mov r3, u[10]
+        cmp u[17].w, gt, gt, r15.x
+        ifc cmp.x
+            mul r3.xyz, u[16].w, v3
+        .end
+        for lightLoop
+            add r4.xyz, u[aL+19], -r0
+            dp3 r5.x, r4, r4
+            cmp k.x, lt, lt, r5.x
+            ifc cmp.x
+                rsq r5.y, r5.x
+                mul r5.z, r5.x, r5.y
+                mul r4.xyz, r4, r5.y
+                dp3 r6.y, u[aL+21], r4
+                max r6.y, k.x, r6.y
+                mov r6.x, k.y
+                mul r6.z, r6.y, r6.y
+                mov r11.x, u[aL+19].w
+                mov r11.y, u[aL+21].w
+                mov r11.z, u[aL+22].w
+                dp3 r8.x, r11, r6
+                mov r7.x, k.y
+                mov r7.y, r5.z
+                mov r7.z, r5.x
+                dp3 r8.y, u[aL+22], r7
+                rcp r8.y, r8.y
+                mul r8.x, r8.x, r8.y
+                max r8.x, k.x, r8.x
+                dp3 r8.y, r4, r1
+                max r8.y, k.x, r8.y
+                mul r8.x, r8.x, r8.y
+                mul r8.xyz, u[aL+20], r8.x
+                add r3.xyz, r3, r8
+            .end
+        .end
+        max r3.xyz, k.x, r3
+        min r3.xyz, k.y, r3
+        mov r10, u[93]
+        cmp u[14].w, gt, gt, r15.x
+        ifc cmp.x
+            mul r10.xyz, u[16].w, v3
+        .end
+        cmp u[15].w, ge, ge, r15.x
+        ifc cmp.x
+            mul r10.w, u[16].w, v3.w
+            mul r10.w, u[15].w, r10.w
+        .end
+        mul r10.xyz, r10, r3
+        ; The colour waits in r3 for the single write at the end (r10 is scratch
+        ; for the fog below, which may still replace one component of it).
+        mov r3, r10
+        ; Texture coordinate generators: in0=(TEX0,1,1), in1=(TEX1,third
+        ; coordinate), and r14=(normal,1) from above for role -1 (GX ABC1 input
+        ; from the normal).
+        mov r12.xy, v2.xy
+        mov r12.zw, k.yy
+        mov r13, v5
+        mov r5, k.xxxx
+        mov r6, k.xxxx
+        mov r7, k.xxxx
+        ; Only a unit with role 1 or -1 reads its rows: the rows of the others may
+        ; hold palette matrices, and a material can sample a role-less unit, whose
+        ; coordinate must then be a constant (0,0) (the minimap does). One compare
+        ; per unit: cmp.x is role 1, cmp.y role -1 (r8 = 1,0; no constant register
+        ; is free for another role value). Separate blocks, not an else branch:
+        ; a nested block ending with its parent costs picasso's padding nop.
+        mov r8.xy, k.yx
+        cmp u[13].z, eq, lt, r8
+        ifc cmp.x
+            dp4 r4.x, u[89], r12
+            dp4 r4.y, u[90], r13
+            add r5.x, r4.x, r4.y
+            dp4 r4.x, u[91], r12
+            dp4 r4.y, u[92], r13
+            add r5.y, r4.x, r4.y
+        .end
+        ifc cmp.y
+            dp4 r5.x, u[89], r14
+            dp4 r5.y, u[91], r14
+            dp4 r4.x, u[90], r13
+            dp4 r4.y, u[92], r13
+            add r5.xy, r5.xy, r4.xy
+        .end
+        cmp u[13].w, eq, lt, r8
+        ifc cmp.x
+            dp4 r4.x, u[85], r12
+            dp4 r4.y, u[86], r13
+            add r6.x, r4.x, r4.y
+            dp4 r4.x, u[87], r12
+            dp4 r4.y, u[88], r13
+            add r6.y, r4.x, r4.y
+        .end
+        ifc cmp.y
+            dp4 r6.x, u[85], r14
+            dp4 r6.y, u[87], r14
+            dp4 r4.x, u[86], r13
+            dp4 r4.y, u[88], r13
+            add r6.xy, r6.xy, r4.xy
+        .end
+        cmp u[18].w, eq, lt, r8
+        ifc cmp.x
+            dp4 r4.x, u[81], r12
+            dp4 r4.y, u[82], r13
+            add r7.x, r4.x, r4.y
+            dp4 r4.x, u[83], r12
+            dp4 r4.y, u[84], r13
+            add r7.y, r4.x, r4.y
+        .end
+        ifc cmp.y
+            dp4 r7.x, u[81], r14
+            dp4 r7.y, u[83], r14
+            dp4 r4.x, u[82], r13
+            dp4 r4.y, u[84], r13
+            add r7.xy, r7.xy, r4.xy
+        .end
+        mov r5.z, k.y
+        ; Unit 0 projected from the position (role 2): rows S, T and Q on
+        ; (position,1), divided here per vertex as in gx_rigid.v.pica; u[92].xy
+        ; are the texture scales. A divisor at or behind the projector becomes a
+        ; small positive one (the sample lands far outside the image). r8.x is 1.
+        ; u[92].z = 1 (indirect warps as constant offsets, gx_indirect_gpu.hpp):
+        ; S, Q - T and Q leave undivided and the unit, bound in the PICA
+        ; projection mode, divides per pixel as the CPU vertex route does. The
+        ; plan admits it only with every vertex q positive.
+        cmp u[13].z, gt, gt, r8.x
+        ifc cmp.x
+            mov r14.xyz, v0
+            mov r14.w, k.y
+            dp4 r4.x, u[89], r14
+            dp4 r4.y, u[90], r14
+            dp4 r4.z, u[91], r14
+            ; The warp of this vertex, times q so that it survives either divide.
+            ; u[92].w is zero for a draw without one, whatever v5 then holds.
+            mul r10.xy, u[92].ww, r13.xy
+            mul r10.xy, r4.zz, r10.xy
+            add r4.xy, r4.xy, r10.xy
+            cmp u[92].z, gt, gt, r15.x
+            ifc cmp.x
+                mul r5.x, u[92].x, r4.x
+                mul r4.y, u[92].y, r4.y
+                add r5.y, r4.z, -r4.y
+                mov r5.z, r4.z
+            .else
+                max r4.z, epsilon.w, r4.z
+                rcp r4.w, r4.z
+                mul r4.x, u[92].x, r4.x
+                mul r5.x, r4.x, r4.w
+                mul r4.y, u[92].y, r4.y
+                mul r4.y, r4.y, r4.w
+                add r5.y, k.y, -r4.y
+            .end
+        .end
     .end
     ; Fog depth and range factor; camera-crossing vertices use near fog.
     mov r9, k.xxxx
     cmp u[12].x, gt, gt, r15.x
     ifc cmp.x
-        cmp k.x, lt, lt, r2.w
-        ifc cmp.x
-            rcp r9.w, r2.w
-            mul r9.x, r2.z, r9.w
-            add r9.x, k.y, r9.x
-            max r9.x, k.x, r9.x
-            min r9.x, k.y, r9.x
-        .end
-        add r9.y, u[11].y, -r9.x
-        rcp r9.y, r9.y
-        mul r9.y, u[11].x, r9.y
-        cmp u[12].y, gt, gt, r15.x
+        ; For a proved constant ramp input, keep the same TEV and sampler and
+        ; bypass depth/range arithmetic, including a possible zero divisor.
+        mov r8, k.yyyy
+        cmp u[12].x, eq, eq, r8.x
         ifc cmp.x
             cmp k.x, lt, lt, r2.w
             ifc cmp.x
-                mul r10.x, r2.y, r9.w
-                mul r10.x, u[13].x, r10.x
-                add r10.x, u[13].y, r10.x
-                max r10.y, r10.x, -r10.x
-                mul r10.y, k.w, r10.y
-                add r10.y, k.w, -r10.y
-                max r10.y, k.x, r10.y
-                min r10.y, k.w, r10.y
-                flr r10.z, r10.y
-                mul r12.x, k.z, r10.z
-                flr r12.x, r12.x
-                mova a0.x, r12.x
-                add r12.y, r12.x, r12.x
-                add r12.y, r10.z, -r12.y
-                add r10.w, r10.y, -r10.z
-                mov r11, u[a0.x+14]
-                cmp r12.y, gt, gt, r15.x
-                ifc cmp.x
-                    mov r11.xy, r11.yz
-                .end
-                add r11.y, r11.y, -r11.x
-                mul r11.y, r11.y, r10.w
-                add r11.x, r11.x, r11.y
-                max r11.x, epsilon.y, r11.x
-                rcp r11.x, r11.x
-                mul r10.x, r10.x, r11.x
-                mul r10.x, r10.x, r10.x
-                add r10.x, k.y, r10.x
-                rsq r10.x, r10.x
-                rcp r10.x, r10.x
-                mul r9.y, r9.y, r10.x
+                rcp r9.w, r2.w
+                mul r9.x, r2.z, r9.w
+                add r9.x, k.y, r9.x
+                max r9.x, k.x, r9.x
+                min r9.x, k.y, r9.x
             .end
+            add r9.y, u[11].y, -r9.x
+            rcp r9.y, r9.y
+            mul r9.y, u[11].x, r9.y
+            cmp u[12].y, gt, gt, r15.x
+            ifc cmp.x
+                cmp k.x, lt, lt, r2.w
+                ifc cmp.x
+                    mul r10.x, r2.y, r9.w
+                    mul r10.x, u[13].x, r10.x
+                    add r10.x, u[13].y, r10.x
+                    max r10.y, r10.x, -r10.x
+                    mul r10.y, k.w, r10.y
+                    add r10.y, k.w, -r10.y
+                    max r10.y, k.x, r10.y
+                    min r10.y, k.w, r10.y
+                    flr r10.z, r10.y
+                    mul r12.x, k.z, r10.z
+                    flr r12.x, r12.x
+                    mova a0.x, r12.x
+                    add r12.y, r12.x, r12.x
+                    add r12.y, r10.z, -r12.y
+                    add r10.w, r10.y, -r10.z
+                    mov r11, u[a0.x+14]
+                    cmp r12.y, gt, gt, r15.x
+                    ifc cmp.x
+                        mov r11.xy, r11.yz
+                    .end
+                    add r11.y, r11.y, -r11.x
+                    mul r11.y, r11.y, r10.w
+                    add r11.x, r11.x, r11.y
+                    max r11.x, epsilon.y, r11.x
+                    rcp r11.x, r11.x
+                    mul r10.x, r10.x, r11.x
+                    mul r10.x, r10.x, r10.x
+                    add r10.x, k.y, r10.x
+                    rsq r10.x, r10.x
+                    rcp r10.x, r10.x
+                    mul r9.y, r9.y, r10.x
+                .end
+            .end
+            add r9.y, -u[11].z, r9.y
+            max r9.y, k.x, r9.y
+            min r9.y, k.y, r9.y
+        .else
+            mov r9.y, u[11].x
         .end
-        add r9.y, -u[11].z, r9.y
-        max r9.y, k.x, r9.y
-        min r9.y, k.y, r9.y
         ; Fog carrier in the primary colour: u[12].z = 1 alpha, 2 red (the
         ; material does not read the vertex colour then).
         cmp u[12].z, gt, gt, r15.x

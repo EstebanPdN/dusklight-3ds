@@ -603,6 +603,11 @@ BOOL fopAcM_rollPlayerCrash(fopAc_ac_c const* i_crashActor, f32 i_range, u32 i_f
                             f32 i_min_y, BOOL param_5, f32 param_6);
 bool fopAcM_checkCullingBox(f32[3][4], f32, f32, f32, f32, f32, f32);
 s32 fopAcM_cullingCheck(const fopAc_ac_c* i_actor);
+#if defined(DUSK_TARGET_3DS)
+// Native level of detail, rule "actor": the actor is drawn too small to enter
+// its models (f_op_actor_mng.cpp). Its draw method still runs.
+bool fopAcM_nativeLodTiny(const fopAc_ac_c* i_actor);
+#endif
 s32 fopAcM_orderTalkEvent(fopAc_ac_c* i_actorA, fopAc_ac_c* i_actorB, u16 i_priority, u16 i_flag);
 s32 fopAcM_orderTalkItemBtnEvent(u16 i_eventType, fopAc_ac_c* i_actorA, fopAc_ac_c* i_actorB,
                                  u16 i_priority, u16 i_flag);

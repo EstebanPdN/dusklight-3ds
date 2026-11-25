@@ -45,6 +45,7 @@
 #include "d/d_meter2_info.h"
 #include "d/actor/d_a_kytag05.h"
 #include "d/actor/d_a_b_mgn.h"
+#include "d/d_tick_profile.h"
 #include "d/actor/d_a_npc_bou.h"
 #include "d/actor/d_a_npc_kolin.h"
 #include "f_op/f_op_kankyo_mng.h"
@@ -18246,7 +18247,10 @@ int daAlink_c::execute() {
             mItemTrigger = 0;
         }
 
-        allAnimePlay();
+        {
+            DUSK_TICK_PROFILE(anime_profile, "alink.anime");
+            allAnimePlay();
+        }
 
         if (mDamageTimer != 0) {
             damageTimerCount();
@@ -18318,7 +18322,10 @@ int daAlink_c::execute() {
         }
 
         checkLightSwordMtrl();
-        (this->*mpProcFunc)();
+        {
+            DUSK_TICK_PROFILE(proc_profile, "alink.proc");
+            (this->*mpProcFunc)();
+        }
 
         if (!checkEndResetFlg0(ERFLG0_UNK_2000) && checkWindDashAnime()) {
             resetUpperAnime(UPPER_2, 3.0f);
@@ -18570,8 +18577,11 @@ int daAlink_c::execute() {
                     field_0x2fb0--;
                 }
 
-                footBgCheck();
-                handBgCheck();
+                {
+                    DUSK_TICK_PROFILE(bg_profile, "alink.footHandBg");
+                    footBgCheck();
+                    handBgCheck();
+                }
 
                 field_0x30c8 = mBodyAngle.y >> 1;
                 modelCalc(mpLinkModel);
@@ -18652,10 +18662,16 @@ int daAlink_c::execute() {
             }
 
             setHangWaterY();
-            setCollision();
+            {
+                DUSK_TICK_PROFILE(collision_profile, "alink.setCollision");
+                setCollision();
+            }
             setAttentionPos();
             setLight();
-            setEffect();
+            {
+                DUSK_TICK_PROFILE(effect_profile, "alink.setEffect");
+                setEffect();
+            }
 
             if (mClothesChangeWaitTimer != 0) {
                 mDoMtx_stack_c::copy(mpLinkModel->getBaseTRMtx());
@@ -19227,6 +19243,25 @@ int daAlink_c::moveShadowScaleLight() {
     return var_r29;
 }
 
+#if defined(DUSK_TARGET_3DS)
+bool daAlink_c::isShadowProfileEquipment(const J3DModel* model) const {
+    if (!model) {
+        return false;
+    }
+    if (mEquipItem == dItemNo_BOOMERANG_e) {
+        const fopAc_ac_c* item = mItemAcKeep.getActor();
+        if (item && item->model == model) {
+            return true;
+        }
+    }
+    return model == mpLinkFaceModel || model == mpLinkHatModel || model == mpLinkHandModel ||
+           model == mSwordModel || model == mSheathModel || model == mShieldModel ||
+           model == mpDemoHLTmpModel || model == mpDemoHRTmpModel || model == mpKanteraModel ||
+           model == mHeldItemModel || model == mpHookTipModel || model == field_0x0710 ||
+           model == field_0x0714 || model == mpLinkBootModels[0] || model == mpLinkBootModels[1];
+}
+#endif
+
 void daAlink_c::shadowDraw() {
     daMidna_c* midna = getMidnaActor();
     if (midna != NULL && ((midna->checkShadowModelDraw() && (field_0x2ff4 >= 0x3FF0 || !checkMidnaRide())) || midna->checkShadowModelDrawDemoForce())) {
@@ -19397,14 +19432,22 @@ void daAlink_c::modelCalc(J3DModel* i_model) {
 }
 
 void daAlink_c::basicModelDraw(J3DModel* i_model) {
-    g_env_light.setLightTevColorType_MAJI(i_model, &tevStr);
+    {
+        DUSK_TICK_PROFILE(light_profile, "alink.draw.light");
+        g_env_light.setLightTevColorType_MAJI(i_model, &tevStr);
+    }
+    DUSK_TICK_PROFILE(entry_profile, "alink.draw.entry");
     mDoExt_modelEntryDL(i_model);
 }
 
 void daAlink_c::modelDraw(J3DModel* i_model, int param_1) {
-    g_env_light.setLightTevColorType_MAJI(i_model, &tevStr);
+    {
+        DUSK_TICK_PROFILE(light_profile, "alink.draw.light");
+        g_env_light.setLightTevColorType_MAJI(i_model, &tevStr);
+    }
 
     if (param_1 == 0) {
+        DUSK_TICK_PROFILE(entry_profile, "alink.draw.entry");
         mDoExt_modelEntryDL(i_model);
     } else {
         i_model->calcMaterial();
@@ -19863,6 +19906,7 @@ int daAlink_c::draw() {
     if (!checkCanoeRide() && !dComIfGp_checkCameraAttentionStatus(field_0x317c, 0x10000) &&
         !checkNoResetFlg2(FLG2_PLAYER_SHADOW_NO_DRAW))
     {
+        DUSK_TICK_PROFILE(shadow_profile, "alink.draw.shadow");
         shadowDraw();
     }
 

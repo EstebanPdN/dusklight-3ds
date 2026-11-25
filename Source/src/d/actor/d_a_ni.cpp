@@ -1939,6 +1939,12 @@ static int daNi_Create(fopAc_ac_c* i_this) {
 
         a_this->mAcch.Set(fopAcM_GetPosition_p(i_this), fopAcM_GetOldPosition_p(i_this), i_this, 1,
                           &a_this->mAcchCir, fopAcM_GetSpeed_p(i_this), NULL, NULL);
+#if defined(DUSK_TARGET_3DS)
+        // The cucco finds water with its own ground check (mSplGroundH) and
+        // reads only the ground and wall results of mAcch; the water pass of
+        // CrrPos was one unused walk over every background per tick.
+        a_this->mAcch.SetWaterNone();
+#endif
         a_this->mAcchCir.SetWall(55.0f, 45.0f);
 
         a_this->field_0x560 = 0;

@@ -1,6 +1,9 @@
 // Host test boundaries: real texture registrations/ownership, no GPU execution.
 #include "../runtime/gpu_sync.hpp"
 #include "../runtime/copy_lifecycle_probe.hpp"
+#include "../runtime/gpu_canary.hpp"
+#include "../runtime/gx_compact_cache.hpp"
+#include "../runtime/gx_worker_sync.hpp"
 #include "../runtime/alpha_interval_target.hpp"
 #include "../gx_pica.hpp"
 #include <cassert>
@@ -19,12 +22,33 @@ extern "C" BOOL OSRestoreInterrupts(BOOL before) {
     const bool old=enabled;enabled=before;exclusion.unlock();return old;
 }
 namespace dusk::native {
-namespace {std::span<const std::byte> colorPixels,depthPixels;}
+thread_local gx::StaticGeometryHint gx::staticGeometryHint{};
+namespace {
+std::span<const std::byte> colorPixels,depthPixels;
+bool drawPending{};
+}
+void queueHostDraw() {
+    assert(!drawPending && !gxWorkerSyncHook);
+    drawPending = true;
+    gxWorkerSyncHook = [] { drawPending = false; gxWorkerSyncHook = nullptr; };
+}
 void setHostFramebufferImages(std::span<const std::byte> color,std::span<const std::byte> depth){colorPixels=color;depthPixels=depth;}
 OSThread* platformGpuOwner(){return OSGetCurrentThread();}
 GpuCompletion platformCompleteGpu(std::uint64_t){return GpuCompletion::complete;}
-bool releaseGxTexture(gx::TextureHandle){return true;}
-bool invalidateGxTexture(gx::TextureHandle){return true;}
+bool releaseGxTexture(gx::TextureHandle){assert(!drawPending);return true;}
+bool invalidateGxTexture(gx::TextureHandle){assert(!drawPending);return true;}
+// The host has framebuffer bytes but no PICA textures. Exercise the real
+// readback/encode branch whenever the copy destination cannot be resident.
+unsigned gpuCanaryTransferLevel(){return 0;}
+void* gpuCaptureTexture(gx::TextureHandle,unsigned&,unsigned&){return nullptr;}
+bool bindGxTexture(const gx::Texture&,float&,float&,unsigned,bool,GxWorldMipUse){assert(!drawPending);return false;}
+void invalidateGxTextureBindings(){}
+bool gpuCaptureCopy(void*,gx::TextureHandle,const ColorCopyPlan&,unsigned){
+    assert(false && "GPU copy requires a resident texture");return false;
+}
+bool gpuCaptureRead(gx::TextureHandle,std::span<std::uint8_t>,unsigned,unsigned){
+    assert(false && "GPU readback requires a resident texture");return false;
+}
 // This fixture substitutes the entire native cache. It cannot exercise fusion;
 // the real copy caller must take its original encoder branch while OFF.
 bool fusedColorCopyEnabled{};
@@ -48,6 +72,6 @@ void observeCopyLifecycleResidency(gx::TextureHandle,const ColorCopyPlan&,bool,b
 FramebufferHandle platformCreateFramebuffer(unsigned,unsigned){return nullptr;}
 bool platformBindFramebuffer(FramebufferHandle handle){return handle!=nullptr;}
 bool platformClearFramebuffer(FramebufferHandle handle,std::uint32_t,std::uint32_t){return handle!=nullptr;}
-bool platformReadFramebufferColor(FramebufferHandle handle,std::span<const std::byte>& out){out=colorPixels;return handle&&!out.empty();}
+bool platformReadFramebufferColor(FramebufferHandle handle,std::span<const std::byte>& out){assert(!drawPending);out=colorPixels;return handle&&!out.empty();}
 bool platformReadFramebufferDepthImage(FramebufferHandle handle,std::span<const std::byte>& out){out=depthPixels;return handle&&!out.empty();}
 }

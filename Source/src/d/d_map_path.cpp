@@ -16,6 +16,7 @@
 #include "d/d_com_inf_game.h"
 #include "d/d_map_path.h"
 #include "m_Do/m_Do_lib.h"
+#include "helpers/native_immediate_merge.h"
 #include <cstring>
 
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
@@ -351,7 +352,7 @@ void dDrawPath_c::rendering(dDrawPath_c::floor_class const* p_floor) {
 }
 
 #ifdef TARGET_PC
-static u32 getRoomPosArraySize(const dDrawPath_c::room_class* room) {
+u32 dMapRoomPositionBytes(const dDrawPath_c::room_class* room) {
     if (room->mpFloor == NULL || room->mpFloatData == NULL || room->mFloorNum == 0) {
         return 0;
     }
@@ -365,7 +366,7 @@ static u32 getRoomPosArraySize(const dDrawPath_c::room_class* room) {
 void dDrawPath_c::rendering(dDrawPath_c::room_class const* room) {
     JUT_ASSERT(1043, room != NULL);
     if (room != NULL) {
-        GXSetArray(GX_VA_POS, room->mpFloatData, getRoomPosArraySize(room), 8, false);
+        GXSetArray(GX_VA_POS, room->mpFloatData, dMapRoomPositionBytes(room), 8, false);
         floor_class* floor = room->mpFloor;
 
         if (floor != NULL) {
@@ -380,6 +381,10 @@ void dDrawPath_c::rendering(dDrawPath_c::room_class const* room) {
 }
 
 void dDrawPath_c::drawPath() {
+    // Native 3DS: consecutive line strips of one width and colour are drawn
+    // as one orthographic line list (CommandStream merge scope); any other
+    // GX call inside draws what was collected first. Empty elsewhere.
+    NativeImmediateMerge merge;
     room_class* room = getFirstRoomPointer();
     while (room != NULL) {
         rendering(room);

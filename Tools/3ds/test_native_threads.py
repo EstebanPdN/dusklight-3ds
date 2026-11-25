@@ -10,12 +10,14 @@ parser.add_argument('--output', type=Path, required=True)
 args = parser.parse_args()
 out = args.output.resolve(); out.mkdir(parents=True, exist_ok=False)
 sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+# The SDK as the other tools find it: DEVKITPRO, else /opt/devkitpro, else ~/devkitpro.
+sdk = Path(os.environ.get('DEVKITPRO') or ('/opt/devkitpro' if Path('/opt/devkitpro').is_dir() else Path.home() / 'devkitpro'))
 files = ['platforms/3ds/tests/os_thread_test.cpp', 'platforms/3ds/tests/host_thread_backend.cpp', 'platforms/3ds/tests/host_primitives.cpp',
          'platforms/3ds/runtime/os_thread.cpp', 'platforms/3ds/runtime/os_sync.cpp', 'platforms/3ds/runtime/bootstrap.cpp',
          'platforms/3ds/runtime/os_arena.cpp', 'platforms/3ds/runtime/os_time.cpp', 'src/helpers/string.cpp', 'libs/JSystem/src/JSupport/JSUList.cpp']
 files += ['libs/JSystem/src/JKernel/' + p + '.cpp' for p in ['JKRHeap', 'JKRExpHeap', 'JKRSolidHeap', 'JKRDisposer', 'JKRThread']]
 files += ['libs/JSystem/src/JAudio2/JASHeapCtrl.cpp', 'libs/JSystem/src/JAudio2/JASTaskThread.cpp', 'platforms/3ds/runtime/jas_critical_section.cpp']
-headers = ['platforms/3ds/runtime/os_thread.hpp', 'platforms/3ds/runtime/thread_backend.hpp', 'platforms/3ds/runtime/bootstrap.hpp',
+headers = ['platforms/3ds/runtime/os_thread.hpp', 'platforms/3ds/runtime/light_lock_wait.hpp', 'platforms/3ds/runtime/thread_backend.hpp', 'platforms/3ds/runtime/bootstrap.hpp',
            'platforms/3ds/runtime/os_sync.hpp', 'platforms/3ds/runtime/primitives.hpp', 'platforms/3ds/runtime/clock.hpp', 'include/helpers/native_thread.h',
            'libs/JSystem/include/JSystem/JAudio2/JASHeapCtrl.h', 'libs/JSystem/include/JSystem/JAudio2/JASTaskThread.h']
 production = ['platforms/3ds/runtime/thread_backend_ctru.cpp', 'platforms/3ds/runtime/primitives_ctru.cpp']
@@ -43,7 +45,7 @@ try:
         rec['cases'].append({'name': name, 'exit_code': run.returncode, 'binary_sha256': sha(binary)})
     for p in ['platforms/3ds/runtime/os_thread.cpp', *production, 'libs/JSystem/src/JKernel/JKRThread.cpp', 'libs/JSystem/src/JAudio2/JASTaskThread.cpp']:
         path = src / p
-        command = ['/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++', *common, '-I/opt/devkitpro/libctru/include', '-O2', '-march=armv6k', '-mtune=mpcore', '-mfloat-abi=hard', '-mfpu=vfp', '-mtp=soft', '-D__3DS__', '-fstack-usage', '-c', str(path), '-o', str(out / (path.stem + '-arm.o'))]
+        command = [str(sdk / 'devkitARM/bin/arm-none-eabi-g++'), *common, '-I' + str(sdk / 'libctru/include'), '-O2', '-march=armv6k', '-mtune=mpcore', '-mfloat-abi=hard', '-mfpu=vfp', '-mtp=soft', '-D__3DS__', '-fstack-usage', '-c', str(path), '-o', str(out / (path.stem + '-arm.o'))]
         rec['commands'].append(command)
         with (out / (path.stem + '-arm.log')).open('w') as log: subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=90)
     assert all(sha(root / p) == digest for p, digest in hashes.items())

@@ -23,7 +23,20 @@ JUTFader::JUTFader(int x, int y, int width, int height, JUtility::TColor pColor)
     mStatusTimer = -1;
 }
 
+#if defined(DUSK_TARGET_3DS)
+// scene_transition.cpp: while the next zone warms up behind the curtain, the
+// screen fader stays fully opaque and its fade-in does not advance, so it
+// later plays its whole original length.
+extern "C" bool duskNativeCurtainHeld(const void* fader);
+#endif
+
 void JUTFader::advance() {
+#if defined(DUSK_TARGET_3DS)
+    if (duskNativeCurtainHeld(this)) {
+        mColor.a = 0xFF;
+        return;
+    }
+#endif
     if (0 <= mStatusTimer && mStatusTimer-- == 0) {
         mStatus = mNextStatus;
     }

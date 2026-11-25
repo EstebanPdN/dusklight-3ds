@@ -1,0 +1,14 @@
+{
+  "name": "forge-3ds-converter",
+  "productName": "Forge 3DS Converter",
+  "description": "Forge Store ROM conversion tools for Nintendo 3DS ports",
+  "version": "1.2.0",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "build": "python3 build.py"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0"
+  }
+}

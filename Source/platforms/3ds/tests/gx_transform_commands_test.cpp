@@ -1,4 +1,5 @@
 #include "../runtime/gx_stream.hpp"
+#include "../runtime/gx_compact_cache.hpp"
 #include "../runtime/gx_state.hpp"
 #include <dolphin/gx.h>
 #include <dolphin/gx/GXCommandList.h>
@@ -12,6 +13,8 @@
 using namespace dusk::native::gx;
 extern "C" void OSPanic(const char*,int,const char* message,...){throw std::runtime_error(message);}
 extern "C" void DCFlushRange(void*,u32){}
+// Defined by the native draw code in the game; the processor only counts batches in it.
+thread_local dusk::native::gx::StaticGeometryHint dusk::native::gx::staticGeometryHint{};
 void testOriginalCommandAbi(CommandProcessor&);
 static float value(const CommandProcessor& p,u32 address){assert(p.registers().xfValid[address]);return std::bit_cast<float>(p.registers().xf[address]);}
 static void close(float a,float b){assert(std::fabs(a-b)<1e-4f);}
@@ -73,7 +76,7 @@ int main(){
     GXSetZMode(GX_FALSE,GX_NEVER,GX_FALSE);assert(p.registers().bp[0x40]==0);
     // Invalid typed calls must not fall through and contaminate the legacy diagnostic's state.
     const auto stats=statistics();const auto old=p.registers().xf[0x1020];
-    rejected([&]{GXSetTevOp(GX_TEVSTAGE0,GX_PASSCLR);});
+    rejected([&]{GXSetTevOp(GX_TEVSTAGE0,GXTevMode(GX_PASSCLR+1));}); // GX_PASSCLR itself is a valid typed call
     rejected([&]{GXLoadPosMtxImm(matrix,1);});rejected([&]{GXSetProjection(nullptr,GX_PERSPECTIVE);});
     rejected([&]{GXLoadTexMtxImm(matrix,GX_PTTEXMTX0,GX_MTX2x4);});
     rejected([&]{GXSetViewport(0,0,400,0,0,1);});

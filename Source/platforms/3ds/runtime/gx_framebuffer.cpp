@@ -1,5 +1,6 @@
 #include "gx_framebuffer.hpp"
 #include "alpha_interval_target.hpp"
+#include "gx_worker_sync.hpp"
 #include "../gx_pica.hpp"
 #include <array>
 #include <cstring>
@@ -13,7 +14,13 @@ bool inFrame{};
 bool pendingClear{};
 std::uint32_t clearColor{},clearDepth{};
 constexpr std::size_t budget=4*1024*1024;
+// Every function below that changes or clears the target, or asks whether a
+// draw is in the middle of its passes (alphaIntervalCopySafe), starts with
+// this: the shapes queued for the second-core worker were issued for the
+// target as it is, and the answer belongs to the thread that draws them.
+void settle(){syncGxWorker();}
 bool bind(Surface& s){
+    settle();
     if(!alphaIntervalCopySafe()||!s.handle||!s.extent.valid()||!platformBindFramebuffer(s.handle))return false;
     active=&s;gx::currentTargetExtent=s.extent;return true;
 }
@@ -30,17 +37,36 @@ bool initializeFramebuffers(FramebufferHandle main,unsigned width,unsigned heigh
     if(!extent.valid())return false;
     mainSurface={main,extent};return true;
 }
-bool configureMainFramebuffer(unsigned width,unsigned height){
+namespace {
+// The size really changes (or the main surface is not bound): with the GPU on
+// this thread. The shared-state audit takes it as a barrier (settle() first).
+[[gnu::noinline]] bool configureMainFramebufferSynced(unsigned width,unsigned height){
+    settle();
     auto extent=mainSurface.extent;extent.logicalWidth=width;extent.logicalHeight=height;
     if(!alphaIntervalCopySafe()||!mainSurface.handle||!extent.valid()||(active&&active!=&mainSurface))return false;
     mainSurface.extent=extent;if(active==&mainSurface)gx::currentTargetExtent=extent;
     return true;
+}
+}
+bool configureMainFramebuffer(unsigned width,unsigned height){
+    // Alpha 15: JUTVideo::setRenderMode commits the same mode again at the
+    // end of every draw phase (mDoGph_AfterOfDraw -> VIFlush). The same size
+    // on the bound main surface changes nothing, so it needs no sync: as one
+    // it handed the worker's unfinished picture back to the game thread in
+    // every picture (gx-overlap o2, village: 7-63 shapes, up to 25 ms a
+    // picture inside the draw phase). The surface and the binding are this
+    // thread's own (written only after settle()).
+    if(mainSurface.handle&&mainSurface.extent.logicalWidth==width&&mainSurface.extent.logicalHeight==height&&
+       (!active||(active==&mainSurface&&!std::memcmp(&gx::currentTargetExtent,&mainSurface.extent,sizeof(mainSurface.extent)))))
+        return true;
+    return configureMainFramebufferSynced(width,height);
 }
 bool beginFramebufferFrame(){
     if(inFrame||!bind(mainSurface))return false;
     inFrame=true;return true;
 }
 bool beginFramebufferRender(){
+    settle();
     if(!alphaIntervalCopySafe()||!inFrame||active!=&mainSurface)return false;
     if(pendingClear){
         if(!platformClearFramebuffer(mainSurface.handle,clearColor,clearDepth))return false;
@@ -49,6 +75,7 @@ bool beginFramebufferRender(){
     return true;
 }
 bool clearFramebufferForRender(std::uint32_t color,std::uint32_t depth){
+    settle();
     if(!alphaIntervalCopySafe()||!inFrame||active!=&mainSurface)return false;
     // JFW explicitly clears the entire main EFB before new drawing. Its latest
     // clear replaces an earlier GXCopyDisp clear; submitting both is redundant.
@@ -56,10 +83,12 @@ bool clearFramebufferForRender(std::uint32_t color,std::uint32_t depth){
     return beginFramebufferRender();
 }
 bool endFramebufferFrame(){
+    settle();
     if(!alphaIntervalCopySafe()||!inFrame||active!=&mainSurface)return false;
     inFrame=false;active=nullptr;return true;
 }
 bool beginOffscreenFramebuffer(unsigned width,unsigned height){
+    settle();
     if(!alphaIntervalCopySafe()||!inFrame||!active||!width||!height||width>1024||height>1024)return false;
     for(auto& s:surfaces)if(s.handle&&s.extent.logicalWidth==width&&s.extent.logicalHeight==height)
         return beginOffscreen(s);
@@ -74,10 +103,11 @@ bool beginOffscreenFramebuffer(unsigned width,unsigned height){
     }
     return false;
 }
-bool restoreMainFramebuffer(){return alphaIntervalCopySafe()&&inFrame&&active&&active!=&mainSurface&&bind(mainSurface);}
+bool restoreMainFramebuffer(){settle();return alphaIntervalCopySafe()&&inFrame&&active&&active!=&mainSurface&&bind(mainSurface);}
 FramebufferHandle activeFramebuffer(){return inFrame&&active?active->handle:nullptr;}
 FramebufferHandle mainFramebuffer(){return mainSurface.handle;}
 bool deferMainFramebufferClear(std::uint32_t color,std::uint32_t depth){
+    settle();
     if(!alphaIntervalCopySafe()||!inFrame||active!=&mainSurface)return false;
     pendingClear=true;clearColor=color;clearDepth=depth;return true;
 }

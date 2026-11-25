@@ -1220,6 +1220,14 @@ void daB_TN_c::setDamage(dCcD_Sph* i_sph, int param_2) {
             setActionMode(ACT_DAMAGEL, mNextActionMode2);
         }
     }
+
+#ifdef DUSK_TARGET_3DS
+    if (mAtInfo.mAttackPower != 0 && mAtInfo.mpActor == daPy_getPlayerActorClass() &&
+        mAtInfo.mpCollider->ChkAtType(AT_TYPE_NORMAL_SWORD))
+    {
+        ++mAcceptedPlayerSwordHits;
+    }
+#endif
 }
 
 void daB_TN_c::setShieldEffect(dCcD_Sph* i_sph) {

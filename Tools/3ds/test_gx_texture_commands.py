@@ -8,6 +8,12 @@ from pathlib import Path
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
+def devkit_arm():
+    """devkitARM g++: $DEVKITARM, $DEVKITPRO, /opt/devkitpro or ~/devkitpro."""
+    candidates = [Path(os.environ['DEVKITARM'])/'bin/arm-none-eabi-g++'] if os.environ.get('DEVKITARM') else []
+    candidates += [Path(os.environ['DEVKITPRO'])/'devkitARM/bin/arm-none-eabi-g++'] if os.environ.get('DEVKITPRO') else []
+    candidates += [Path('/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++'), Path.home()/'devkitpro/devkitARM/bin/arm-none-eabi-g++']
+    return str(next((c for c in candidates if c.exists()), candidates[0]))
 OUT = ROOT/'Diagnostics/implementation-21/texture-commands'
 
 
@@ -51,7 +57,7 @@ def main():
     objects=[OUT/(p.stem+'-host.o') for p in original]
     commands=[['clang++',*game,'-c',str(s),'-o',str(o)] for s,o in zip(original,objects)]
     commands.append(['clang++',*common,*map(str,sources),*map(str,objects),str(reference),'-Wl,-dead_strip','-o',str(OUT/'test')])
-    arm='/opt/devkitpro/devkitARM/bin/arm-none-eabi-g++'
+    arm=devkit_arm()
     flags=['-std=c++20','-O2','-g','-march=armv6k','-mtune=mpcore','-mfloat-abi=hard','-mfpu=vfp',
            '-mtp=soft','-D__3DS__','-DTARGET_PC=1','-DDUSK_TARGET_3DS=1','-I'+str(aurora/'include')]
     for source in [sources[0],native/'runtime/gx_texture_cache.cpp']:

@@ -29,6 +29,21 @@ static GpuCompletion completion=GpuCompletion::complete;
 namespace dusk::native {
 GpuCompletion platformCompleteGpu(std::uint64_t timeout){assert(timeout==500000000);++completions;if(completion==GpuCompletion::complete)inFlight=false;return completion;}
 }
+// Platform services the backend links but these cases never reach in a way
+// that matters (as in gx_texture_backend_test.cpp): decode timing, the
+// scenery alias registry, the capture readback's cache invalidation and the
+// report text.
+namespace dusk::native {
+std::uint64_t gxProfileTick(){return 0;}
+namespace gx {const void* textureAliasImage(TextureHandle){return nullptr;}}
+}
+extern "C" Result GSPGPU_InvalidateDataCache(const void*,u32){return 0;}
+// Linear heap left (worldMips budget and the texture report line); these
+// cases never choose worldMips, so only the report reads it.
+extern "C" u32 linearSpaceFree(void){return 64u<<20;}
+// Retained 2D screens: no recording runs in this test.
+extern "C" void duskScreenTapeVolatileTexture(unsigned long long){}
+extern "C" void OSReport(const char*,...){}
 bool C3D_TexInitWithParams(C3D_Tex* tex,C3D_TexCube* cube,C3D_TexInitParams p){
     if(refuseAllocation)return false;
     assert(!cube&&p.type==GPU_TEX_2D&&!p.onVram);
@@ -70,6 +85,9 @@ static void residency(std::size_t policy,std::size_t images,std::size_t actual,s
         state.residentBytes==actual&&state.sameImagesFullBytes==full);
 }
 static void run(bool cmpr){
+    // This test pins the half-resolution policy on RGBA8 CMPR storage; the
+    // 16-bit compact storage of Alpha 12 is covered by texture_compact_test.
+    setGxTextureCompact(false);
     const std::size_t reduced=cmpr?1280:640,full=cmpr?5376:2688;
     const auto format=cmpr?GPU_RGBA8:GPU_RGB565;
     auto source=mipSource(cmpr);auto original=source;auto t=halfTexture(1,source);float u{},v{};

@@ -20,7 +20,11 @@ std::uint32_t word(const std::uint8_t* p){return (std::uint32_t(p[0])<<24)|(std:
 bool owner(){return platformGpuOwner()&&platformGpuOwner()==OSGetCurrentThread();}
 }
 bool registerFontPage(const void* font,std::span<const std::uint8_t> gly1,unsigned page){
-    if(!font||!owner()||gly1.size()<32||word(gly1.data())!=0x474c5931||word(gly1.data()+4)!=gly1.size())return false;
+    // Alpha 15: the borrower table (this thread's own) is read before the
+    // render owner is asked. JUTResFont asks at every page change of a text,
+    // about ten times a picture in the village; with the second-core worker
+    // on, asking meant drawing everything queued first (gx-overlap o1 run).
+    if(!font||gly1.size()<32||word(gly1.data())!=0x474c5931||word(gly1.data()+4)!=gly1.size())return false;
     const auto width=half(gly1.data()+26),height=half(gly1.data()+28),format=half(gly1.data()+20);
     const std::size_t size=word(gly1.data()+16);
     if(!size||!width||!height||width>1024||height>1024||format>6||size>gly1.size()-32||page>=(gly1.size()-32)/size)return false;
@@ -30,7 +34,7 @@ bool registerFontPage(const void* font,std::span<const std::uint8_t> gly1,unsign
         if(entry.font==font&&entry.page->image==image)return true;
         if(!entry.font&&!borrower)borrower=&entry;
     }
-    if(!borrower)return false;
+    if(!owner()||!borrower)return false;
     Page* slot=nullptr;
     for(auto& entry:pages){
         if(entry.image==image){

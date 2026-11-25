@@ -5,6 +5,11 @@
 #include "JSystem/J3DGraphAnimator/J3DModelData.h"
 #include "JSystem/J3DGraphBase/J3DStruct.h"
 #include "JSystem/JMath/JMath.h"
+#if defined(DUSK_TARGET_3DS)
+#include <cstddef>
+#include <cstring>
+#include <type_traits>
+#endif
 
 #if TARGET_PC && !defined(DUSK_TARGET_3DS)
 #include "dusk/interp/material.h"
@@ -603,19 +608,19 @@ inline f32 J3DHermiteInterpolation(f32 pp1, BE(s16) const* pp2,
 }
 
 template<typename T>
-f32 J3DGetKeyFrameInterpolation(f32 frame, J3DAnmKeyTableBase* pKeyTable, T* pData) {
+static f32 interpolateKeys(f32 frame, u32 count, bool splitTangents, T* pData) {
     J3D_ASSERT_NULLPTR(740, pData != NULL);
 
     if (frame < pData[0]) {
         return pData[1];
     }
 
-    if (pKeyTable->mType == 0) {
-        if (pData[(pKeyTable->mMaxFrame - 1) * 3] <= frame) {
-            return pData[(pKeyTable->mMaxFrame - 1) * 3 + 1];
+    if (!splitTangents) {
+        if (pData[(count - 1) * 3] <= frame) {
+            return pData[(count - 1) * 3 + 1];
         }
 
-        u32 uVar7 = pKeyTable->mMaxFrame;
+        u32 uVar7 = count;
         while (uVar7 > 1) {
             u32 uVar2 = uVar7 >> 1;
             u32 tmp = uVar2 * 3;
@@ -630,11 +635,11 @@ f32 J3DGetKeyFrameInterpolation(f32 frame, J3DAnmKeyTableBase* pKeyTable, T* pDa
         f32 interpolated = J3DHermiteInterpolation(frame, &pData[0], &pData[1], &pData[2], &pData[3], &pData[4], &pData[5]);
         return interpolated;
     } else {
-        if (pData[(pKeyTable->mMaxFrame - 1) * 4] <= frame) {
-            return pData[(pKeyTable->mMaxFrame - 1) * 4 + 1];
+        if (pData[(count - 1) * 4] <= frame) {
+            return pData[(count - 1) * 4 + 1];
         }
 
-        u32 var_r27 = pKeyTable->mMaxFrame;
+        u32 var_r27 = count;
         while (var_r27 > 1) {
             u32 var_r25 = var_r27 >> 1;
             u32 var_r23 = var_r25 * 4;
@@ -651,10 +656,101 @@ f32 J3DGetKeyFrameInterpolation(f32 frame, J3DAnmKeyTableBase* pKeyTable, T* pDa
     }
 }
 
+template<typename T>
+f32 J3DGetKeyFrameInterpolation(f32 frame, J3DAnmKeyTableBase* table, T* data) {
+    return interpolateKeys(frame, table->mMaxFrame, table->mType != 0, data);
+}
+
+#if defined(DUSK_TARGET_3DS)
+// The ANK1 joint descriptor occupies 54 bytes. Store the constant pose and the
+// descriptors for its animated channels in that same resource-owned storage.
+// Halfwords keep the original alignment of odd-numbered joints.
+struct J3DNativeJointTracks {
+    u16 pose[16];
+    u16 count[9];
+    u16 splitTangents;
+    u16 animated;
+};
+static_assert(sizeof(J3DNativeJointTracks) == 3 * sizeof(J3DAnmTransformKeyTable));
+static_assert(alignof(J3DNativeJointTracks) == alignof(J3DAnmTransformKeyTable));
+static_assert(sizeof(J3DTransformInfo) == 32 && offsetof(J3DTransformInfo, mRotation) == 12 &&
+              offsetof(J3DTransformInfo, mTranslate) == 20);
+static constexpr u8 poseWord[] = {0, 2, 4, 6, 7, 8, 10, 12, 14};
+
+void J3DAnmTransformKey::prepareNativeTracks() {
+    for (unsigned joint = 0; joint < field_0x1e; ++joint) {
+        J3DAnmTransformKeyTable axes[3];
+        std::memcpy(axes, &mAnmTable[joint], sizeof(axes));
+        J3DNativeJointTracks tracks{};
+        auto record = [&](unsigned channel, const J3DAnmKeyTableBase& key, const auto* data, auto fallback) {
+            const unsigned count = key.mMaxFrame;
+            u16* value = tracks.pose + poseWord[channel];
+            if (count > 1) {
+                // The sampler overwrites this pose component with its interpolated value.
+                value[0] = key.mOffset;
+                tracks.count[channel] = count;
+                tracks.animated |= 1u << channel;
+                if (key.mType != 0) {
+                    tracks.splitTangents |= 1u << channel;
+                }
+            } else if constexpr (std::is_same_v<decltype(fallback), s16>) {
+                value[0] = count ? static_cast<u32>(data[key.mOffset]) << mDecShift : 0;
+            } else {
+                const float fixed = count ? data[key.mOffset] : fallback;
+                std::memcpy(value, &fixed, sizeof(fixed));
+            }
+        };
+        for (unsigned axis = 0; axis < 3; ++axis) {
+            record(axis, axes[axis].mScaleInfo, mScaleData, 1.0f);
+            record(3 + axis, axes[axis].mRotationInfo, mRotData, s16(0));
+            record(6 + axis, axes[axis].mTranslateInfo, mTransData, 0.0f);
+        }
+        mAnmTable[joint] = tracks;
+    }
+}
+#endif
+
 void J3DAnmTransformKey::calcTransform(f32 frame, u16 jointNo, J3DTransformInfo* pTransform) const {
     J3D_ASSERT_RANGE(829, jointNo >= 0 && jointNo < field_0x1e);
     J3D_ASSERT_NULLPTR(830, pTransform != NULL);
 
+#if defined(DUSK_TARGET_3DS)
+    // memcpy permits the resource's two-byte alignment and preserves the two
+    // padding bytes in the caller's transform, as the individual stores do.
+    const auto& tracks = mAnmTable[jointNo];
+    std::memcpy(&pTransform->mScale, tracks.pose, sizeof(pTransform->mScale));
+    std::memcpy(&pTransform->mRotation, tracks.pose + 6, sizeof(pTransform->mRotation));
+    std::memcpy(&pTransform->mTranslate, tracks.pose + 10, sizeof(pTransform->mTranslate));
+    const unsigned animated = tracks.animated;
+    auto scalar = [&](unsigned channel, const float* values, float& out) {
+        if (animated & (1u << channel)) {
+            out = interpolateKeys(frame, tracks.count[channel], tracks.splitTangents & (1u << channel),
+                                  values + tracks.pose[poseWord[channel]]);
+        }
+    };
+    auto rotation = [&](unsigned channel, s16& out) {
+        if (animated & (1u << channel)) {
+            const int angle = (int)interpolateKeys(frame, tracks.count[channel],
+                tracks.splitTangents & (1u << channel), mRotData + tracks.pose[poseWord[channel]]);
+            out = static_cast<u32>(angle) << mDecShift;
+        }
+    };
+    if (animated & 0x007) {
+        scalar(0, mScaleData, pTransform->mScale.x);
+        scalar(1, mScaleData, pTransform->mScale.y);
+        scalar(2, mScaleData, pTransform->mScale.z);
+    }
+    if (animated & 0x038) {
+        rotation(3, pTransform->mRotation.x);
+        rotation(4, pTransform->mRotation.y);
+        rotation(5, pTransform->mRotation.z);
+    }
+    if (animated & 0x1c0) {
+        scalar(6, mTransData, pTransform->mTranslate.x);
+        scalar(7, mTransData, pTransform->mTranslate.y);
+        scalar(8, mTransData, pTransform->mTranslate.z);
+    }
+#else
     u16 idx = jointNo * 3;
     J3DAnmTransformKeyTable* entryX = &mAnmTable[idx];
     J3DAnmTransformKeyTable* entryY = &mAnmTable[idx + 1];
@@ -767,6 +863,7 @@ void J3DAnmTransformKey::calcTransform(f32 frame, u16 jointNo, J3DTransformInfo*
         pTransform->mTranslate.z = J3DGetKeyFrameInterpolation(frame, &entryZ->mTranslateInfo,
                                                     &mTransData[entryZ->mTranslateInfo.mOffset]);
     }
+#endif
 }
 
 J3DAnmTextureSRTKey::J3DAnmTextureSRTKey() {

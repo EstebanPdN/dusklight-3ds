@@ -36,7 +36,7 @@ def main():
     general=(NATIVE/'scene_uv.v.pica').read_text();rigid=(NATIVE/'scene_rigid_uv.v.pica').read_text()
     full=algebra(general);special=algebra(rigid,True);detected=[]
     for name,old,new in [('channel-two','mov r14.xy, v4','mov r14.xy, v3'),('translation','mov r14.z, k.y','mov r14.z, k.x'),
-        ('second-row','dp3 outtex1.y, u[60]','dp3 outtex1.y, u[59]'),('unit-enable','cmp u[63].z','cmp u[63].x')]:
+        ('second-row','dp3 r6.y, u[60]','dp3 r6.y, u[59]'),('unit-enable','cmp u[63].z','cmp u[63].x')]:
         assert old in general
         try:algebra(general.replace(old,new))
         except AssertionError:detected.append(name)

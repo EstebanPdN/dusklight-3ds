@@ -1,0 +1,47 @@
+# Roots and barriers of the shared-state audit (audit_shared_state.py).
+# consumer<TAB>regex: a function the second-core worker runs while it draws a queued shape
+#   (the adapter, and the callbacks the draw code reaches through pointers).
+# game<TAB>regex: a platform function the game thread reaches through a pointer.
+# barrier<TAB>regex<TAB>why: a function that draws what is queued before anything else;
+#   what it reaches is not followed on the game side.
+# Regexes are matched against demangled names.
+consumer	\(anonymous namespace\)::drawQueuedShape\(
+consumer	\(anonymous namespace\)::nativeApply\(
+consumer	^dusk::native::drawGxCommand\(dusk::native::gx::CommandDraw const&, void\*\)$
+consumer	\(anonymous namespace\)::materializePendingCapture\(\)
+consumer	\(anonymous namespace\)::liveGameArray\(
+consumer	^dusk::native::reportSignedQTrial\(
+game	^dusk::native::gxOverlapSync\(int\)$	game code calls it through gxOverlapSyncHook (JKRHeap.cpp, f_pc_manager.cpp, J3DModel.cpp; Alpha 15 overlap)
+game	^dusk::native::deferNativeRun\(
+barrier	^dusk::native::drawGxCommand\(dusk::native::gx::CommandDraw const&, void\*\)$	gxworker::sync(draw) is its first statement
+barrier	\(anonymous namespace\)::drawGxBloomNow\(	gx_pica.cpp: syncGxWorker() first; drawGxBloom queues the pass (gxJobBloom) or calls it
+barrier	\(anonymous namespace\)::runCasterPass\(	game side: only drawGxShadowCasters calls it, after syncGxWorker(); queued, the pass runs on the drawing side
+barrier	^dusk::native::\(anonymous namespace\)::(beginSynced|endSynced)\(	syncGxWorker() first (hud_tape_ctru.cpp, screen_tape_ctru.cpp: the tape paths with the GPU; Alpha 15 duskHudTapeBegin/End and duskScreenTapeBegin queue jobs or draw plain runs without a sync while runs go to the queue)
+barrier	^duskScreenTapeEnd$	syncGxWorker() first
+barrier	^GX(DestroyCopyTex|CopyDisp|AbortFrame)$	syncGxWorker() first
+barrier	\(anonymous namespace\)::copyTexture\(	game side: only GXCopyTex calls it, after syncGxWorker(); queued, the copy runs on the drawing side
+barrier	^GX(CreateFrameBuffer|RestoreFrameBuffer|PeekZ)$	finish() first, which syncs
+barrier	^dusk::native::peekFramebufferDepthBatch\(	reads its own thread-local extent, then finish()
+barrier	\(anonymous namespace\)::wanted\(void\*\)$	the GPU-owner hook: it is the sync
+barrier	\(anonymous namespace\)::drawRecordedShape\(	game side: only duskNativeDrawShape calls it, after queue.sync(draw)
+barrier	\(anonymous namespace\)::reportNativeReplay\(\)	game side: only duskNativeDrawShape calls it, after queue.sync(draw)
+barrier	\(anonymous namespace\)::reportDrawGaps\(bool\)	game side: only duskNativeDrawShape calls it, after queue.sync(draw)
+barrier	\(anonymous namespace\)::reportPicaBlocks\(\)	game side: only duskNativeDrawShape calls it, after queue.sync(draw)
+barrier	\(anonymous namespace\)::configurePicaBlocks\(\)	game side, once (duskNativeDeferRuns): its own static flag, then syncGxWorker() before anything else
+barrier	^dusk::native::platform(SubmitGpu|QueryGpu|BeginGpuFrame|EndGpuFrame|InvalidateGpuTextures|ReserveGpuEntries|BeginGpuCommands|PrepareGpuDraw)\(	owner check (the sync hook) before anything but an atomic load
+barrier	^dusk::native::platformCompleteGpu(For)?\(	owner check (the sync hook) first; the profile scope before it is judged with the profile state
+barrier	^dusk::native::\(anonymous namespace\)::collect\(\)$	texture_resources.cpp: returns at once without pending releases (its own state), else owner check first
+stop	^OSPanic$	the fatal error path: the program ends there
+stop	^dusk::native::fatal\(	the fatal error path: the program ends there
+barrier	^dusk::native::(registerIndexedCopyImage|refreshCopyImagePaletteOwned|registerCopyImage)\(	owner check (the sync hook) before the copy image table is read (refreshCopyImagePalette reads identity and palette of the images first: shared_state_judged.tsv, images)
+barrier	^dusk::native::(registerFontPage|releaseFontPages)\(	its own borrower table, then the owner check (the sync hook)
+barrier	^dusk::native::gx::(registerTexture|unregisterTexture|aliasTextureImage|aliasTexturePalette)\(	syncGxWorker() first (gx_state.cpp, the note at handleIndex)
+barrier	^dusk::native::(clearFramebufferForRender|beginFramebufferRender|endFramebufferFrame|beginOffscreenFramebuffer|restoreMainFramebuffer|deferMainFramebufferClear|beginFramebufferFrame)\(	settle() first (gx_framebuffer.cpp)
+barrier	\(anonymous namespace\)::configureMainFramebufferSynced\(	gx_framebuffer.cpp: settle() first (Alpha 15: configureMainFramebuffer returns at once, without a sync, when the size and the binding are unchanged)
+barrier	\(anonymous namespace\)::armGxShadowCastersNow\(	gx_pica.cpp: syncGxWorker() first; armGxShadowCasters queues the start (gxJobShadowArm) or calls it
+barrier	^dusk::native::screenTapeTextureSum\(	syncGxWorker() first
+stop	^dusk::native::gpuHang\(	a stopped GPU is recorded and the program ends
+stop	^dusk::native::logException\(	the CPU exception handler: the program ends there
+barrier	^duskNativeGameDraw(Begin|End)$	gx_command_draw.cpp, J3DPacket.cpp's DUSK_PICA_GAME_DRAW model dispatch: syncGxWorker() first, then the framebuffer/alpha-interval reads and invalidatePicaCommandState()
+barrier	^dusk::native::markGpuPhaseSlow\(	owner check (the sync hook) first (gpu_sync_ctru.cpp, gpu-phases.txt painter marks; Alpha 16)
+barrier	^dusk::native::(copyAreaMapBase|bindAreaMapBase|releaseAreaMapBase)\(	gx_copy_execution.cpp: each game-side map entry drains the drawing worker before touching the framebuffer or texture cache

@@ -8,9 +8,29 @@
 #include "JSystem/J3DGraphBase/J3DTexture.h"
 
 #if defined(DUSK_TARGET_3DS)
+#include <cstdio>
 #include <cstring>
+
+extern "C" void GXNativeLoadXf(u16 address, const u32* values, u32 count);
+
+#include "J3DNativeSkinMatrixRuns.h"
+
+namespace {
+bool skinMatrixRunsEnabled() {
+    static const bool enabled = [] {
+        auto* file = std::fopen("sdmc:/3ds/DuskLight/skin-matrix-runs-off.txt", "rb");
+        if (!file)
+            return true;
+        std::fclose(file);
+        return false;
+    }();
+    return enabled;
+}
+
+} // namespace
 #endif
-#if defined(DUSK_TARGET_3DS) && defined(DUSK_NATIVE_MTX_PROFILE)
+#if defined(DUSK_TARGET_3DS)
+// Paint attribution (named sections, read only in profiled pictures).
 #include "../../../../platforms/3ds/runtime/gx_profile.hpp"
 #define NATIVE_MTX_PROFILE(name) static const auto nativeMtxIndex=dusk::native::registerGxNamedProfile(name);\
     dusk::native::GxNamedProfileScope nativeMtxScope(nativeMtxIndex)
@@ -380,7 +400,6 @@ void J3DShapeMtx::calcNBTScale(Vec const& param_0, Mtx33* param_1, Mtx33* param_
 }
 
 void J3DShapeMtxConcatView::load() const {
-    NATIVE_MTX_PROFILE("mtx.concatViewLoad");
     sMtxPtrTbl[0] = j3dSys.getModel()->getMtxBuffer()->getUserAnmMtx(0);
     sMtxPtrTbl[1] = j3dSys.getModel()->getWeightAnmMtx(0);
     J3DShapeMtxConcatView_LoadFunc func = sMtxLoadPipeline[sCurrentPipeline];
@@ -389,7 +408,10 @@ void J3DShapeMtxConcatView::load() const {
     const auto* data = j3dSys.getModel()->getModelData();
     const unsigned table = data->getDrawMtxFlag(mUseMtxIndex);
     const unsigned count = table ? data->getWEvlpMtxNum() : data->getJointNum();
-    j3dSys.setModelDrawMtx((Mtx*)sMtxPtrTbl[table],count);
+    {
+        NATIVE_MTX_PROFILE("mtx.bind");
+        j3dSys.setModelDrawMtx((Mtx*)sMtxPtrTbl[table],count);
+    }
 #else
     j3dSys.setModelDrawMtx((Mtx*)sMtxPtrTbl[j3dSys.getModel()->getModelData()->getDrawMtxFlag(mUseMtxIndex)]);
 #endif
@@ -464,6 +486,18 @@ void J3DShapeMtxMultiConcatView::load() const {
     sMtxPtrTbl[1] = j3dSys.getModel()->getWeightAnmMtx(0);
 
     if (!sLODFlag) {
+#if defined(DUSK_TARGET_3DS)
+        // PNGP without differed texgen, NBT or a normal-to-texture load
+        // writes only position and normal XF memory for each populated slot.
+        if (mUseMtxNum > 1 && mUseMtxNum <= skinMatrixSlots && sCurrentPipeline == 0 &&
+            !J3DDifferedTexMtx::sTexGenBlock && !sNBTFlag && sTexMtxLoadType != 0x2000 &&
+            skinMatrixRunsEnabled()) {
+            loadSkinMatrixRuns(mUseMtxIndexTable, mUseMtxNum, sCurrentScaleFlag,
+                               *j3dSys.getShapePacket()->getBaseMtxPtr(),
+                               *j3dSys.getModel()->getModelData(), sMtxPtrTbl);
+            return;
+        }
+#endif
         J3DShapeMtxConcatView_LoadFunc func = sMtxLoadPipeline[sCurrentPipeline];
         int use_mtx_num = mUseMtxNum;
         for (int i = 0; i < use_mtx_num; i++) {
