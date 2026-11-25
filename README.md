@@ -53,15 +53,16 @@ The [public beta](https://github.com/EstebanPdN/dusklight-3ds/releases/tag/beta-
 2. Copy the generated `zelda.twilight` to `sdmc:/3ds/DuskLight/zelda.twilight`.
 3. For a HOME Menu install, use FBI to install the CIA from the SD card, or go to **Remote Install → Scan QR Code** in FBI and scan the release QR.
 
+[FBI installation QR](https://github.com/EstebanPdN/dusklight-3ds/releases/download/beta-01.1/QR-beta-01.1-github.png)
+
 ## Verify the download
 
 Compare the SHA-256 of your download with [`SHA256SUMS.txt`](https://github.com/EstebanPdN/dusklight-3ds/releases/download/beta-01.1/SHA256SUMS.txt).
 
 ## Beta feedback
 
-Include your console model, region, beta version and the steps to reproduce the issue.
 If the problem is visible, tap **DUMP** on the lower screen and wait for **DONE**.
-ZIP one completed folder from `sdmc:/3ds/DuskLight/dumps/`, including `dump.dpk`, and use the private [beta feedback form](https://estebanpdn.github.io/dusklight-beta-01.html#report-title). The form accepts one ZIP up to 50 MB. Keep game files, saves and dumps out of public issues.
+Keep the completed folder from `sdmc:/3ds/DuskLight/dumps/` for private follow-up. Include your console model, region, beta version and reproduction steps in a GitHub issue. Keep game files, saves and dumps out of public issues.
 
 
 ## Features
