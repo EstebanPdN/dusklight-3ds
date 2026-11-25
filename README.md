@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EstebanPdN/dusklight-3ds/releases/tag/beta-01.1">Download beta-01.1</a> ·
+  <a href="https://github.com/EstebanPdN/dusklight-3ds/releases/tag/beta-01">Download beta-01</a> ·
   <a href="#project-status">Status</a> ·
   <a href="#features">Features</a> ·
   <a href="#documentation">Documentation</a> ·
@@ -39,7 +39,7 @@ based on [Dusklight](https://github.com/TwilitRealm/dusklight) and the
 
 This project was developed with the help of [OpenAI Codex](https://openai.com/codex/). Learn more about the development process [here](AI_DEVELOPMENT.md).
 
-The [public beta](https://github.com/EstebanPdN/dusklight-3ds/releases/tag/beta-01.1) is available for New Nintendo 3DS. Expect frame rate drops and occasional graphical glitches. I'm still working on performance, graphics, and reliable save/reload.
+The [public beta](https://github.com/EstebanPdN/dusklight-3ds/releases/tag/beta-01) is available for New Nintendo 3DS. Expect frame rate drops and occasional graphical glitches. I'm still working on performance, graphics, and reliable save/reload.
 
 ## Requirements
 
@@ -53,11 +53,11 @@ The [public beta](https://github.com/EstebanPdN/dusklight-3ds/releases/tag/beta-
 2. Copy the generated `zelda.twilight` to `sdmc:/3ds/DuskLight/zelda.twilight`.
 3. For a HOME Menu install, use FBI to install the CIA from the SD card, or go to **Remote Install → Scan QR Code** in FBI and scan the release QR.
 
-[FBI installation QR](https://github.com/EstebanPdN/dusklight-3ds/releases/download/beta-01.1/QR-beta-01.1-github.png)
+[FBI installation QR](https://github.com/EstebanPdN/dusklight-3ds/releases/download/beta-01/QR-beta-01-github.png)
 
 ## Verify the download
 
-Compare the SHA-256 of your download with [`SHA256SUMS.txt`](https://github.com/EstebanPdN/dusklight-3ds/releases/download/beta-01.1/SHA256SUMS.txt).
+Compare the SHA-256 of your download with [`SHA256SUMS.txt`](https://github.com/EstebanPdN/dusklight-3ds/releases/download/beta-01/SHA256SUMS.txt).
 
 ## Beta feedback
 
@@ -84,7 +84,7 @@ sustained 30 FPS on physical hardware has not been established.
 
 ## Project status
 
-The [public beta](https://github.com/EstebanPdN/dusklight-3ds/releases/tag/beta-01.1) uses the retained GX compatibility renderer. The native model renderer is still in development. See the [native renderer roadmap](docs/NATIVE_RENDERER.md).
+The [public beta](https://github.com/EstebanPdN/dusklight-3ds/releases/tag/beta-01) uses the retained GX compatibility renderer. The native model renderer is still in development. See the [native renderer roadmap](docs/NATIVE_RENDERER.md).
 
 [Building](docs/BUILDING.md) covers the development builds. [Verification status](docs/STATUS.md) has dated results, and [Game data](docs/GAME_DATA.md) covers compatible discs, SD paths, saves and controls.
 
