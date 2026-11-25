@@ -66,24 +66,26 @@ def digest_region(f, offset, size, progress=None):
     return h.digest()
 
 
-def layout(read, length):
-    """Validate the complete original FST, return retained extents and file records."""
+def disc_layout(read, length, disc_ids, region_error):
+    """Read the bounded GameCube filesystem and the extent of its executable."""
     require(0x440 <= length <= 0x7fffffff, 'Unsupported logical disc size')
     hdr = read(0, 0x440)
-    require(hdr[:8] in (b'GZ2E01\0\0', b'GZ2P01\0\0') and
+    require(hdr[:8] in disc_ids and
             hdr[0x18:0x20] == b'\0\0\0\0\xc2\x33\x9f\x3d',
-            'Requires GameCube USA or PAL revision 0 (GZ2E01/GZ2P01)')
+            region_error)
     dol, fst, fs = struct.unpack_from('>III', hdr, 0x420)
     require(dol >= 0x440 and fst >= 0x440 and 12 <= fs <= 4 * CHUNK and
             extent(length, dol, 256) and extent(length, fst, fs), 'Invalid DOL/FST bounds')
     ranges = [(0, 0x440), (dol, 256), (fst, fs)]
     exe = read(dol, 256)
+    dol_size = 256
     for i in range(18):
         off = struct.unpack_from('>I', exe, i * 4)[0]
         size = struct.unpack_from('>I', exe, 0x90 + i * 4)[0]
         if size:
             require(off >= 256 and extent(length, dol + off, size), 'Invalid DOL section')
             ranges.append((dol + off, size))
+            dol_size = max(dol_size, off + size)
     data = read(fst, fs)
     root, parent, count = struct.unpack_from('>III', data)
     require(root == 0x01000000 and parent == 0 and 1 <= count <= 65536 and count <= fs // 12,
@@ -125,7 +127,13 @@ def layout(read, length):
         else:
             merged.append((off, size))
     require(1 <= len(merged) <= MAX_RANGES, 'Too many retained ranges')
-    return merged, files
+    return merged, files, (dol, dol_size)
+
+
+def layout(read, length):
+    ranges, files, _ = disc_layout(read, length, (b'GZ2E01\0\0', b'GZ2P01\0\0'),
+                                   'Requires GameCube USA or PAL revision 0 (GZ2E01/GZ2P01)')
+    return ranges, files
 
 
 def header_bytes(logical, physical, count, index_crc, source_hash):

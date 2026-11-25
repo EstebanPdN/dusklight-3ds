@@ -5,6 +5,7 @@ Open the app, choose a port, and drop the compatible game image onto its screen.
 | Port | Input | Output | SD card folder |
 | --- | --- | --- | --- |
 | DuskLight | GameCube Twilight Princess ISO, USA or PAL revision 0 (GZ2E01 or GZ2P01) | zelda.twilight | /3ds/DuskLight/ |
+| Worms 3D | Uncompressed European GameCube ISO (GWMP8P, revision 0) | assets.worms | /3ds/worms3ds/ |
 | Mario Kart 64 | Unmodified USA Nintendo 64 ROM, .z64, .n64 or .v64 | mk64.o2r | /3ds/MK64/ alongside the port's required mk64.z64 |
 | Super Mario 64 DS | European Nintendo DS ROM, .nds, ASMP revision 0 | mario.sm64ds | /3ds/sm64ds/ |
 
@@ -32,3 +33,5 @@ The game logos and illustrations of the port screens (`ui/art/dusklight-art.jpg`
 repository. A local build expects them in `ui/art/`. The Forge branding, the
 Nunito font (SIL Open Font License, license text beside it in
 `ui/art/nunito-OFL.txt`) and the forest background are included.
+
+Worms 3D uses the European disc filesystem and verifies the complete output against the data package used by beta-01. Its UI artwork comes from the Worms entry in the Forge Store catalog.

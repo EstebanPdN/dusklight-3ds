@@ -44,6 +44,23 @@ class Regions(unittest.TestCase):
                     bundle.verify()
                 self.assertEqual(source.read_bytes(), raw)
 
+    def test_worms_beta_accepts_only_europe_and_preserves_the_dol_extent(self):
+        europe = b'GWMP8P\0\0'
+        for game in (europe, b'GWME8P\0\0', b'GZ2P01\0\0', b'GWMP8P\0\1'):
+            raw = disc(game)
+            stream = io.BytesIO(raw)
+            def read_layout():
+                return pack.disc_layout(lambda off, n: pack.exact(stream, off, n),
+                                        len(raw), (europe,), 'European Worms ISO required')
+            with self.subTest(game=game):
+                if game != europe:
+                    with self.assertRaisesRegex(ValueError, 'European Worms'):
+                        read_layout()
+                else:
+                    _, files, dol = read_layout()
+                    self.assertEqual(dol, (0x500, 272))
+                    self.assertEqual(files, [(1, b'/A.bin', 0x2000, 4)])
+
     def test_unsupported_identity_and_revision_stay_rejected(self):
         for game in (b'GZ2J01\0\0', b'GZ2P01\0\1', b'GZ2E01\0\1', b'GZ2P01\1\0',
                      b'GZ2P02\0\0', b'RZDP01\0\0'):

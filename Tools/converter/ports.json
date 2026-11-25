@@ -5,6 +5,12 @@
     "output": "zelda.twilight", "sd": "/3ds/DuskLight/",
     "logo": "logo.png", "art": "art/dusklight-art.jpg"
   },
+  "worms": {
+    "name": "Worms 3D", "system": "GameCube", "input": "ISO", "extensions": ["iso"],
+    "support": "Worms 3D · European PAL disc (GWMP8P)",
+    "output": "assets.worms", "sd": "/3ds/worms3ds/",
+    "logo": "art/worms-logo.webp", "art": "art/worms-art.webp"
+  },
   "mk64": {
     "name": "Mario Kart 64", "system": "Nintendo 64", "input": "ROM", "extensions": ["z64", "n64", "v64"],
     "support": "Original USA ROM · Z64, N64 or V64",
