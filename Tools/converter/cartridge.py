@@ -1,4 +1,4 @@
-"""Adapt the two cartridge packers to the desktop progress protocol."""
+"""Adapt the game packers to the desktop progress protocol."""
 from pathlib import Path
 import os
 import sys
@@ -24,6 +24,9 @@ def convert(port, source, output):
     if port == 'mk64':
         from mk64 import core
         core.convert(source, output, report)
+    elif port == 'worms':
+        from worms_pack import pack
+        pack(source, output, report)
     elif port == 'sm64ds':
         from sm64ds import core
         phases = {'Checking ROM': (0, 20), 'Creating .sm64ds': (20, 50), 'Verifying .sm64ds': (70, 29)}

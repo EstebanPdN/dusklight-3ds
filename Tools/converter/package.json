@@ -2,7 +2,7 @@
   "name": "forge-3ds-converter",
   "productName": "Forge 3DS Converter",
   "description": "Forge Store ROM conversion tools for Nintendo 3DS ports",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "main": "main.cjs",
   "scripts": {

@@ -47,7 +47,8 @@ def icon(folder, platform):
 
 
 def prepare_cartridges(backend, target):
-    shutil.copy2(SOURCE / 'cartridge.py', backend)
+    for name in ('cartridge.py', 'worms_pack.py'):
+        shutil.copy2(SOURCE / name, backend)
     for folder, project in [('mk64', MK), ('sm64ds', DS)]:
         module = backend / folder
         module.mkdir()
