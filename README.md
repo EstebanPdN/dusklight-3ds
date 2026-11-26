@@ -49,7 +49,7 @@ The [public beta](https://github.com/EstebanPdN/dusklight-3ds/releases/tag/beta-
 
 ## Installation
 
-1. Open [Forge 3DS Converter 1.2.0](https://github.com/EstebanPdN/estebanpdn.github.io/releases/tag/forge-3ds-converter-v1.2.0), select **DuskLight**, and choose the ISO dumped from your own disc.
+1. Open [Forge 3DS Converter](https://github.com/EstebanPdN/forge-3ds-converter/releases/latest), select **DuskLight**, and choose the ISO or RVZ from your own disc.
 2. Copy the generated `zelda.twilight` to `sdmc:/3ds/DuskLight/zelda.twilight`.
 3. For a HOME Menu install, use FBI to install the CIA from the SD card, or go to **Remote Install → Scan QR Code** in FBI and scan the release QR.
 
